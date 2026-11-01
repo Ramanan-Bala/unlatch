@@ -26,11 +26,25 @@ public struct AutoMountPolicy: Sendable {
         defaults.set(choice?.rawValue, forKey: key(volumeUUID))
     }
 
-    /// True when Unlatch should mount this volume (and keep Apple's driver off it).
+    /// Master switch (the menu's "Auto-mount"); on by default.
+    public var enabled: Bool {
+        get { defaults.object(forKey: "automount.enabled") as? Bool ?? true }
+        nonmutating set { defaults.set(newValue, forKey: "automount.enabled") }
+    }
+
+    /// Scope (Settings): external, removable or ejectable volumes only (default), or internal ones too.
+    public var includeInternal: Bool {
+        get { defaults.bool(forKey: "automount.includeInternal") }
+        nonmutating set { defaults.set(newValue, forKey: "automount.includeInternal") }
+    }
+
+    /// True when Unlatch should mount this volume (and keep Apple's driver off it). A per-volume
+    /// choice wins over the scope; the master switch wins over both.
     public func shouldAutoMount(_ disk: DiskInfo) -> Bool {
+        guard enabled else { return false }
         if let uuid = disk.volumeUUID, let c = choice(for: uuid) {
             return c == .allow
         }
-        return !disk.isInternal || disk.isRemovable || disk.isEjectable
+        return includeInternal || !disk.isInternal || disk.isRemovable || disk.isEjectable
     }
 }

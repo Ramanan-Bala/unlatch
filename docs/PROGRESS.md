@@ -520,6 +520,16 @@ $U doctor
 - The macFUSE kext's bundle ID carries a macOS-major suffix (`.25`).
 - The installed macFUSE is still 5.4.0, although Homebrew lists 5.5.0.
 
+### Step 14: Menu-bar app and onboarding — IN PROGRESS (2026-11-01)
+
+**Done so far:**
+- `App/Sources`: `AppModel` (volumes, the auto-mount loop via `DiskWatcher(claim:)`, notifications), `MenuView` (a row per volume with a state badge and actions: mount read-write or read-only, unmount, eject, show in Finder, Always/Never auto-mount), `OnboardingView` and `Checks`, `SettingsView` (auto-mount scope, notifications, log export).
+- `AutoMountPolicy`: an `enabled` master switch and an `includeInternal` scope.
+- The app bundles `unlatch-fuse`, the helper and the CLI in `Contents/Helpers`. Not `Contents/MacOS`: on a case-insensitive disk the CLI `unlatch` overwrote the app's own `Unlatch`. The FSKit module is no longer embedded. There is an Xcode `unlatch-cli` target.
+- `App/Resources/selftest.img`: a 2 MiB NTFS volume, label UNLATCHTEST, with a marker file, excluded from auto-mount. The onboarding self-test mounts it read-only, reads the marker and ejects it. Verified from the log.
+
+**Left:** check auto-mount by attaching an image (claim, mount, notification); the dirty-image badge; eject from the menu; a VoiceOver pass and copy review (needs the owner to look at the UI); PROGRESS and DECISIONS entries (Contents/Helpers, launch behaviour); remove the stale empty `/Volumes/UnlatchTest` folder from the FSKit tests (`sudo rmdir`).
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).

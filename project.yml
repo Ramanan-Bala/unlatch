@@ -14,6 +14,9 @@ configFiles:
 packages:
   UnlatchCore:
     path: Shared
+  ArgumentParser:
+    url: https://github.com/apple/swift-argument-parser.git
+    from: "1.5.0"
 
 settings:
   base:
@@ -33,7 +36,7 @@ targets:
   Unlatch:
     type: application
     platform: macOS
-    sources: [App/Sources, App/Resources/Assets.xcassets]
+    sources: [App/Sources, App/Resources/Assets.xcassets, App/Resources/selftest.img]
     info:
       path: App/Resources/Info.plist
       properties:
@@ -46,13 +49,37 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Empty unless Config/Local.xcconfig sets a team (D-06, D-37).
         CODE_SIGN_ENTITLEMENTS: $(UNLATCH_APP_ENTITLEMENTS)
+    # The app carries unlatch-fuse, the helper and the CLI in Contents/Helpers. Not in
+    # Contents/MacOS: on a case-insensitive disk the CLI "unlatch" is the app's own "Unlatch". The FSKit module is no longer embedded: it needs a paid
+    # team (D-38) and mounting goes through macFUSE (D-39).
     dependencies:
-      - target: UnlatchFSModule
-        embed: true
-        codeSign: true
-      - target: unlatch-engine
+      - package: UnlatchCore
+      - target: unlatch-fuse
         embed: false
         link: false
+      - target: unlatch-helper
+        embed: false
+        link: false
+      - target: unlatch-cli
+        embed: false
+        link: false
+    postBuildScripts:
+      - name: Copy unlatch-fuse, helper and CLI into the app
+        script: |
+          dest="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"
+          mkdir -p "$dest"
+          for f in unlatch-fuse io.github.ramanan-bala.unlatch.helper unlatch; do
+            cp -f "$BUILT_PRODUCTS_DIR/$f" "$dest/$f"
+            codesign --force --sign - "$dest/$f" 2>/dev/null || true
+          done
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/unlatch-fuse
+          - $(BUILT_PRODUCTS_DIR)/io.github.ramanan-bala.unlatch.helper
+          - $(BUILT_PRODUCTS_DIR)/unlatch
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/unlatch-fuse
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/io.github.ramanan-bala.unlatch.helper
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/unlatch
 
   UnlatchFSModule:
     type: extensionkit-extension
@@ -170,6 +197,21 @@ targets:
     dependencies:
       - target: UnlatchEngine
 
+  # The CLI as an Xcode target too, so the app can carry it (CLI/Package.swift is the
+  # SwiftPM build of the same sources), compiled as one module.
+  unlatch-cli:
+    type: tool
+    platform: macOS
+    sources: [CLI/Sources/UnlatchCLI, CLI/Sources/unlatch]
+    settings:
+      base:
+        PRODUCT_NAME: unlatch
+        PRODUCT_MODULE_NAME: UnlatchCLI
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: UNLATCH_ONE_MODULE
+    dependencies:
+      - package: UnlatchCore
+      - package: ArgumentParser
+
   unlatch-helper:
     type: tool
     platform: macOS
@@ -192,6 +234,7 @@ schemes:
         unlatch-engine: all
         unlatch-fuse: all
         unlatch-helper: all
+        unlatch-cli: all
   unlatch-engine:
     build:
       targets:

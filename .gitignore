@@ -21,3 +21,6 @@ build/
 # Benchmark raw output
 Bench/results/raw/
 Config/Local.xcconfig
+
+# The onboarding self-test volume (2 MiB NTFS, label UNLATCHTEST), Step 14.
+!App/Resources/selftest.img
