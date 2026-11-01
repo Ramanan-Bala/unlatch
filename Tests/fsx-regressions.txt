@@ -1,0 +1,4 @@
+# fsx seeds that once failed. Format: seed ops  # what it found
+# Re-run by `Scripts/fsx-soak.sh --regressions` (and by Scripts/test-engine.sh and CI).
+2 2000  # rmdir of a dir holding only a removed-but-held file gave ENOTEMPTY: ghosts moved to the root (Step 06)
+4 2000  # same bug as seed 2, Latin-1 names

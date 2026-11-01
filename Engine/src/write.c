@@ -121,7 +121,7 @@ static int mark_ghost(ue_engine_t *e, ue_ino_t ino)
 }
 
 // Removes `u` from dir. A file whose last name goes away while the host still holds it is
-// renamed to a hidden ghost name instead, and deleted on ue_release (D-25).
+// moved to a hidden ghost name in the root instead, and deleted on ue_release (D-25).
 static int remove_name(ue_engine_t *e, ue_ino_t dir, const ntfschar *u, int len, int want_dir)
 {
     ntfs_inode *dni, *ni;
@@ -176,9 +176,12 @@ static int remove_name(ue_engine_t *e, ue_ino_t dir, const ntfschar *u, int len,
             return e1 ? e1 : e2;
         if ((err = tmp_name(e, UE_GHOST_PREFIX, id, &g, &glen)))
             return err;
-        if (!(err = link_name(e, ino, dir_ino, g, glen))) {
+        // Ghosts live in the root, not the parent, so the parent can still be removed
+        // (rmdir of a directory whose only content is an open, unlinked file) and a
+        // crash leaves leftovers in one known place (found by fsx).
+        if (!(err = link_name(e, ino, UE_ROOT_INO, g, glen))) {
             if ((err = unlink_name(e, dir_ino, u, len)))
-                unlink_name(e, dir_ino, g, glen);     // undo the ghost link
+                unlink_name(e, UE_ROOT_INO, g, glen);  // undo the ghost link
         }
         free(g);
         if (err)
@@ -187,7 +190,7 @@ static int remove_name(ue_engine_t *e, ue_ino_t dir, const ntfschar *u, int len,
         h = ue_held_find(&e->held, MREF(ino));     // the table may have moved
         if (h) {
             h->ghost = true;
-            h->ghost_dir = dir_ino;
+            h->ghost_dir = UE_ROOT_INO;
             h->ghost_id = id;
         }
         return 0;

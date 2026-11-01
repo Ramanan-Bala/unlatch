@@ -146,6 +146,9 @@ for w in w-*.img; do
 done
 echo "ok   $(ls w-*.img | wc -l | tr -d ' ') written images"
 
+echo "== fsx regressions"
+"$root/Scripts/fsx-soak.sh" --regressions | tail -1
+
 echo "== include boundary"
 if grep -rn --include='*.c' --include='*.h' --include='*.swift' --include='*.m' -E '#\s*include\s*[<"]ntfs-3g/' \
     "$root" --exclude-dir=vendor --exclude-dir=build --exclude-dir=.build \

@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 1 Engine on host |
-| Last completed step | 05 Engine write path (2026-11-01) |
-| Next step | 06 Randomized model test (fsx) and Windows oracle |
+| Last completed step | 06 fsx model test (2026-11-01); Windows chkdsk oracle **blocked: needs a Windows VM** |
+| Next step | 07 Fuzzing, golden images, CI |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patch 0001 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -18,7 +18,7 @@
 | libntfs-3g custom device quirks | Step 03 | Patch in `Engine/vendor/patches/` | settled: works unpatched, one EROFS workaround (D-14) |
 | Restricted entitlement on the CLI | Step 12 S1 | CLI talks to the app over XPC | open |
 | Apple's NTFS driver wins the mount race | Step 12 S2 | Unmount-and-swap | open |
-| Corruption | Steps 05–07, 10, 15, 17 | Read-only default for that scenario until fixed | open; Step 05 tests pass, fsx and chkdsk (Step 06) pending |
+| Corruption | Steps 05–07, 10, 15, 17 | Read-only default for that scenario until fixed | open; 1,000 fsx seeds × 2,000 ops pass; Windows chkdsk not yet run (needs a VM) |
 | Stale data exposed through KOIO | Step 15 explicit test | Inhibit KOIO for files with `init_size < size` | open |
 | FSKit API changes in 27.x | every step re-checks the docs | pin the tested 27.x builds in README | open |
 
@@ -201,6 +201,32 @@ Scripts/test-engine.sh   # 26 unit tests ok; "4 GiB put (10 s) and get (16 s) ro
 - **Case-only rename:** needs a temp name, because `$I30` is case-insensitive.
 - **Timing (debug build):** writes run at about 400 MB/s from stdin.
 
+### Step 06: Randomized model test (fsx) and Windows oracle — fsx done 2026-11-01; oracle BLOCKED
+
+**Done:**
+- `unlatch-engine fsx <img> --seed N --ops M [--verbose]` (`EngineTool/fsx.c`), D-29:
+  - Operations: create and mkdir (a name pool with case variants, Latin-1 and CJK names), writes at random offsets and sizes (up to 256 KiB, past EOF, small resident writes), truncate, rename (same dir, across dirs, case-only, replace, EXCL, into own subtree), remove (wrong type, non-empty), release, sync and remount.
+  - The model predicts exact errnos.
+  - Every op: the whole tree is compared, plus the touched file's contents. Every remount and the end: all contents, then a CLEAN probe.
+- `Scripts/fsx-soak.sh` (parallel, APFS clones, keeps failures, appends to `Tests/fsx-regressions.txt`). `Scripts/test-engine.sh` runs the regression seeds.
+- **Bug found by fsx (seeds 2 and 4):** ghosts were created in the removed file's parent, so `rmdir` of an apparently empty directory failed with ENOTEMPTY. Ghosts now live in the root (D-30).
+- `Scripts/chkdsk-vm.sh` plus `Tests/oracle/mkvhd.c` (D-31): fixed-VHD wrapper (MBR partition at 1 MiB, hidden sectors patched), read-only `Mount-DiskImage`, `chkdsk` with no `/f`, report saved in `Tests/oracle/`. Automated over SSH, or as manual steps. Checked on macOS: the VHD attaches as `FDisk_partition_scheme` with a `Windows_NTFS` partition, and the volume carved back out probes CLEAN.
+- `docs/testing.md`: how to run everything, the fsx design, and the Windows VM setup.
+
+**Verify:**
+```sh
+Scripts/fsx-soak.sh --seeds 1000 --ops 2000   # "1000 of 1000 seeds passed in 516 s"
+Scripts/fsx-soak.sh --regressions             # 2 of 2
+Scripts/test-engine.sh                        # PASSED (includes the regressions)
+Scripts/chkdsk-vm.sh --fsx 42                 # builds build/oracle/fsx-seed42-2000.vhd; needs WINDOWS_SSH to run chkdsk
+```
+
+**Left (blocked on the owner):** "at least one fsx-produced image passes Windows chkdsk". There is no VM software on this Mac (no UTM, Parallels, VMware or VirtualBox). Set up a Windows 11 Arm VM with OpenSSH Server (`docs/testing.md`), then run `WINDOWS_SSH=user@host Scripts/chkdsk-vm.sh --fsx 42` and commit `Tests/oracle/fsx-seed42-2000.chkdsk.txt`.
+
+**Surprises:**
+- fsx found the ghost-placement bug within five seeds; after the fix, 2 million random ops ran clean.
+- Speed: about 2 seeds per second on 8 cores (debug build).
+
 ## Carry-overs
 
 - **Step 08:** set a development team and reference `Extension/Resources/UnlatchFSModule.entitlements` and `App/Resources/Unlatch.entitlements` from `project.yml` (D-06). The extension cannot load without `com.apple.developer.fskit.fsmodule`. Keep an ad-hoc build path for CI (Step 07), for example an xcconfig override.
@@ -209,9 +235,10 @@ Scripts/test-engine.sh   # 26 unit tests ok; "4 GiB put (10 s) and get (16 s) ro
 - **Step 07:** add fixtures for UNCLEAN_LOG and Fast Startup (`$LogFile` restart page 2.0), from Windows-made images. The probe code paths exist but are untested.
 - **Step 07 (CI):** run `Scripts/test-engine.sh`. It needs `leaks`, which comes with Xcode command-line tools.
 - **Upstream:** send patch 0001 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
-- **Step 06:** names created by libntfs-3g are in the POSIX namespace. Confirm Windows `chkdsk` accepts fsx-made images with such names, plus ghost and rename-temp leftovers.
+- **Owner (blocks Step 06 "Done when"):** run the Windows chkdsk oracle once a Windows VM exists (see Step 06 "Left").
+- **Step 06 oracle:** names created by libntfs-3g are in the POSIX namespace. Confirm Windows `chkdsk` accepts fsx-made images with such names, plus ghost and rename-temp leftovers.
 - **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
-- **Step 17:** a crash can leave `.unlatch-ghost-*` or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep the ghost and temp names on read-write open, at least in directories touched recently, or document it.
+- **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
 - **Step 08:** route libntfs-3g logging (`ntfs_log_set_handler`) to OSLog category `engine` (D-16).
 - **Step 07 (CI):** cache `build/ntfs3g`, keyed on `Engine/vendor/VERSION` plus `Engine/vendor/patches/*` plus `Scripts/build-ntfs3g.sh`.
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.

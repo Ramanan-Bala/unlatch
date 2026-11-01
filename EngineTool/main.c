@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "file_io.h"
+#include "fsx.h"
 #include "unlatch_engine.h"
 #include "walk.h"
 
@@ -33,6 +34,7 @@ static void usage(FILE *out)
             "  rm [-d] <img> <path> remove a file (-d: an empty directory)\n"
             "  truncate <img> <path> <size>  set a file's size\n"
             "  touch <img> <path>   create a file, or set its times to now\n"
+            "  fsx <img> [--seed N] [--ops M] [--verbose]   randomized model test on an empty image\n"
             "  --version            print the engine version\n");
 }
 
@@ -534,6 +536,24 @@ int main(int argc, char **argv)
         return cmd_truncate(argv[2], argv[3], argv[4]);
     if (argc == 4 && strcmp(argv[1], "touch") == 0)
         return cmd_touch(argv[2], argv[3]);
+    if (argc >= 3 && strcmp(argv[1], "fsx") == 0) {
+        uint64_t seed = 1;
+        unsigned long ops = 2000;
+        bool verbose = false;
+        for (int i = 3; i < argc; i++) {
+            if (!strcmp(argv[i], "--seed") && i + 1 < argc)
+                seed = strtoull(argv[++i], NULL, 10);
+            else if (!strcmp(argv[i], "--ops") && i + 1 < argc)
+                ops = strtoul(argv[++i], NULL, 10);
+            else if (!strcmp(argv[i], "--verbose"))
+                verbose = true;
+            else {
+                usage(stderr);
+                return EX_USAGE;
+            }
+        }
+        return fsx_main(argv[2], seed, ops, verbose) ? EX_FAIL : 0;
+    }
     usage(stderr);
     return EX_USAGE;
 }

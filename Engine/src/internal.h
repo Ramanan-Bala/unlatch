@@ -27,7 +27,7 @@ typedef struct {
     uint16_t seq;
     bool used;
     bool ghost;                       // its last name was removed while held (D-25)
-    uint64_t ghost_dir;               // MFT reference of the directory holding the ghost name
+    uint64_t ghost_dir;               // directory holding the ghost name (the root)
     uint64_t ghost_id;                // name is UE_GHOST_PREFIX + ghost_id
 } ue_held_t;
 
