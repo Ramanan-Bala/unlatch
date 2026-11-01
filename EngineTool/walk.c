@@ -35,3 +35,25 @@ int ue_walk(ue_engine_t *e, const char *path, ue_attr_t *out)
     }
     return 0;
 }
+
+int ue_walk_parent(ue_engine_t *e, const char *path, ue_attr_t *dir, const char **leaf)
+{
+    char parent[4096];
+    size_t n = strlen(path);
+    const char *slash;
+
+    while (n > 0 && path[n - 1] == '/')
+        n--;
+    if (n == 0 || n >= sizeof(parent))
+        return n ? ENAMETOOLONG : EINVAL;
+    memcpy(parent, path, n);
+    parent[n] = '\0';
+    slash = strrchr(parent, '/');
+    *leaf = path + (slash ? (size_t)(slash - parent) + 1 : 0);
+    if (slash)
+        parent[slash - parent] = '\0';
+    else
+        parent[0] = '\0';
+    // *leaf keeps any trailing slashes of path; callers pass clean paths.
+    return ue_walk(e, parent, dir);
+}

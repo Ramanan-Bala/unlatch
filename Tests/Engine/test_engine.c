@@ -3,6 +3,8 @@
 //   test_engine <image-dir>        run all tests
 //   test_engine leakloop <img>     open/close 100 times (run under `leaks --atExit`)
 //   test_engine readloop <img>     open, walk, read, readdir, close 50 times (same)
+//   test_engine writeloop <dir>    create, write, rename, remove on a fresh clone, 30 times
+#include <copyfile.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -355,11 +357,11 @@ static void test_big_dir(void)
     ue_get_stats(rd, &s1);
     CHECK(err == 0, "readdir: %s", strerror(err));
     CHECK(b.count == 10000 && b.dups == 0 && b.bad == 0, "count %u dups %u bad %u", b.count, b.dups, b.bad);
-    // Each child's MFT record is opened exactly once for its attributes.
-    CHECK(s1.inode_opens - s0.inode_opens == 10000, "inode opens %llu",
+    // Each MFT record is opened exactly once: the directory, then every child.
+    CHECK(s1.inode_opens - s0.inode_opens == 10001, "inode opens %llu",
           (unsigned long long)(s1.inode_opens - s0.inode_opens));
-    CHECK(s1.cached_inodes == s0.cached_inodes, "readdir left %llu inodes cached",
-          (unsigned long long)(s1.cached_inodes - s0.cached_inodes));
+    CHECK(s1.held_inodes == s0.held_inodes, "readdir left %llu inodes held",
+          (unsigned long long)(s1.held_inodes - s0.held_inodes));
 
     // Paged: take 97 per call, refuse the 98th, resume from the last cookie taken.
     memset(seen, 0, sizeof(seen));
@@ -471,10 +473,10 @@ static void test_release(void)
     ue_get_stats(rd, &s0);
     CHECK(ue_walk(rd, "/dir1/dir2/deep.bin", &a) == 0, "walk");
     ue_get_stats(rd, &s1);
-    CHECK(s1.cached_inodes >= s0.cached_inodes, "cache shrank");
+    CHECK(s1.held_inodes >= s0.held_inodes, "cache shrank");
     ue_release(rd, a.ino);
     ue_get_stats(rd, &s2);
-    CHECK(s2.cached_inodes == s1.cached_inodes - 1, "release did not drop the entry");
+    CHECK(s2.held_inodes == s1.held_inodes - 1, "release did not drop the entry");
     CHECK(ue_getattr(rd, a.ino, &b) == 0 && b.size == a.size, "getattr after release");
     ue_release(rd, a.ino);
     ue_release(rd, a.ino);            // releasing twice is harmless
@@ -525,6 +527,475 @@ static int read_loop(const char *path, int n)
     return 0;
 }
 
+
+// ---- Write path (Step 05). Each test works on its own clone of a fresh image and must
+// leave it CLEAN; Scripts/test-engine.sh then checks every w-*.img with ntfsinfo/ntfsfix.
+
+typedef struct {
+    file_io_t f;
+    ue_engine_t *e;
+    char path[2048];
+} wvol_t;
+
+static int wopen(wvol_t *w, const char *base, const char *name)
+{
+    int err;
+
+    snprintf(w->path, sizeof(w->path), "%s/w-%s.img", dir, name);
+    unlink(w->path);
+    if (copyfile(img(base), w->path, NULL, COPYFILE_CLONE | COPYFILE_DATA) < 0)
+        return errno;
+    if ((err = file_io_open(&w->f, w->path, true)))
+        return err;
+    if ((err = ue_open(&w->f.io, 0, &w->e, NULL))) {
+        file_io_close(&w->f);
+        return err;
+    }
+    return 0;
+}
+
+static int wreopen(wvol_t *w, bool rw)
+{
+    int err = ue_close(w->e);
+
+    file_io_close(&w->f);
+    if (err)
+        return err;
+    if ((err = file_io_open(&w->f, w->path, rw)))
+        return err;
+    return ue_open(&w->f.io, rw ? 0 : UE_OPEN_RDONLY, &w->e, NULL);
+}
+
+// Closes and re-probes: every write test must leave the volume CLEAN.
+static int wclose(wvol_t *w)
+{
+    ue_probe_t p;
+    int err = ue_close(w->e);
+
+    file_io_close(&w->f);
+    if (err)
+        return err;
+    if ((err = probe_file(w->path, &p)))
+        return err;
+    if (p.state != UE_VOL_CLEAN) {
+        fprintf(stderr, "  %s probes %s: %s\n", w->path, ue_vol_state_name(p.state), p.reason);
+        return EIO;
+    }
+    return 0;
+}
+
+#define WCHECK(cond, ...)                                                   \
+    do {                                                                    \
+        if (!(cond)) {                                                      \
+            fprintf(stderr, "  FAIL %s:%d: %s: ", __FILE__, __LINE__, #cond); \
+            fprintf(stderr, __VA_ARGS__);                                   \
+            fprintf(stderr, "\n");                                          \
+            failures++;                                                     \
+            ue_close(w.e);                                                  \
+            file_io_close(&w.f);                                            \
+            return;                                                         \
+        }                                                                   \
+    } while (0)
+
+static int write_gen(ue_engine_t *e, ue_ino_t ino, uint64_t off, uint64_t len, uint64_t seed)
+{
+    unsigned char buf[65536];
+
+    while (len > 0) {
+        size_t n = len > sizeof(buf) ? sizeof(buf) : (size_t)len, done;
+        int err;
+        gen_fill(seed, off, buf, n);
+        if ((err = ue_write(e, ino, off, buf, n, &done)))
+            return err;
+        if (done != n)
+            return EIO;
+        off += n;
+        len -= n;
+    }
+    return 0;
+}
+
+static int check_gen(ue_engine_t *e, ue_ino_t ino, uint64_t off, uint64_t len, uint64_t seed)
+{
+    unsigned char buf[65536];
+
+    while (len > 0) {
+        size_t n = len > sizeof(buf) ? sizeof(buf) : (size_t)len, done;
+        int err = ue_read(e, ino, off, buf, n, &done);
+        if (err)
+            return err;
+        if (done != n || !matches_gen(buf, n, seed, off))
+            return EIO;
+        off += n;
+        len -= n;
+    }
+    return 0;
+}
+
+static int check_zero(ue_engine_t *e, ue_ino_t ino, uint64_t off, uint64_t len)
+{
+    unsigned char buf[65536];
+
+    while (len > 0) {
+        size_t n = len > sizeof(buf) ? sizeof(buf) : (size_t)len, done;
+        int err = ue_read(e, ino, off, buf, n, &done);
+        if (err)
+            return err;
+        if (done != n || !all_zero(buf, n))
+            return EIO;
+        off += n;
+        len -= n;
+    }
+    return 0;
+}
+
+static ue_ino_t root_of(ue_engine_t *e)
+{
+    ue_attr_t r;
+
+    return ue_getattr(e, UE_ROOT_INO, &r) ? 0 : r.ino;
+}
+
+static void test_write_roundtrip(void)
+{
+    wvol_t w;
+    ue_attr_t a, b;
+    ue_ino_t root;
+    int err = wopen(&w, "clean", "roundtrip");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "data.bin", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(a.type == UE_T_REG && a.size == 0 && a.nlink == 1, "fresh attr");
+    // Two writes, the second past a gap, so the file has a zero-filled middle.
+    WCHECK(write_gen(w.e, a.ino, 0, 3 << 20, 11) == 0, "write 1");
+    WCHECK(write_gen(w.e, a.ino, 5 << 20, 1 << 20, 12) == 0, "write 2");
+    WCHECK(ue_getattr(w.e, a.ino, &b) == 0 && b.size == (6u << 20), "size %llu", (unsigned long long)b.size);
+    WCHECK(b.mtime.tv_sec >= a.mtime.tv_sec && (b.flags & UE_F_ARCHIVE), "mtime/archive");
+    // Overwrite in the middle of the first range.
+    WCHECK(write_gen(w.e, a.ino, 1 << 20, 4096, 13) == 0, "overwrite");
+    WCHECK(ue_sync(w.e) == 0, "sync");
+    WCHECK(wreopen(&w, false) == 0, "reopen read-only");
+    WCHECK(ue_walk(w.e, "/data.bin", &b) == 0 && b.ino == a.ino && b.size == (6u << 20), "after reopen");
+    WCHECK(check_gen(w.e, b.ino, 0, 1 << 20, 11) == 0, "range 1");
+    WCHECK(check_gen(w.e, b.ino, 1 << 20, 4096, 13) == 0, "overwritten range");
+    WCHECK(check_gen(w.e, b.ino, (1 << 20) + 4096, (2 << 20) - 4096, 11) == 0, "range 1 tail");
+    WCHECK(check_zero(w.e, b.ino, 3 << 20, 2 << 20) == 0, "gap is zero");
+    WCHECK(check_gen(w.e, b.ino, 5 << 20, 1 << 20, 12) == 0, "range 2");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+static void test_create_rules(void)
+{
+    static const char *bad[] = {
+        "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b", "tab\tname", "dot.", "space ",
+        "CON", "con.txt", "PRN", "AUX", "NUL", "COM1", "lpt9.log", ".unlatch-ghost-1",
+    };
+    char longname[300];
+    wvol_t w;
+    ue_attr_t a, d, f;
+    ue_ino_t root;
+    int err = wopen(&w, "clean", "create");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        err = ue_create(w.e, root, bad[i], UE_T_REG, 0644, &a);
+        WCHECK(err == EINVAL, "'%s' gave %s", bad[i], strerror(err));
+    }
+    memset(longname, 'x', 256);
+    longname[256] = '\0';
+    WCHECK(ue_create(w.e, root, longname, UE_T_REG, 0644, &a) == ENAMETOOLONG, "256 chars");
+    longname[255] = '\0';
+    WCHECK(ue_create(w.e, root, longname, UE_T_REG, 0644, &a) == 0, "255 chars");
+    WCHECK(ue_create(w.e, root, "COM10", UE_T_REG, 0644, &a) == 0, "COM10 is allowed");
+    WCHECK(ue_create(w.e, root, "x.txt", UE_T_REG, 0644, &f) == 0, "x.txt");
+    WCHECK(ue_create(w.e, root, "X.TXT", UE_T_REG, 0644, &a) == EEXIST, "case-insensitive EEXIST");
+    WCHECK(ue_create(w.e, f.ino, "y", UE_T_REG, 0644, &a) == ENOTDIR, "create in a file");
+    WCHECK(ue_create(w.e, root, "ro.txt", UE_T_REG, 0444, &a) == 0 && (a.flags & UE_F_READONLY), "0444 -> readonly");
+    WCHECK(ue_create(w.e, root, "dir", UE_T_DIR, 0755, &d) == 0 && d.type == UE_T_DIR, "mkdir");
+    WCHECK(ue_create(w.e, d.ino, "nested", UE_T_DIR, 0755, &a) == 0, "nested mkdir");
+    WCHECK(ue_walk(w.e, "/dir/nested", &a) == 0 && a.type == UE_T_DIR, "walk nested");
+    WCHECK(ue_create(w.e, root, "link", UE_T_LNK, 0755, &a) == EOPNOTSUPP, "symlink");
+    WCHECK(ue_create(w.e, root, "caf\xC3\xA9", UE_T_REG, 0644, &a) == 0, "unicode");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+static void test_readonly_engine(void)
+{
+    unsigned char buf[4] = { 1, 2, 3, 4 };
+    ue_attr_t a, f;
+    file_io_t fio;
+    ue_engine_t *e;
+    size_t done;
+    ue_ino_t root;
+
+    CHECK(file_io_open(&fio, img("read"), false) == 0, "open");
+    CHECK(ue_open(&fio.io, UE_OPEN_RDONLY, &e, NULL) == 0, "ue_open");
+    root = root_of(e);
+    if (ue_walk(e, "/ReadMe.TXT", &f) == 0) {
+        ue_attr_t in = { .size = 1 };
+        int r[] = {
+            ue_write(e, f.ino, 0, buf, sizeof(buf), &done),
+            ue_create(e, root, "new", UE_T_REG, 0644, &a),
+            ue_remove(e, root, "ReadMe.TXT", false),
+            ue_rename(e, root, "ReadMe.TXT", root, "x", 0),
+            ue_setattr(e, f.ino, UE_SET_SIZE, &in, &a),
+        };
+        for (size_t i = 0; i < sizeof(r) / sizeof(r[0]); i++)
+            if (r[i] != EROFS)
+                failures++, fprintf(stderr, "  FAIL mutating call %zu on a read-only engine: %s\n", i, strerror(r[i]));
+    } else {
+        failures++;
+    }
+    CHECK(ue_close(e) == 0, "close");
+    file_io_close(&fio);
+}
+
+static void test_remove(void)
+{
+    wvol_t w;
+    ue_attr_t a, d, g;
+    ue_ino_t root;
+    uint64_t free0, free1, free2;
+    int err = wopen(&w, "clean", "remove");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "d", UE_T_DIR, 0755, &d) == 0, "mkdir");
+    WCHECK(ue_create(w.e, d.ino, "f", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(ue_remove(w.e, root, "d", true) == ENOTEMPTY, "rmdir non-empty");
+    WCHECK(ue_remove(w.e, root, "d", false) == EISDIR, "unlink a dir");
+    WCHECK(ue_remove(w.e, d.ino, "f", true) == ENOTDIR, "rmdir a file");
+    WCHECK(ue_remove(w.e, root, "missing", false) == ENOENT, "missing");
+    WCHECK(ue_remove(w.e, root, "$MFT", false) == ENOENT, "$MFT");
+    WCHECK(ue_remove(w.e, root, "$Extend", true) == ENOENT, "$Extend");
+    ue_release(w.e, a.ino);                 // not held: removal is immediate
+    WCHECK(ue_remove(w.e, d.ino, "F", false) == 0, "unlink (case-insensitive)");
+    WCHECK(ue_getattr(w.e, a.ino, &g) == ESTALE, "removed record is stale");
+    WCHECK(ue_remove(w.e, root, "d", true) == 0, "rmdir");
+    WCHECK(ue_walk(w.e, "/d", &g) == ENOENT, "dir gone");
+
+    // Held file: removing its last name keeps the data until ue_release (D-25).
+    WCHECK(ue_statfs(w.e, NULL, &free0, NULL) == 0, "statfs");
+    WCHECK(ue_create(w.e, root, "held.bin", UE_T_REG, 0644, &a) == 0, "create held");
+    WCHECK(write_gen(w.e, a.ino, 0, 2 << 20, 21) == 0, "write held");
+    WCHECK(ue_remove(w.e, root, "held.bin", false) == 0, "unlink held");
+    WCHECK(ue_walk(w.e, "/held.bin", &g) == ENOENT, "name gone");
+    names_t l = { .n = 0 };
+    WCHECK(ue_readdir(w.e, root, 0, collect_names, &l, NULL) == 0 && l.n == 0, "root shows %d entries (%s)",
+           l.n, l.n ? l.names[0] : "");
+    WCHECK(check_gen(w.e, a.ino, 0, 2 << 20, 21) == 0, "data readable after unlink");
+    WCHECK(ue_create(w.e, root, "held.bin", UE_T_REG, 0644, &g) == 0 && g.ino != a.ino, "name reusable");
+    WCHECK(ue_statfs(w.e, NULL, &free1, NULL) == 0 && free1 < free0, "space still in use");
+    ue_release(w.e, a.ino);
+    WCHECK(ue_getattr(w.e, a.ino, &g) == ESTALE, "released ghost is gone");
+    WCHECK(ue_statfs(w.e, NULL, &free2, NULL) == 0 && free2 > free1, "space returned");
+
+    // A ghost left at close is deleted by ue_close.
+    WCHECK(ue_create(w.e, root, "late.bin", UE_T_REG, 0644, &a) == 0, "create late");
+    WCHECK(write_gen(w.e, a.ino, 0, 1 << 20, 22) == 0, "write late");
+    WCHECK(ue_remove(w.e, root, "late.bin", false) == 0, "unlink late");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+static void test_rename_matrix(void)
+{
+    wvol_t w;
+    ue_attr_t a, b, d1, d2, sub, t, x;
+    ue_ino_t root;
+    names_t l;
+    int err = wopen(&w, "clean", "rename");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "d1", UE_T_DIR, 0755, &d1) == 0, "d1");
+    WCHECK(ue_create(w.e, root, "d2", UE_T_DIR, 0755, &d2) == 0, "d2");
+    WCHECK(ue_create(w.e, d1.ino, "a", UE_T_REG, 0644, &a) == 0, "a");
+    WCHECK(write_gen(w.e, a.ino, 0, 100000, 31) == 0, "write a");
+
+    // Same directory.
+    WCHECK(ue_rename(w.e, d1.ino, "a", d1.ino, "b", 0) == 0, "a -> b");
+    WCHECK(ue_lookup(w.e, d1.ino, "a", &x) == ENOENT, "old name gone");
+    WCHECK(ue_lookup(w.e, d1.ino, "b", &b) == 0 && b.ino == a.ino && b.nlink == 1, "b is a");
+    WCHECK(check_gen(w.e, b.ino, 0, 100000, 31) == 0, "content kept");
+    // Across directories.
+    WCHECK(ue_rename(w.e, d1.ino, "b", d2.ino, "c", 0) == 0, "d1/b -> d2/c");
+    WCHECK(ue_walk(w.e, "/d2/c", &b) == 0 && b.ino == a.ino, "moved");
+    WCHECK(ue_lookup(w.e, d1.ino, "b", &x) == ENOENT, "gone from d1");
+    // Case-only rename.
+    WCHECK(ue_rename(w.e, d2.ino, "c", d2.ino, "C", 0) == 0, "c -> C");
+    l.n = 0;
+    WCHECK(ue_readdir(w.e, d2.ino, 0, collect_names, &l, NULL) == 0 && l.n == 1 && !strcmp(l.names[0], "C"),
+           "d2 lists %d: %s", l.n, l.n ? l.names[0] : "");
+    WCHECK(ue_lookup(w.e, d2.ino, "C", &b) == 0 && b.ino == a.ino && b.nlink == 1, "same item, one link");
+    WCHECK(ue_rename(w.e, d2.ino, "C", d2.ino, "C", 0) == 0, "rename to itself");
+    // Replace an existing file (held: it becomes a ghost until released).
+    WCHECK(ue_create(w.e, d2.ino, "t", UE_T_REG, 0644, &t) == 0, "t");
+    WCHECK(write_gen(w.e, t.ino, 0, 5000, 32) == 0, "write t");
+    WCHECK(ue_rename(w.e, d2.ino, "C", d2.ino, "t", UE_RENAME_EXCL) == EEXIST, "EXCL");
+    WCHECK(ue_rename(w.e, d2.ino, "C", d2.ino, "t", 0) == 0, "C replaces t");
+    WCHECK(ue_lookup(w.e, d2.ino, "t", &b) == 0 && b.ino == a.ino && b.size == 100000, "t is now a");
+    WCHECK(check_gen(w.e, t.ino, 0, 5000, 32) == 0, "replaced file readable while held");
+    l.n = 0;
+    WCHECK(ue_readdir(w.e, d2.ino, 0, collect_names, &l, NULL) == 0 && l.n == 1, "d2 lists %d", l.n);
+    ue_release(w.e, t.ino);
+    WCHECK(ue_getattr(w.e, t.ino, &x) == ESTALE, "replaced file deleted on release");
+    // Directories: move with contents, type rules, subtree rule.
+    WCHECK(ue_create(w.e, d1.ino, "sub", UE_T_DIR, 0755, &sub) == 0, "d1/sub");
+    WCHECK(ue_create(w.e, sub.ino, "deep", UE_T_REG, 0644, &x) == 0, "d1/sub/deep");
+    WCHECK(ue_rename(w.e, root, "d1", sub.ino, "d1", 0) == EINVAL, "into own subtree");
+    WCHECK(ue_rename(w.e, root, "d1", d1.ino, "self", 0) == EINVAL, "into itself");
+    WCHECK(ue_rename(w.e, d1.ino, "sub", d2.ino, "t", 0) == ENOTDIR, "dir over file");
+    WCHECK(ue_rename(w.e, d2.ino, "t", root, "d1", 0) == EISDIR, "file over dir");
+    WCHECK(ue_create(w.e, root, "empty", UE_T_DIR, 0755, &x) == 0, "empty dir");
+    WCHECK(ue_rename(w.e, root, "empty", root, "d1", 0) == ENOTEMPTY, "over non-empty dir");
+    WCHECK(ue_rename(w.e, d1.ino, "sub", root, "empty", 0) == 0, "dir replaces empty dir");
+    WCHECK(ue_walk(w.e, "/empty/deep", &b) == 0, "contents moved");
+    WCHECK(ue_walk(w.e, "/d1/sub", &x) == ENOENT, "old dir name gone");
+    WCHECK(ue_rename(w.e, root, "d2", d1.ino, "d2", 0) == 0, "move d2 into d1");
+    WCHECK(ue_walk(w.e, "/d1/d2/t", &b) == 0 && b.ino == a.ino, "nested move");
+    WCHECK(ue_rename(w.e, root, "missing", root, "x", 0) == ENOENT, "missing source");
+    WCHECK(ue_rename(w.e, root, "empty", root, "bad:name", 0) == EINVAL, "bad target name");
+    WCHECK(wreopen(&w, false) == 0, "reopen");
+    WCHECK(ue_walk(w.e, "/d1/d2/t", &b) == 0 && check_gen(w.e, b.ino, 0, 100000, 31) == 0, "after reopen");
+    WCHECK(ue_walk(w.e, "/empty/deep", &b) == 0, "after reopen 2");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+static void test_setattr(void)
+{
+    wvol_t w;
+    ue_attr_t a, in, out, d;
+    ue_ino_t root;
+    int err = wopen(&w, "clean", "setattr");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "f", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(write_gen(w.e, a.ino, 0, 1 << 20, 41) == 0, "write");
+    memset(&in, 0, sizeof(in));
+    in.size = 3 << 20;                  // grow: the new tail reads as zeros
+    WCHECK(ue_setattr(w.e, a.ino, UE_SET_SIZE, &in, &out) == 0 && out.size == in.size, "grow");
+    WCHECK(check_gen(w.e, a.ino, 0, 1 << 20, 41) == 0 && check_zero(w.e, a.ino, 1 << 20, 2 << 20) == 0, "grown");
+    in.size = 4096;
+    WCHECK(ue_setattr(w.e, a.ino, UE_SET_SIZE, &in, &out) == 0 && out.size == 4096, "shrink");
+    WCHECK(check_gen(w.e, a.ino, 0, 4096, 41) == 0, "shrunk content");
+    in.mtime = (struct timespec){ 1000000000, 123456700 };
+    in.atime = (struct timespec){ 1100000000, 0 };
+    in.birth = (struct timespec){ 900000000, 500 * 100 };
+    WCHECK(ue_setattr(w.e, a.ino, UE_SET_MTIME | UE_SET_ATIME | UE_SET_BIRTH, &in, &out) == 0, "times");
+    WCHECK(out.mtime.tv_sec == 1000000000 && out.mtime.tv_nsec == 123456700, "mtime %ld.%ld",
+           (long)out.mtime.tv_sec, out.mtime.tv_nsec);
+    WCHECK(out.atime.tv_sec == 1100000000 && out.birth.tv_sec == 900000000 && out.birth.tv_nsec == 50000, "atime/birth");
+    WCHECK(out.ctime.tv_sec > 1700000000, "ctime moves to now");
+    in.flags = UE_F_HIDDEN | UE_F_READONLY;
+    WCHECK(ue_setattr(w.e, a.ino, UE_SET_FLAGS, &in, &out) == 0, "flags");
+    WCHECK((out.flags & UE_F_HIDDEN) && (out.flags & UE_F_READONLY) && !(out.flags & UE_F_ARCHIVE) &&
+           out.mode == 0444, "flags %x mode %o", out.flags, out.mode);
+    in.mode = 0644;
+    WCHECK(ue_setattr(w.e, a.ino, UE_SET_MODE, &in, &out) == 0 && !(out.flags & UE_F_READONLY) &&
+           (out.flags & UE_F_HIDDEN), "mode 0644 clears readonly only");
+    WCHECK(ue_create(w.e, root, "d", UE_T_DIR, 0755, &d) == 0, "mkdir");
+    in.size = 1;
+    WCHECK(ue_setattr(w.e, d.ino, UE_SET_SIZE, &in, &out) == EISDIR, "size of a dir");
+    WCHECK(wreopen(&w, false) == 0, "reopen");
+    WCHECK(ue_walk(w.e, "/f", &out) == 0 && out.size == 4096 && out.mtime.tv_nsec == 123456700 &&
+           (out.flags & UE_F_HIDDEN), "after reopen");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+static bool count_entries(void *ctx, const char *name, const ue_attr_t *a, uint64_t next)
+{
+    (void)name;
+    (void)a;
+    (void)next;
+    (*(unsigned *)ctx)++;
+    return true;
+}
+
+static void test_verifier(void)
+{
+    wvol_t w;
+    ue_attr_t a;
+    uint64_t v1, v2, v3;
+    unsigned n = 0;
+    ue_ino_t root;
+    int err = wopen(&w, "clean", "verifier");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_readdir(w.e, root, 0, count_entries, &n, &v1) == 0, "readdir");
+    WCHECK(ue_create(w.e, root, "x", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(ue_readdir(w.e, root, 0, count_entries, &n, &v2) == 0 && v2 != v1, "verifier after create");
+    WCHECK(ue_rename(w.e, root, "x", root, "y", 0) == 0, "rename");
+    WCHECK(ue_readdir(w.e, root, 0, count_entries, &n, &v3) == 0 && v3 != v2, "verifier after rename");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+static void test_enospc(void)
+{
+    enum { CHUNK = 1 << 20 };
+    unsigned char *buf = malloc(CHUNK);
+    wvol_t w;
+    ue_attr_t a, g;
+    ue_ino_t root;
+    uint64_t off = 0, free0, free1;
+    int err = wopen(&w, "small", "enospc");
+
+    CHECK(buf && err == 0, "open: %s", strerror(err));
+    memset(buf, 0xA5, CHUNK);
+    root = root_of(w.e);
+    WCHECK(ue_statfs(w.e, NULL, &free0, NULL) == 0, "statfs");
+    WCHECK(ue_create(w.e, root, "fill", UE_T_REG, 0644, &a) == 0, "create");
+    for (;;) {
+        size_t done;
+        err = ue_write(w.e, a.ino, off, buf, CHUNK, &done);
+        off += done;
+        if (err || done < CHUNK)
+            break;
+    }
+    if (!err) {                         // the short write: the next one must fail
+        size_t done;
+        err = ue_write(w.e, a.ino, off, buf, CHUNK, &done);
+    }
+    free(buf);
+    WCHECK(err == ENOSPC, "filling gave %s after %llu bytes", strerror(err), (unsigned long long)off);
+    WCHECK(off > free0 / 2, "only %llu of %llu bytes written", (unsigned long long)off, (unsigned long long)free0);
+    WCHECK(ue_getattr(w.e, a.ino, &g) == 0 && g.size == off, "size %llu vs %llu written",
+           (unsigned long long)g.size, (unsigned long long)off);
+    ue_release(w.e, a.ino);
+    WCHECK(ue_remove(w.e, root, "fill", false) == 0, "remove");
+    WCHECK(ue_statfs(w.e, NULL, &free1, NULL) == 0 && free1 + (64u << 10) >= free0, "free %llu vs %llu",
+           (unsigned long long)free1, (unsigned long long)free0);
+    CHECK(wclose(&w) == 0, "not clean after ENOSPC");
+}
+
+static int write_loop(const char *base, int n)
+{
+    for (int i = 0; i < n; i++) {
+        wvol_t w;
+        ue_attr_t a, d;
+        int err = wopen(&w, base, "leak");
+        ue_ino_t root;
+
+        if (err)
+            return err;
+        root = root_of(w.e);
+        if (!(err = ue_create(w.e, root, "d", UE_T_DIR, 0755, &d)) &&
+            !(err = ue_create(w.e, d.ino, "f", UE_T_REG, 0644, &a)) &&
+            !(err = write_gen(w.e, a.ino, 0, 70000, 51)) &&
+            !(err = ue_rename(w.e, d.ino, "f", root, "g", 0)) &&
+            !(err = ue_remove(w.e, root, "g", false)))
+            ue_release(w.e, a.ino);
+        int cerr = ue_close(w.e);
+        file_io_close(&w.f);
+        if (err || cerr)
+            return err ? err : cerr;
+    }
+    return 0;
+}
+
 #define RUN(t)                                     \
     do {                                           \
         int before = failures;                     \
@@ -538,6 +1009,13 @@ int main(int argc, char **argv)
         int err = read_loop(argv[2], 50);
         if (err)
             fprintf(stderr, "readloop: %s\n", strerror(err));
+        return err ? 1 : 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "writeloop") == 0) {
+        snprintf(dir, sizeof(dir), "%s", argv[2]);
+        int err = write_loop("clean", 30);
+        if (err)
+            fprintf(stderr, "writeloop: %s\n", strerror(err));
         return err ? 1 : 0;
     }
     if (argc == 3 && strcmp(argv[1], "leakloop") == 0) {
@@ -580,6 +1058,15 @@ int main(int argc, char **argv)
         failures++;
     }
     file_io_close(&rd_file);
+
+    RUN(test_write_roundtrip);
+    RUN(test_create_rules);
+    RUN(test_readonly_engine);
+    RUN(test_remove);
+    RUN(test_rename_matrix);
+    RUN(test_setattr);
+    RUN(test_verifier);
+    RUN(test_enospc);
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

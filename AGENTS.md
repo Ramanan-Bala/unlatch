@@ -25,11 +25,12 @@ Each step updates this list.
 | Test UnlatchCore | `swift test --package-path Shared` |
 | Build CLI | `swift build --package-path CLI` |
 | Run CLI | `swift run --package-path CLI unlatch --help` |
-| Engine tests (unit, harness, leaks, include boundary; ~1 min, 13 GB of sparse images) | `Scripts/test-engine.sh` |
-| Engine tests without the 4 GiB `cat` check | `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` |
+| Engine tests (unit, harness, leaks, written-image checks, include boundary; ~2 min, ~18 GB of sparse images, ~8 GB really written) | `Scripts/test-engine.sh` |
+| Engine tests without the 4 GiB `cat` and `put`/`get` checks (~40 s) | `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` |
 | Probe an image | `build/DerivedData/Build/Products/Debug/unlatch-engine probe t1.img` (after `xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build`) |
 | Open an image and print it | `unlatch-engine info [--rw] t1.img` |
 | Browse an image | `unlatch-engine ls [--stats] <img> [path]`, `stat <img> <path>`, `cat <img> <path>`, `tree <img> [path]` |
+| Change an image | `unlatch-engine put <img> <local\|-> <path>`, `get <img> <path> <local\|->`, `mkdir`, `mv <img> <from> <to>`, `rm [-d]`, `truncate <img> <path> <size>`, `touch` |
 | Build a fixture image | `build/test-engine/mkfixture <img> < script` (see the header of `Engine/src/fixtures/mkfixture.c`) |
 | Make a test NTFS image (prints its path) | `Scripts/make-image.sh t1 512m T1` |
 | Inspect an image | `build/ntfs3g/bin/ntfsinfo -m t1.img`, `build/ntfs3g/bin/ntfsls -s t1.img` |
@@ -65,6 +66,7 @@ Scripts/     build and release scripts
 - **Vendored code:** never edit `Engine/vendor/ntfs-3g/`. Fixes go in `Engine/vendor/patches/`. To bump the version, replace the tree from the release tarball and update `Engine/vendor/VERSION`.
 - **Errors:** engine functions return 0 or a POSIX `errno` value.
 - **Engine internals:** `Engine/src/internal.h` is the one place that includes `config.h` and ntfs-3g headers; every engine `.c` includes it first. The ntfs-3g headers come in through `-isystem` (D-13).
+- **Engine inodes:** never keep an `ntfs_inode` open between engine calls; open with `ue_iget`, close with `ue_iput` before returning (D-24). `ntfs_delete` consumes both inodes it is given.
 - **Engine threading:** not thread-safe. The host serializes every call on an engine, and `ue_probe` and `ue_open` calls with each other, because libntfs-3g has globals.
 - **Architecture:** arm64 only, macOS 27+.
 - **License header:** new source files start with `SPDX-License-Identifier: GPL-3.0-or-later`.

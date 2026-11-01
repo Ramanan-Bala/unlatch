@@ -43,6 +43,7 @@ cp -c clean.img hiber.img
 { printf 'hibr'; head -c 8188 /dev/zero; } > hiberfil.sys
 "$bin/ntfscp" -q hiber.img hiberfil.sys hiberfil.sys
 cp -c clean.img rw.img
+"$root/Scripts/make-image.sh" small 32m SMALL >/dev/null
 cp -c clean.img leak.img
 "$root/Scripts/make-image.sh" read 8g READ >/dev/null
 "$out/mkfixture" read.img <<'FIXTURE'
@@ -82,7 +83,7 @@ eng="$products/unlatch-engine"
 "$eng" cat read.img /dir1/dir2/deep.bin | cmp - <("$out/mkfixture" gen 100000 7)
 "$eng" tree read.img /dir1 | grep -q '^  deep.bin$'
 "$eng" ls --stats read.img /big 2> stats.txt > /dev/null
-grep -q '^entries: 10000 inode_opens: 10000$' stats.txt
+grep -q '^entries: 10000 inode_opens: 10001$' stats.txt
 echo "ok   harness ls/stat/cat/tree; /big: $(cat stats.txt)"
 if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
     want="$("$out/mkfixture" gen 4294967296 9 | shasum -a 256 | cut -d' ' -f1)"
@@ -90,6 +91,17 @@ if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
     got="$("$eng" cat big.img /4g.bin | shasum -a 256 | cut -d' ' -f1)"
     [ "$got" = "$want" ] || { echo "FAIL cat 4 GiB: $got != $want" >&2; exit 1; }
     echo "ok   cat of a 4 GiB file matches shasum ($((SECONDS - start)) s)"
+    "$root/Scripts/make-image.sh" put 5g PUT >/dev/null
+    want="$("$out/mkfixture" gen 4294967296 10 | shasum -a 256 | cut -d' ' -f1)"
+    start=$SECONDS
+    "$out/mkfixture" gen 4294967296 10 | "$eng" put put.img - /4g.bin
+    put_s=$((SECONDS - start))
+    start=$SECONDS
+    got="$("$eng" get put.img /4g.bin - | shasum -a 256 | cut -d' ' -f1)"
+    [ "$got" = "$want" ] || { echo "FAIL put/get 4 GiB: $got != $want" >&2; exit 1; }
+    "$eng" probe put.img | grep -q '^state: *clean$' || { echo "FAIL put.img not clean" >&2; exit 1; }
+    "$bin/ntfsfix" -n put.img > /dev/null || { echo "FAIL ntfsfix -n put.img" >&2; exit 1; }
+    echo "ok   4 GiB put ($put_s s) and get ($((SECONDS - start)) s) round trip matches shasum; image CLEAN"
 else
     echo "skip cat of a 4 GiB file (UNLATCH_SKIP_BIG=1)"
 fi
@@ -112,6 +124,27 @@ else
     echo "FAIL leaks" >&2
     exit 1
 fi
+
+echo "== leaks (30 create, write, rename, remove on fresh clones)"
+if leaks --atExit -- "$out/test_engine" writeloop "$out" > leaks-write.txt 2>&1; then
+    grep -E "leaks for" leaks-write.txt | head -1
+    echo "ok   no leaks"
+else
+    cat leaks-write.txt >&2
+    echo "FAIL leaks" >&2
+    exit 1
+fi
+
+echo "== written images: probe CLEAN, ntfsinfo, ntfsfix -n, no internal names left"
+for w in w-*.img; do
+    "$products/unlatch-engine" probe "$w" | grep -q '^state: *clean$' || { echo "FAIL $w not clean" >&2; exit 1; }
+    "$bin/ntfsinfo" -m "$w" > /dev/null 2>&1 || { echo "FAIL ntfsinfo $w" >&2; exit 1; }
+    "$bin/ntfsfix" -n "$w" > fix.txt 2>&1 || { cat fix.txt >&2; echo "FAIL ntfsfix -n $w" >&2; exit 1; }
+    if "$bin/ntfsls" -R -a -s "$w" | grep -q '\.unlatch-'; then
+        echo "FAIL $w has leftover .unlatch- names" >&2; exit 1
+    fi
+done
+echo "ok   $(ls w-*.img | wc -l | tr -d ' ') written images"
 
 echo "== include boundary"
 if grep -rn --include='*.c' --include='*.h' --include='*.swift' --include='*.m' -E '#\s*include\s*[<"]ntfs-3g/' \

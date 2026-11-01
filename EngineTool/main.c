@@ -26,6 +26,13 @@ static void usage(FILE *out)
             "  stat <img> <path>    print a file's attributes\n"
             "  cat <img> <path>     write a file's contents to stdout\n"
             "  tree <img> [path]    list a directory recursively\n"
+            "  put <img> <local|-> <path>   copy a local file (or stdin) into the image\n"
+            "  get <img> <path> <local|->   copy a file out of the image (or to stdout)\n"
+            "  mkdir <img> <path>   create a directory\n"
+            "  mv <img> <from> <to> rename or move (replaces an existing target)\n"
+            "  rm [-d] <img> <path> remove a file (-d: an empty directory)\n"
+            "  truncate <img> <path> <size>  set a file's size\n"
+            "  touch <img> <path>   create a file, or set its times to now\n"
             "  --version            print the engine version\n");
 }
 
@@ -99,20 +106,25 @@ typedef struct {
     ue_engine_t *e;
 } session_t;
 
-static int session_open(session_t *s, const char *img)
+static int session_open_mode(session_t *s, const char *img, bool rw)
 {
     int err;
 
-    if ((err = file_io_open(&s->f, img, false))) {
+    if ((err = file_io_open(&s->f, img, rw))) {
         fprintf(stderr, "unlatch-engine: %s: %s\n", img, strerror(err));
         return EX_FAIL;
     }
-    if ((err = ue_open(&s->f.io, UE_OPEN_RDONLY, &s->e, NULL))) {
+    if ((err = ue_open(&s->f.io, rw ? 0 : UE_OPEN_RDONLY, &s->e, NULL))) {
         fprintf(stderr, "unlatch-engine: open failed: %s\n", strerror(err));
         file_io_close(&s->f);
         return EX_FAIL;
     }
     return 0;
+}
+
+static int session_open(session_t *s, const char *img)
+{
+    return session_open_mode(s, img, false);
 }
 
 static int session_close(session_t *s, int rc)
@@ -285,6 +297,199 @@ static int cmd_cat(const char *img, const char *path)
     return session_close(&s, rc);
 }
 
+static int fail(const char *what, const char *path, int err)
+{
+    fprintf(stderr, "unlatch-engine: %s %s: %s\n", what, path, strerror(err));
+    return EX_FAIL;
+}
+
+// Opens (creating if needed) a regular file at path in a read-write session.
+static int open_or_create(session_t *s, const char *path, bool truncate, ue_attr_t *a)
+{
+    ue_attr_t dir;
+    const char *leaf;
+    int err = ue_walk(s->e, path, a);
+
+    if (err == ENOENT) {
+        if ((err = ue_walk_parent(s->e, path, &dir, &leaf)))
+            return fail("parent of", path, err);
+        if ((err = ue_create(s->e, dir.ino, leaf, UE_T_REG, 0644, a)))
+            return fail("create", path, err);
+        return 0;
+    }
+    if (err)
+        return fail("open", path, err);
+    if (a->type != UE_T_REG)
+        return fail("open", path, EISDIR);
+    if (truncate) {
+        ue_attr_t in = { .size = 0 };
+        if ((err = ue_setattr(s->e, a->ino, UE_SET_SIZE, &in, a)))
+            return fail("truncate", path, err);
+    }
+    return 0;
+}
+
+static int cmd_put(const char *img, const char *local, const char *path)
+{
+    enum { CHUNK = 1 << 20 };
+    FILE *in = strcmp(local, "-") ? fopen(local, "rb") : stdin;
+    session_t s;
+    ue_attr_t a;
+    uint64_t off = 0;
+    char *buf;
+    int rc = 0;
+
+    if (!in)
+        return fail("open", local, errno);
+    if (session_open_mode(&s, img, true)) {
+        if (in != stdin)
+            fclose(in);
+        return EX_FAIL;
+    }
+    if (open_or_create(&s, path, true, &a) || !(buf = malloc(CHUNK))) {
+        if (in != stdin)
+            fclose(in);
+        return session_close(&s, EX_FAIL);
+    }
+    for (;;) {
+        size_t n = fread(buf, 1, CHUNK, in), done;
+        int err;
+        if (n == 0)
+            break;
+        if ((err = ue_write(s.e, a.ino, off, buf, n, &done)) || done != n) {
+            rc = fail("write", path, err ? err : EIO);
+            break;
+        }
+        off += n;
+    }
+    if (ferror(in))
+        rc = fail("read", local, EIO);
+    free(buf);
+    if (in != stdin)
+        fclose(in);
+    return session_close(&s, rc);
+}
+
+static int cmd_get(const char *img, const char *path, const char *local)
+{
+    enum { CHUNK = 1 << 20 };
+    FILE *out = strcmp(local, "-") ? fopen(local, "wb") : stdout;
+    session_t s;
+    ue_attr_t a;
+    uint64_t off = 0;
+    char *buf;
+    int rc = 0;
+
+    if (!out)
+        return fail("create", local, errno);
+    if (session_open(&s, img)) {
+        if (out != stdout)
+            fclose(out);
+        return EX_FAIL;
+    }
+    if (walk_or_fail(&s, path, &a) || !(buf = malloc(CHUNK))) {
+        if (out != stdout)
+            fclose(out);
+        return session_close(&s, EX_FAIL);
+    }
+    for (;;) {
+        size_t done;
+        int err = ue_read(s.e, a.ino, off, buf, CHUNK, &done);
+        if (err) {
+            rc = fail("read", path, err);
+            break;
+        }
+        if (done == 0)
+            break;
+        if (fwrite(buf, 1, done, out) != done) {
+            rc = fail("write", local, EIO);
+            break;
+        }
+        off += done;
+    }
+    free(buf);
+    if ((out == stdout ? fflush(out) : fclose(out)) != 0)
+        rc = EX_FAIL;
+    return session_close(&s, rc);
+}
+
+static int cmd_mkdir(const char *img, const char *path)
+{
+    session_t s;
+    ue_attr_t dir, a;
+    const char *leaf;
+    int err;
+
+    if (session_open_mode(&s, img, true))
+        return EX_FAIL;
+    if ((err = ue_walk_parent(s.e, path, &dir, &leaf)) || (err = ue_create(s.e, dir.ino, leaf, UE_T_DIR, 0755, &a)))
+        return session_close(&s, fail("mkdir", path, err));
+    return session_close(&s, 0);
+}
+
+static int cmd_mv(const char *img, const char *from, const char *to)
+{
+    session_t s;
+    ue_attr_t odir, ndir;
+    const char *oleaf, *nleaf;
+    int err;
+
+    if (session_open_mode(&s, img, true))
+        return EX_FAIL;
+    if ((err = ue_walk_parent(s.e, from, &odir, &oleaf)))
+        return session_close(&s, fail("parent of", from, err));
+    if ((err = ue_walk_parent(s.e, to, &ndir, &nleaf)))
+        return session_close(&s, fail("parent of", to, err));
+    if ((err = ue_rename(s.e, odir.ino, oleaf, ndir.ino, nleaf, 0)))
+        return session_close(&s, fail("rename", from, err));
+    return session_close(&s, 0);
+}
+
+static int cmd_rm(const char *img, const char *path, bool dir_flag)
+{
+    session_t s;
+    ue_attr_t dir;
+    const char *leaf;
+    int err;
+
+    if (session_open_mode(&s, img, true))
+        return EX_FAIL;
+    if ((err = ue_walk_parent(s.e, path, &dir, &leaf)) || (err = ue_remove(s.e, dir.ino, leaf, dir_flag)))
+        return session_close(&s, fail("remove", path, err));
+    return session_close(&s, 0);
+}
+
+static int cmd_truncate(const char *img, const char *path, const char *size)
+{
+    session_t s;
+    ue_attr_t a, in = { .size = strtoull(size, NULL, 10) };
+    int err;
+
+    if (session_open_mode(&s, img, true))
+        return EX_FAIL;
+    if ((err = ue_walk(s.e, path, &a)) || (err = ue_setattr(s.e, a.ino, UE_SET_SIZE, &in, &a)))
+        return session_close(&s, fail("truncate", path, err));
+    return session_close(&s, 0);
+}
+
+static int cmd_touch(const char *img, const char *path)
+{
+    session_t s;
+    ue_attr_t a, in;
+    struct timespec now;
+    int err;
+
+    if (session_open_mode(&s, img, true))
+        return EX_FAIL;
+    if (open_or_create(&s, path, false, &a))
+        return session_close(&s, EX_FAIL);
+    clock_gettime(CLOCK_REALTIME, &now);
+    in.mtime = in.atime = now;
+    if ((err = ue_setattr(s.e, a.ino, UE_SET_MTIME | UE_SET_ATIME, &in, &a)))
+        return session_close(&s, fail("touch", path, err));
+    return session_close(&s, 0);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {
@@ -313,6 +518,22 @@ int main(int argc, char **argv)
         return cmd_stat(argv[2], argv[3]);
     if (argc == 4 && strcmp(argv[1], "cat") == 0)
         return cmd_cat(argv[2], argv[3]);
+    if (argc == 5 && strcmp(argv[1], "put") == 0)
+        return cmd_put(argv[2], argv[3], argv[4]);
+    if (argc == 5 && strcmp(argv[1], "get") == 0)
+        return cmd_get(argv[2], argv[3], argv[4]);
+    if (argc == 4 && strcmp(argv[1], "mkdir") == 0)
+        return cmd_mkdir(argv[2], argv[3]);
+    if (argc == 5 && strcmp(argv[1], "mv") == 0)
+        return cmd_mv(argv[2], argv[3], argv[4]);
+    if (argc == 4 && strcmp(argv[1], "rm") == 0)
+        return cmd_rm(argv[2], argv[3], false);
+    if (argc == 5 && strcmp(argv[1], "rm") == 0 && strcmp(argv[2], "-d") == 0)
+        return cmd_rm(argv[3], argv[4], true);
+    if (argc == 5 && strcmp(argv[1], "truncate") == 0)
+        return cmd_truncate(argv[2], argv[3], argv[4]);
+    if (argc == 4 && strcmp(argv[1], "touch") == 0)
+        return cmd_touch(argv[2], argv[3]);
     usage(stderr);
     return EX_USAGE;
 }

@@ -33,3 +33,19 @@ One line each: `D-NN: decision — reason — step`. Later steps depend on these
   - `emit` returning false means the entry was not taken.
   - `ue_get_stats` exposes debug counters (`inode_opens`, `cached_inodes`).
   - `ue_statfs` counts free clusters once at open and relies on libntfs-3g to keep the count current — Step 04
+- D-24: **Supersedes D-18.** The engine keeps no `ntfs_inode` open between calls. Every call opens what it needs (`ue_iget` checks the sequence number; a freed or reused record gives ESTALE) and closes it before returning, as lowntfs-3g does. libntfs-3g's closed-inode cache (`CACHE_NIDATA`, synced on close) keeps re-opens cheap. Holding inodes open across calls is unsafe because libntfs-3g opens parent directories by reference internally (for example to sync a file name into its parent's index), which would create a second, diverging in-memory copy of a record. `ue_readdir` keeps the directory open for one call and reads children read-only outside `ntfs_readdir` — Step 05
+- D-25: Unlink of a held file: the engine tracks the items the host holds (from `ue_lookup`/`ue_create` until `ue_release`; `Engine/src/held.c`). When a file's last name is removed while held, the name is replaced by a hidden ghost name, `.unlatch-ghost-N` in the same directory, flagged HIDDEN and SYSTEM. The ghost is deleted on `ue_release`, or at `ue_close` for any still left. This is lowntfs-3g's ghost scheme, keyed to FSKit's reclaim instead of FUSE release. Names starting `.unlatch-ghost-` or `.unlatch-rename-` are hidden from lookup and readdir, and cannot be created. A crash can leave ghosts behind (Step 17) — Step 05
+- D-26: Rename uses only link and unlink steps, in lowntfs-3g's order, so every intermediate state is a valid volume:
+  - Plain move: link the new name, then unlink the old.
+  - Replace: park the target as `.unlatch-rename-N`, unlink its name, link the source, unlink the source's old name, then remove the parked target (a ghost if held).
+  - Case-only rename: link a temp name, unlink the old, link the new, unlink the temp. `$I30` collates case-insensitively, so `A` can't be linked next to `a`.
+  - Same item under another name in another directory: a no-op (POSIX).
+  - A directory may not move into its own subtree (EINVAL); this is checked by walking `$FILE_NAME` parents. Type rules: ENOTDIR, EISDIR, ENOTEMPTY; EXCL → EEXIST. Each failed step is rolled back.
+  - Not crash-atomic: a crash can leave a temp name or both names (Step 17) — Step 05
+- D-27: New names (create, rename target) follow Win32 rules via `ntfs_forbidden_names(vol, …, strict=TRUE)`: no `\ / : * ? " < > |` or control characters, no trailing dot or space, no CON/PRN/AUX/NUL/COM1-9/LPT1-9 with or without an extension. These fail with EINVAL; more than 255 UTF-16 units gives ENAMETOOLONG. Existing names are found case-insensitively (EEXIST). libntfs-3g creates POSIX-namespace names — Step 05
+- D-28: Write-path semantics:
+  - `ue_write` updates mtime and ctime and sets ARCHIVE. It returns EACCES on encrypted files and EOPNOTSUPP on reparse points (symlinks, junctions, cloud placeholders) until Step 16. A short write returns 0 with `*done` short; a failed first write returns the errno (ENOSPC).
+  - `ue_create`: mode without the owner-write bit sets DOS READONLY; it updates the parent's mtime and ctime, which `ntfs_create` doesn't.
+  - `ue_setattr`: size uses `ntfs_attr_truncate` (growing makes a hole); compressed files grow by writing a final zero. Times are taken exactly (100 ns resolution), and ctime becomes now unless given. Only HIDDEN, SYSTEM, READONLY and ARCHIVE can be changed. A file's mode only affects READONLY, and `ue_getattr` reports 0444 for read-only files (refines D-23).
+  - `ue_sync` flushes the device; libntfs-3g syncs inodes on close.
+  - Every mutating call on a read-only engine returns EROFS — Step 05

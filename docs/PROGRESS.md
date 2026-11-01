@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 1 Engine on host |
-| Last completed step | 04 Engine read path (2026-11-01) |
-| Next step | 05 Engine write path |
+| Last completed step | 05 Engine write path (2026-11-01) |
+| Next step | 06 Randomized model test (fsx) and Windows oracle |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patch 0001 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -18,7 +18,7 @@
 | libntfs-3g custom device quirks | Step 03 | Patch in `Engine/vendor/patches/` | settled: works unpatched, one EROFS workaround (D-14) |
 | Restricted entitlement on the CLI | Step 12 S1 | CLI talks to the app over XPC | open |
 | Apple's NTFS driver wins the mount race | Step 12 S2 | Unmount-and-swap | open |
-| Corruption | Steps 05–07, 10, 15, 17 | Read-only default for that scenario until fixed | open |
+| Corruption | Steps 05–07, 10, 15, 17 | Read-only default for that scenario until fixed | open; Step 05 tests pass, fsx and chkdsk (Step 06) pending |
 | Stale data exposed through KOIO | Step 15 explicit test | Inhibit KOIO for files with `init_size < size` | open |
 | FSKit API changes in 27.x | every step re-checks the docs | pin the tested 27.x builds in README | open |
 
@@ -165,6 +165,42 @@ Scripts/test-engine.sh     # 18 unit tests ok; "/big: entries: 10000 inode_opens
 - **Fixtures:** `ntfs_attr_truncate` creates sparse holes, so `uninit.bin` is also flagged sparse, and a 3 GiB file costs 1 MiB.
 - **Timing:** 4 GiB `cat` through the engine takes about 15 s, roughly 270 MB/s, on a debug build plus `shasum`.
 
+### Step 05: Engine write path — done 2026-11-01
+
+**Done:**
+- **Per-call inodes (D-24, supersedes D-18):** `Engine/src/inode.c` handles open, sequence check, attributes and name checks. `Engine/src/held.c` tracks the items the host holds, replacing the open-inode cache. `read.c` now uses per-call opens.
+- **`Engine/src/write.c`:**
+  - `ue_write`, `ue_create` (Win32 name rules, D-27), `ue_setattr` (size, times, DOS flags, mode → READONLY), `ue_sync`.
+  - `ue_remove`: type checks, ENOTEMPTY; a held file's last name becomes a ghost, deleted on `ue_release` or at `ue_close` (D-25).
+  - `ue_rename`: link/unlink sequences for move, replace, case-only rename and directory moves, with rollback (D-26).
+  - A read-only engine returns EROFS from every mutating call.
+- **Harness:** `put` and `get` (both accept `-`), `mkdir`, `mv`, `rm [-d]`, `truncate`, `touch`.
+- **Tests:** 8 new tests, 26 in total:
+  - round trip: two writes with a gap, an overwrite, reopen read-only, verify every range
+  - name rules, including 255/256-character names and reserved names
+  - EROFS from a read-only engine
+  - remove: type errors, metafiles, the held-file ghost (data stays readable, the name can be reused, space comes back on release), a ghost cleaned up at close
+  - the rename matrix
+  - setattr: grow, shrink, exact times, flags, mode
+  - the readdir verifier changes after create and rename
+  - filling a 32 MB volume gives ENOSPC, then remove gives the space back
+- **Image checks:** after every write test the image re-probes CLEAN. `test-engine.sh` then checks each `w-*.img` with probe, `ntfsinfo`, `ntfsfix -n`, and `ntfsls -R` (no `.unlatch-` names left). A third leak loop runs create, write, rename and remove.
+- **4 GiB round trip:** `put` from stdin, then `get` to stdout, matches `shasum`, and the image is CLEAN afterwards.
+
+**Verify:**
+```sh
+Scripts/test-engine.sh   # 26 unit tests ok; "4 GiB put (10 s) and get (16 s) round trip matches shasum;
+                         # image CLEAN"; 3x 0 leaks; "8 written images"; PASSED (about 2 minutes)
+```
+
+**Left:** nothing in scope.
+
+**Surprises:**
+- **Inode model:** libntfs-3g is built around short-lived inode opens. `ntfs_delete` closes the inodes passed to it, linking needs a closed inode, and syncing a file reopens its parent by reference. Keeping inodes open between calls, as the plan's inode cache did, risks two copies of one record, so the cache became a table of held items (D-24).
+- **Parent times:** `ntfs_create` does not update the parent's times (lowntfs-3g does that itself). Without the fix, the readdir verifier didn't change after a create.
+- **Case-only rename:** needs a temp name, because `$I30` is case-insensitive.
+- **Timing (debug build):** writes run at about 400 MB/s from stdin.
+
 ## Carry-overs
 
 - **Step 08:** set a development team and reference `Extension/Resources/UnlatchFSModule.entitlements` and `App/Resources/Unlatch.entitlements` from `project.yml` (D-06). The extension cannot load without `com.apple.developer.fskit.fsmodule`. Keep an ad-hoc build path for CI (Step 07), for example an xcconfig override.
@@ -173,7 +209,9 @@ Scripts/test-engine.sh     # 18 unit tests ok; "/big: entries: 10000 inode_opens
 - **Step 07:** add fixtures for UNCLEAN_LOG and Fast Startup (`$LogFile` restart page 2.0), from Windows-made images. The probe code paths exist but are untested.
 - **Step 07 (CI):** run `Scripts/test-engine.sh`. It needs `leaks`, which comes with Xcode command-line tools.
 - **Upstream:** send patch 0001 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
-- **Step 05:** before writes, re-check D-18's "one inode per record" when ntfs-3g opens inodes internally (`ntfs_create`, `ntfs_delete` and `ntfs_link` take inode pointers; pass the cached ones). The readdir verifier relies on libntfs-3g updating the directory's `last_data_change_time` on create, delete and rename; test that.
+- **Step 06:** names created by libntfs-3g are in the POSIX namespace. Confirm Windows `chkdsk` accepts fsx-made images with such names, plus ghost and rename-temp leftovers.
+- **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
+- **Step 17:** a crash can leave `.unlatch-ghost-*` or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep the ghost and temp names on read-write open, at least in directories touched recently, or document it.
 - **Step 08:** route libntfs-3g logging (`ntfs_log_set_handler`) to OSLog category `engine` (D-16).
 - **Step 07 (CI):** cache `build/ntfs3g`, keyed on `Engine/vendor/VERSION` plus `Engine/vendor/patches/*` plus `Scripts/build-ntfs3g.sh`.
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.

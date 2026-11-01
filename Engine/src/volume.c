@@ -237,8 +237,7 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
     e->vol = vol;
     e->dev_ctx = ctx;
     e->readonly = readonly;
-    if ((err = ue_icache_init(&e->icache)) || (err = ue_cache_root(e))) {
-        ue_icache_close_all(&e->icache);
+    if ((err = ue_held_init(&e->held))) {
         unmount_volume(vol, ctx);
         free(e);
         return err;
@@ -264,7 +263,9 @@ int ue_close(ue_engine_t *e)
         return EINVAL;
     // libntfs-3g never sets VOLUME_IS_DIRTY on mount, so there is nothing to clear here;
     // __ntfs_volume_release syncs dirty system inodes and calls the device sync.
-    err = ue_icache_close_all(&e->icache);
+    // Files removed while held are deleted now; the host holds nothing past unmount.
+    err = e->readonly ? 0 : ue_delete_ghosts(e);
+    ue_held_free(&e->held);
     int uerr = unmount_volume(e->vol, e->dev_ctx);
     if (!err)
         err = uerr;

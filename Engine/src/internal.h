@@ -21,32 +21,51 @@ typedef struct ue_dev {
 // Allocates an ntfs_device backed by io. On success *ctx_out must outlive the device.
 struct ntfs_device *ue_device_new(const ue_io_t *io, ue_dev_t **ctx_out);
 
-// Open-inode cache (icache.c), keyed by MFT record number.
+// Held-inode table (held.c), keyed by MFT record number.
 typedef struct {
     uint64_t rec;
-    ntfs_inode *ni;                   // NULL marks an empty slot
-} ue_icache_ent_t;
+    uint16_t seq;
+    bool used;
+    bool ghost;                       // its last name was removed while held (D-25)
+    uint64_t ghost_dir;               // MFT reference of the directory holding the ghost name
+    uint64_t ghost_id;                // name is UE_GHOST_PREFIX + ghost_id
+} ue_held_t;
 
 typedef struct {
-    ue_icache_ent_t *slots;
+    ue_held_t *slots;
     size_t cap, count;                // cap is a power of two
-} ue_icache_t;
+} ue_held_map_t;
 
-int ue_icache_init(ue_icache_t *c);
-ntfs_inode *ue_icache_find(const ue_icache_t *c, uint64_t rec);
-int ue_icache_insert(ue_icache_t *c, uint64_t rec, ntfs_inode *ni);
-ntfs_inode *ue_icache_remove(ue_icache_t *c, uint64_t rec);   // returns it; caller closes
-int ue_icache_close_all(ue_icache_t *c);                      // closes every inode, frees slots
+int ue_held_init(ue_held_map_t *m);
+void ue_held_free(ue_held_map_t *m);
+ue_held_t *ue_held_find(const ue_held_map_t *m, uint64_t rec);
+int ue_held_add(ue_held_map_t *m, uint64_t rec, uint16_t seq);
+void ue_held_remove(ue_held_map_t *m, uint64_t rec);
 
 struct ue_engine {
     ntfs_volume *vol;                 // owns the ntfs_device
     ue_dev_t *dev_ctx;
     bool readonly;
-    ue_icache_t icache;
+    ue_held_map_t held;
+    uint64_t next_tmp_id;             // ghost and rename temp names
     ue_stats_t stats;
 };
 
-// read.c: opens FILE_root into the cache (called by ue_open).
-int ue_cache_root(ue_engine_t *e);
+// Internal names the engine creates; hidden from lookup and readdir (D-25).
+#define UE_GHOST_PREFIX ".unlatch-ghost-"
+#define UE_RENAME_PREFIX ".unlatch-rename-"
+
+// inode.c: per-call inode access (D-24).
+int ue_iget(ue_engine_t *e, ue_ino_t ino, ntfs_inode **out);   // open + sequence check
+ntfs_inode *ue_iopen_rec(ue_engine_t *e, uint64_t rec);          // open by record, counted
+int ue_iput(ntfs_inode *ni);                                     // close; 0 or errno
+bool ue_is_dir(const ntfs_inode *ni);
+ue_ino_t ue_ino_of(const ntfs_inode *ni);
+int ue_fill_attr(ntfs_inode *ni, ue_attr_t *out);
+int ue_to_ucs(const char *name, ntfschar **out, int *len_out);  // validates seam names
+bool ue_hidden_entry(uint64_t dir_rec, uint64_t rec, const char *utf8_name);
+int ue_hold(ue_engine_t *e, const ntfs_inode *ni);              // host now holds this item
+int ue_delete_ghost(ue_engine_t *e, ue_held_t *h);              // write.c
+int ue_delete_ghosts(ue_engine_t *e);                            // ue_close
 
 #endif // UE_INTERNAL_H

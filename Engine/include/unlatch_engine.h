@@ -78,7 +78,7 @@ int  ue_getattr(ue_engine_t *e, ue_ino_t ino, ue_attr_t *out);
 typedef bool (*ue_dirent_fn)(void *ctx, const char *name, const ue_attr_t *attr, uint64_t next_cookie);
 int  ue_readdir(ue_engine_t *e, ue_ino_t dir, uint64_t cookie, ue_dirent_fn emit, void *ctx, uint64_t *verifier);
 int  ue_read(ue_engine_t *e, ue_ino_t ino, uint64_t off, void *buf, size_t len, size_t *done);
-void ue_release(ue_engine_t *e, ue_ino_t ino); // FSKit reclaimed the item; drop cache entry
+void ue_release(ue_engine_t *e, ue_ino_t ino); // FSKit reclaimed the item (deferred delete happens here)
 // Lookup and readdir skip ".", "..", DOS-only 8.3 names and the root's metafiles ($MFT, ...).
 // Lookup is case-insensitive (NTFS $UpCase); readdir returns names case-preserved.
 // readdir: cookie 0 starts; each entry carries the cookie that resumes after it. emit
@@ -90,7 +90,7 @@ void ue_release(ue_engine_t *e, ue_ino_t ino); // FSKit reclaimed the item; drop
 // Debug counters (tests, benchmarks).
 typedef struct {
     uint64_t inode_opens;             // ntfs_inode_open calls made by the engine
-    uint64_t cached_inodes;           // inodes currently held open for the host
+    uint64_t held_inodes;             // items the host holds (lookup/create until ue_release)
 } ue_stats_t;
 void ue_get_stats(const ue_engine_t *e, ue_stats_t *out);
 
