@@ -62,7 +62,8 @@ int ue_iget(ue_engine_t *e, ue_ino_t ino, ntfs_inode **out);   // open + sequenc
 ntfs_inode *ue_iopen_rec(ue_engine_t *e, uint64_t rec);          // open by record, counted
 int ue_iput(ntfs_inode *ni);                                     // close; 0 or errno
 bool ue_is_dir(const ntfs_inode *ni);
-bool ue_is_symlink(ntfs_inode *ni);                              // any kind NTFS has (link.c)
+bool ue_is_symlink(ntfs_inode *ni);
+void ue_logf(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));  // engine's own messages (log.c)                              // any kind NTFS has (link.c)
 ue_ino_t ue_ino_of(const ntfs_inode *ni);
 int ue_fill_attr(ntfs_inode *ni, ue_attr_t *out);
 int ue_to_ucs(const char *name, ntfschar **out, int *len_out);  // validates seam names

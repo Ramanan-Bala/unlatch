@@ -2,6 +2,7 @@
 // Routes libntfs-3g's log output to the host's ue_log_fn (D-44).
 #include "internal.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -35,6 +36,19 @@ static int ue_log_handler(const char *function, const char *file, int line, u32 
         msg[i - 1] = 0;
     log_fn(log_ctx, lvl, msg);
     return (int)strlen(msg);
+}
+
+void ue_logf(int level, const char *fmt, ...)
+{
+    char msg[1024];
+    va_list ap;
+
+    if (!log_fn)
+        return;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    log_fn(log_ctx, level, msg);
 }
 
 void ue_set_log(ue_log_fn fn, void *ctx)

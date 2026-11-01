@@ -16,6 +16,8 @@
 //     reparse PATH KIND TARGET       Windows reparse point on an existing PATH, as Windows
 //                                    writes it: KIND symlink-rel (TARGET like ..\\x.txt),
 //                                    symlink-abs or junction (TARGET like C:\\Users)
+//     zero-record PATH               overwrite PATH's MFT record with zeros, leaving its index
+//                                    entry behind (a damaged entry, as seen on a real disk)
 //   mkfixture gen SIZE SEED [OFF] write SIZE bytes of the stream, from offset OFF, to stdout
 #include "config.h"
 
@@ -313,6 +315,24 @@ static int cmd_reparse(ntfs_volume *vol, const char *path, const char *kind, con
     return rc;
 }
 
+static int cmd_zero_record(ntfs_volume *vol, const char *path)
+{
+    ntfs_inode *ni = ntfs_pathname_to_inode(vol, NULL, path);
+    if (!ni)
+        return die("open", path);
+    u64 mft_no = ni->mft_no;
+    if (ntfs_inode_close(ni))
+        return die("close", path);
+    char *zeros = calloc(1, vol->mft_record_size);
+    if (!zeros)
+        return die("alloc", path);
+    s64 off = (s64)(mft_no << vol->mft_record_size_bits);
+    int rc = ntfs_attr_pwrite(vol->mft_na, off, vol->mft_record_size, zeros) == vol->mft_record_size ? 0
+                                                                                                 : die("zero", path);
+    free(zeros);
+    return rc;
+}
+
 static int run(ntfs_volume *vol, char *line)
 {
     char cmd[16], path[4096], word[32];
@@ -340,6 +360,8 @@ static int run(ntfs_volume *vol, char *line)
         return cmd_logfile(vol, path);
     if (!strcmp(cmd, "stream") && sscanf(line, "%*s %*s %31s %llu %llu", word, &a, &b) == 3)
         return cmd_stream(vol, path, word, a, b);
+    if (!strcmp(cmd, "zero-record"))
+        return cmd_zero_record(vol, path);
     char target[4096];
     if (!strcmp(cmd, "reparse") && sscanf(line, "%*s %*s %31s %4095s", word, target) == 2)
         return cmd_reparse(vol, path, word, target);

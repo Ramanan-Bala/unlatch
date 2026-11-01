@@ -73,6 +73,11 @@ mkdir /Docs
 reparse /Docs junction C:\Users\Public
 file /other.lnk 0 1
 reparse /other.lnk symlink-abs D:\elsewhere\x.txt
+mkdir /damaged
+file /damaged/a.txt 10 1
+file /damaged/broken.txt 10 2
+file /damaged/c.txt 10 3
+zero-record /damaged/broken.txt
 FIXTURE
 if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
     "$root/Scripts/make-image.sh" big 5g BIG >/dev/null

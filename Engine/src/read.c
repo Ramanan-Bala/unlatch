@@ -198,8 +198,18 @@ int ue_readdir(ue_engine_t *e, ue_ino_t dir, uint64_t cookie, ue_dirent_fn emit,
         for (int i = 0; i < b->n; i++) {
             ue_attr_t attr;
             if ((err = entry_attr(e, b->ents[i].mref, &attr))) {
-                free_batch(b, i);
-                goto out;
+                if (e->dev_ctx->failed || err == ENOMEM) {
+                    free_batch(b, i);
+                    goto out;
+                }
+                // A damaged or stale entry (its MFT record unreadable, e.g. all zeros) hides
+                // only itself, as with ntfs-3g; the rest of the directory still lists (D-54).
+                ue_logf(UE_LOG_WARNING, "skipping \"%s\" in directory %llu: MFT record %llu: %s",
+                        b->ents[i].name, (unsigned long long)dni->mft_no,
+                        (unsigned long long)MREF(b->ents[i].mref), strerror(err));
+                free(b->ents[i].name);
+                err = 0;
+                continue;
             }
             // Resuming at pos + 1 skips exactly this entry (dir.c: entries with an
             // offset >= *pos are returned).

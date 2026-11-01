@@ -1114,6 +1114,41 @@ static void test_windows_links(void)
     file_io_close(&f);
 }
 
+// A directory entry whose MFT record is zeros (seen on a real disk) hides only itself.
+static bool count_entry(void *ctx, const char *name, const ue_attr_t *attr, uint64_t next)
+{
+    (void)name;
+    (void)attr;
+    (void)next;
+    (*(int *)ctx)++;
+    return true;
+}
+
+static void test_damaged_entry(void)
+{
+    file_io_t f;
+    ue_engine_t *e;
+    ue_attr_t d, a;
+    uint64_t v;
+    int n = 0;
+
+    CHECK(file_io_open(&f, img("reparse"), false) == 0, "open image");
+    CHECK(ue_open(&f.io, UE_OPEN_RDONLY, &e, NULL) == 0, "ue_open");
+    int err = ue_walk(e, "/damaged", &d);
+    if (!err)
+        err = ue_readdir(e, d.ino, 0, count_entry, &n, &v);
+    if (err || n != 2) {
+        fprintf(stderr, "  FAIL readdir of /damaged: %s, %d entries (want 2)\n", strerror(err), n);
+        failures++;
+    }
+    if (ue_walk(e, "/damaged/c.txt", &a) != 0) {
+        fprintf(stderr, "  FAIL sibling after the damaged entry\n");
+        failures++;
+    }
+    ue_close(e);
+    file_io_close(&f);
+}
+
 // Surprise removal / failed write (Step 10): after the first failed device write the engine
 // returns EIO for everything, writes nothing more, and close reports the failure.
 static void test_device_failure(void)
@@ -1223,6 +1258,7 @@ int main(int argc, char **argv)
     RUN(test_xattr);
     RUN(test_links);
     RUN(test_windows_links);
+    RUN(test_damaged_entry);
     RUN(test_device_failure);
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);

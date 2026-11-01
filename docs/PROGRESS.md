@@ -429,6 +429,12 @@ Bench/compare.py
 - macOS bash 3.2 has no associative arrays.
 - An earlier run went slowly because `rm -rf` of 30,000 files per run sits outside the timed part and the Mac was swapping; it was not a hang.
 
+### Real-disk findings (owner's NTFS disk, read-only) — 2026-11-01
+
+- Mounting a real disk read-only needed `sudo`: device nodes are `root:operator` 0640 (D-53). Step 12's helper should do this.
+- The volume probed clean, but a directory listed as empty: one index entry points to MFT record 352642, which reads as zeros. The listing failed as a whole; it now skips that entry (D-54).
+- Not yet known: whether that record is stale on the disk (Windows `chkdsk` would tell) or a misread of a far, fragmented `$MFT` record. The owner can check, read-only: `sudo build/ntfs3g/bin/ntfsinfo -i 352642 /dev/diskNs1`.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).

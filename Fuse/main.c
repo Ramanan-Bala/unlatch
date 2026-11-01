@@ -185,6 +185,14 @@ int main(int argc, char **argv)
 
     // When in doubt, read-only.
     uf_fs_t fs = { .read_only = true, .mountpoint = mountpoint, .uid = getuid(), .gid = getgid() };
+    // Real disks' device nodes are root:operator 0640, so they are mounted with sudo until the
+    // Step 12 helper exists. Files then belong to the user who ran sudo, and the mount is made
+    // visible to other users (macFUSE hides a root mount otherwise), D-53.
+    bool via_sudo = getuid() == 0 && getenv("SUDO_UID") && getenv("SUDO_GID");
+    if (via_sudo) {
+        fs.uid = (uid_t)strtoul(getenv("SUDO_UID"), NULL, 10);
+        fs.gid = (gid_t)strtoul(getenv("SUDO_GID"), NULL, 10);
+    }
     if (p.state != UE_VOL_CLEAN) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
     } else if (!want_ro) {
@@ -222,8 +230,8 @@ int main(int argc, char **argv)
 
     char volname[600], opts[2048];
     escape_opt(p.label[0] ? p.label : "NTFS", volname, sizeof(volname));
-    snprintf(opts, sizeof(opts), "%sfsname=unlatch@%s,volname=%s,backend=%s%s%s", fs.read_only ? "ro," : "",
-             bsd_name, volname, backend, extra ? "," : "", extra ? extra : "");
+    snprintf(opts, sizeof(opts), "%s%sfsname=unlatch@%s,volname=%s,backend=%s%s%s", fs.read_only ? "ro," : "",
+             via_sudo ? "allow_other," : "", bsd_name, volname, backend, extra ? "," : "", extra ? extra : "");
     char *fargv[] = { argv[0], "-o", opts, debug ? "-d" : NULL, NULL };
     struct fuse_args args = FUSE_ARGS_INIT(debug ? 4 : 3, fargv);
 
