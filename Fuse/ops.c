@@ -13,8 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
-#define UF_TIMEOUT 60.0               // read-only: nothing changes behind the kernel's back
+// Attribute and entry cache lifetimes. Every change comes through the kernel either way, but
+// read-write mounts keep them short so a missed invalidation heals quickly.
+#define UF_TIMEOUT_RO 60.0
+#define UF_TIMEOUT_RW 1.0
+#define UF_TIMEOUT(fs) ((fs)->read_only ? UF_TIMEOUT_RO : UF_TIMEOUT_RW)
 #define UF_NAME_MAX 1024              // UTF-8 bytes for 255 UTF-16 units, with room to spare
 
 // MARK: node table (engine reference -> lookup count)
@@ -176,23 +181,51 @@ static void fill_attr(const uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_
         st->flags |= UF_HIDDEN;
 }
 
+// Takes a lookup reference for the kernel and fills the entry. Returns 0 or errno.
+static int make_entry(uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_entry_param *e)
+{
+    int err;
+
+    if ((err = node_ref(fs, a->ino)))
+        return err;
+    memset(e, 0, sizeof(*e));
+    e->ino = to_fuse(fs, a->ino);
+    e->generation = a->ino >> 48;
+    fill_attr(fs, a, &e->attr);
+    e->attr_timeout = UF_TIMEOUT(fs);
+    e->entry_timeout = UF_TIMEOUT(fs);
+    return 0;
+}
+
+// The kernel never got the entry, so drop the reference make_entry took.
+static void unmake_entry(uf_fs_t *fs, const ue_attr_t *a)
+{
+    if (node_unref(fs, a->ino, 1) && a->ino != fs->root)
+        ue_release(fs->engine, a->ino);
+}
+
 static void reply_entry(fuse_req_t req, uf_fs_t *fs, const ue_attr_t *a)
 {
     struct fuse_darwin_entry_param e;
     int err;
 
-    if ((err = node_ref(fs, a->ino))) {
+    if ((err = make_entry(fs, a, &e))) {
         fuse_reply_err(req, err);
         return;
     }
-    memset(&e, 0, sizeof(e));
-    e.ino = to_fuse(fs, a->ino);
-    e.generation = a->ino >> 48;
-    fill_attr(fs, a, &e.attr);
-    e.attr_timeout = UF_TIMEOUT;
-    e.entry_timeout = UF_TIMEOUT;
-    if (fuse_reply_entry(req, &e) != 0 && node_unref(fs, a->ino, 1) && a->ino != fs->root)
-        ue_release(fs->engine, a->ino);     // the kernel never got the entry
+    if (fuse_reply_entry(req, &e) != 0)
+        unmake_entry(fs, a);
+}
+
+// MARK: session
+
+// NTFS lookups are case-insensitive. Without telling the kernel, a case-only rename
+// (README -> readme) resolves both names to one vnode and becomes a silent no-op.
+static void uf_init(void *userdata, struct fuse_conn_info *conn)
+{
+    (void)userdata;
+    fuse_darwin_set_feature_flag(conn, FUSE_DARWIN_CAP_CASE_INSENSITIVE);
+    fuse_darwin_set_feature_flag(conn, FUSE_DARWIN_CAP_RENAME_EXT);   // RENAME_EXCL/SWAP reach uf_rename
 }
 
 // MARK: read side
@@ -247,7 +280,7 @@ static void uf_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
         return;
     }
     fill_attr(fs, &a, &st);
-    fuse_reply_attr(req, &st, UF_TIMEOUT);
+    fuse_reply_attr(req, &st, UF_TIMEOUT(fs));
 }
 
 static void uf_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
@@ -328,7 +361,7 @@ static void uf_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
         fuse_reply_err(req, EROFS);
         return;
     }
-    fi->keep_cache = fs->read_only;
+    fi->keep_cache = fs->read_only;   // read-write: the kernel's cache is dropped on open
     fuse_reply_open(req, fi);
 }
 
@@ -388,74 +421,249 @@ static void uf_statfs(fuse_req_t req, fuse_ino_t ino)
     fuse_reply_statfs(req, &st);
 }
 
-// MARK: write side: read-only until Step 10
+// MARK: write side
 
+static void reply_attr_of(fuse_req_t req, uf_fs_t *fs, const ue_attr_t *a)
+{
+    struct fuse_darwin_attr st;
+
+    fill_attr(fs, a, &st);
+    fuse_reply_attr(req, &st, UF_TIMEOUT(fs));
+}
+
+// NTFS has no owners: chown and chgrp succeed and change nothing (D-46). Of the BSD flags,
+// only UF_HIDDEN maps to NTFS; other flag bits are ignored the same way.
 static void uf_setattr(fuse_req_t req, fuse_ino_t ino, struct fuse_darwin_attr *attr, int to_set,
                        struct fuse_file_info *fi)
 {
-    (void)ino;
-    (void)attr;
-    (void)to_set;
+    uf_fs_t *fs = fs_of(req);
+    ue_ino_t eino = to_engine(fs, ino);
+    ue_attr_t in, out;
+    uint32_t mask = 0;
+    struct timespec now;
+    int err;
+
     (void)fi;
-    fuse_reply_err(req, EROFS);
+    if (fs->read_only) {
+        fuse_reply_err(req, EROFS);
+        return;
+    }
+    memset(&in, 0, sizeof(in));
+    clock_gettime(CLOCK_REALTIME, &now);
+    if (to_set & FUSE_SET_ATTR_SIZE) {
+        if (attr->size < 0) {
+            fuse_reply_err(req, EINVAL);
+            return;
+        }
+        mask |= UE_SET_SIZE;
+        in.size = (uint64_t)attr->size;
+    }
+    if (to_set & (FUSE_SET_ATTR_MTIME | FUSE_SET_ATTR_MTIME_NOW)) {
+        mask |= UE_SET_MTIME;
+        in.mtime = (to_set & FUSE_SET_ATTR_MTIME_NOW) ? now : attr->mtimespec;
+    }
+    if (to_set & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_ATIME_NOW)) {
+        mask |= UE_SET_ATIME;
+        in.atime = (to_set & FUSE_SET_ATTR_ATIME_NOW) ? now : attr->atimespec;
+    }
+    if (to_set & FUSE_SET_ATTR_BTIME) {
+        mask |= UE_SET_BIRTH;
+        in.birth = attr->btimespec;
+    }
+    if (to_set & FUSE_SET_ATTR_CTIME) {
+        mask |= UE_SET_CTIME;
+        in.ctime = attr->ctimespec;
+    }
+    if (to_set & FUSE_SET_ATTR_MODE) {
+        mask |= UE_SET_MODE;
+        in.mode = attr->mode;
+    }
+    if (to_set & FUSE_SET_ATTR_FLAGS) {
+        ue_attr_t cur;
+        if ((err = ue_getattr(fs->engine, eino, &cur))) {
+            fuse_reply_err(req, err);
+            return;
+        }
+        mask |= UE_SET_FLAGS;
+        in.flags = (cur.flags & ~(uint32_t)UE_F_HIDDEN) | ((attr->flags & UF_HIDDEN) ? UE_F_HIDDEN : 0);
+    }
+    if ((err = ue_setattr(fs->engine, eino, mask, &in, &out))) {
+        fuse_reply_err(req, err);
+        return;
+    }
+    reply_attr_of(req, fs, &out);
+}
+
+static int create_common(fuse_req_t req, fuse_ino_t parent, const char *name, uint32_t type, mode_t mode,
+                         ue_attr_t *out)
+{
+    uf_fs_t *fs = fs_of(req);
+    char nfc[UF_NAME_MAX];
+    int err;
+
+    if (fs->read_only)
+        return EROFS;
+    if ((err = nfc_name(name, nfc)))
+        return err;
+    return ue_create(fs->engine, to_engine(fs, parent), nfc, type, mode & 07777, out);
 }
 
 static void uf_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
 {
-    (void)parent;
-    (void)name;
-    (void)mode;
-    fuse_reply_err(req, EROFS);
+    ue_attr_t a;
+    int err = create_common(req, parent, name, UE_T_DIR, mode, &a);
+
+    if (err)
+        fuse_reply_err(req, err);
+    else
+        reply_entry(req, fs_of(req), &a);
 }
 
 static void uf_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode,
                       struct fuse_file_info *fi)
 {
-    (void)parent;
-    (void)name;
-    (void)mode;
-    (void)fi;
-    fuse_reply_err(req, EROFS);
+    uf_fs_t *fs = fs_of(req);
+    struct fuse_darwin_entry_param e;
+    ue_attr_t a;
+    int err = create_common(req, parent, name, UE_T_REG, mode, &a);
+
+    if (!err)
+        err = make_entry(fs, &a, &e);
+    if (err) {
+        fuse_reply_err(req, err);
+        return;
+    }
+    fi->keep_cache = 0;
+    if (fuse_reply_create(req, &e, fi) != 0)
+        unmake_entry(fs, &a);
 }
 
-static void uf_remove(fuse_req_t req, fuse_ino_t parent, const char *name)
+// Removing a name the kernel still holds is fine: the engine keeps the file as a hidden
+// ghost until the last forget releases it (D-25).
+static void remove_common(fuse_req_t req, fuse_ino_t parent, const char *name, bool is_dir)
 {
-    (void)parent;
-    (void)name;
-    fuse_reply_err(req, EROFS);
+    uf_fs_t *fs = fs_of(req);
+    char nfc[UF_NAME_MAX];
+    int err;
+
+    if (fs->read_only)
+        err = EROFS;
+    else if (!(err = nfc_name(name, nfc)))
+        err = ue_remove(fs->engine, to_engine(fs, parent), nfc, is_dir);
+    fuse_reply_err(req, err);
+}
+
+static void uf_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+    remove_common(req, parent, name, false);
+}
+
+static void uf_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+    remove_common(req, parent, name, true);
 }
 
 static void uf_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent,
                       const char *newname, unsigned int flags)
 {
-    (void)parent;
-    (void)name;
-    (void)newparent;
-    (void)newname;
-    (void)flags;
-    fuse_reply_err(req, EROFS);
+    uf_fs_t *fs = fs_of(req);
+    char from[UF_NAME_MAX], to[UF_NAME_MAX];
+    int err;
+
+    if (fs->read_only)
+        err = EROFS;
+    else if (flags & RENAME_SWAP)
+        err = ENOTSUP;
+    else if (flags & ~(unsigned)RENAME_EXCL)
+        err = EINVAL;
+    else if (!(err = nfc_name(name, from)) && !(err = nfc_name(newname, to)))
+        err = ue_rename(fs->engine, to_engine(fs, parent), from, to_engine(fs, newparent), to,
+                        (flags & RENAME_EXCL) ? UE_RENAME_EXCL : 0);
+    fuse_reply_err(req, err);
 }
 
 static void uf_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off,
                      struct fuse_file_info *fi)
 {
-    (void)ino;
-    (void)buf;
-    (void)size;
-    (void)off;
+    uf_fs_t *fs = fs_of(req);
+    size_t done = 0;
+    int err;
+
     (void)fi;
-    fuse_reply_err(req, EROFS);
+    if (fs->read_only) {
+        fuse_reply_err(req, EROFS);
+        return;
+    }
+    if (off < 0) {
+        fuse_reply_err(req, EINVAL);
+        return;
+    }
+    err = ue_write(fs->engine, to_engine(fs, ino), (uint64_t)off, buf, size, &done);
+    if (err && !done)
+        fuse_reply_err(req, err);
+    else
+        fuse_reply_write(req, done);
+}
+
+// Engine writes go straight to the device, so close needs nothing; fsync flushes the device
+// cache (F_FULLFSYNC on the image or disk).
+static void uf_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+{
+    (void)ino;
+    (void)fi;
+    fuse_reply_err(req, ue_has_failed(fs_of(req)->engine) ? EIO : 0);
+}
+
+static void uf_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi)
+{
+    (void)ino;
+    (void)datasync;
+    (void)fi;
+    fuse_reply_err(req, ue_sync(fs_of(req)->engine));
+}
+
+static void uf_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
+{
+    (void)link;
+    (void)parent;
+    (void)name;
+    fuse_reply_err(req, fs_of(req)->read_only ? EROFS : ENOTSUP);   // Step 16
+}
+
+static void uf_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
+{
+    (void)ino;
+    (void)newparent;
+    (void)newname;
+    fuse_reply_err(req, fs_of(req)->read_only ? EROFS : ENOTSUP);   // Step 16
+}
+
+static void uf_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
+{
+    ue_attr_t a;
+    int err;
+
+    (void)rdev;
+    if (!S_ISREG(mode)) {
+        fuse_reply_err(req, fs_of(req)->read_only ? EROFS : ENOTSUP);
+        return;
+    }
+    if ((err = create_common(req, parent, name, UE_T_REG, mode, &a)))
+        fuse_reply_err(req, err);
+    else
+        reply_entry(req, fs_of(req), &a);
 }
 
 const struct fuse_lowlevel_ops uf_ops = {
+    .init = uf_init,
     .lookup = uf_lookup,
     .forget = uf_forget,
     .forget_multi = uf_forget_multi,
     .getattr = uf_getattr,
     .setattr = uf_setattr,
     .mkdir = uf_mkdir,
-    .unlink = uf_remove,
-    .rmdir = uf_remove,
+    .unlink = uf_unlink,
+    .rmdir = uf_rmdir,
     .rename = uf_rename,
     .open = uf_open,
     .read = uf_read,
@@ -466,4 +674,10 @@ const struct fuse_lowlevel_ops uf_ops = {
     .releasedir = uf_releasedir,
     .statfs = uf_statfs,
     .create = uf_create,
+    .flush = uf_flush,
+    .fsync = uf_fsync,
+    .fsyncdir = uf_fsync,
+    .symlink = uf_symlink,
+    .link = uf_link,
+    .mknod = uf_mknod,
 };

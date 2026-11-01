@@ -264,7 +264,8 @@ int ue_close(ue_engine_t *e)
     // libntfs-3g never sets VOLUME_IS_DIRTY on mount, so there is nothing to clear here;
     // __ntfs_volume_release syncs dirty system inodes and calls the device sync.
     // Files removed while held are deleted now; the host holds nothing past unmount.
-    err = e->readonly ? 0 : ue_delete_ghosts(e);
+    // After a device failure nothing more is written; unmount fails and reports EIO.
+    err = e->readonly || e->dev_ctx->failed ? 0 : ue_delete_ghosts(e);
     ue_held_free(&e->held);
     int uerr = unmount_volume(e->vol, e->dev_ctx);
     if (!err)
@@ -276,4 +277,9 @@ int ue_close(ue_engine_t *e)
 bool ue_is_readonly(const ue_engine_t *e)
 {
     return e ? e->readonly : true;
+}
+
+bool ue_has_failed(const ue_engine_t *e)
+{
+    return e && e->dev_ctx->failed;
 }

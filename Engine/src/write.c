@@ -682,6 +682,8 @@ int ue_sync(ue_engine_t *e)
         return EINVAL;
     if (e->readonly)
         return 0;
+    if (e->dev_ctx->failed)
+        return EIO;
     // No inode is held open between calls and libntfs-3g syncs inodes on close, so only
     // the device needs flushing.
     dev = e->vol->dev;

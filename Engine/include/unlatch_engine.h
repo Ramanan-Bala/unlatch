@@ -70,6 +70,9 @@ int  ue_probe(const ue_io_t *io, ue_probe_t *out);
 int  ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *probe_out);
 int  ue_close(ue_engine_t *e);                 // sync, mark clean, release; always frees e
 bool ue_is_readonly(const ue_engine_t *e);
+// True after a device write failed or the device disappeared (ENXIO/ENODEV). From then on
+// every call returns EIO, nothing is retried, and ue_close writes nothing (it returns EIO).
+bool ue_has_failed(const ue_engine_t *e);
 
 // Read side (Step 04)
 int  ue_statfs(ue_engine_t *e, uint64_t *total, uint64_t *free_bytes, uint32_t *cluster);

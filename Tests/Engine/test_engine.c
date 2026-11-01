@@ -1003,6 +1003,48 @@ static int write_loop(const char *base, int n)
         printf("%s %s\n", failures == before ? "ok  " : "FAIL", #t); \
     } while (0)
 
+// Surprise removal / failed write (Step 10): after the first failed device write the engine
+// returns EIO for everything, writes nothing more, and close reports the failure.
+static void test_device_failure(void)
+{
+    wvol_t w;
+    ue_attr_t a, b;
+    ue_ino_t root;
+    ue_probe_t p;
+    size_t done;
+    char buf[4096] = { 1 };
+    int err = wopen(&w, "clean", "failure");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "kept.bin", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(write_gen(w.e, a.ino, 0, 1 << 20, 21) == 0, "write");
+    WCHECK(ue_sync(w.e) == 0, "sync");
+    WCHECK(!ue_has_failed(w.e), "failed too early");
+    // The device turns read-only underneath the engine: every pwrite now fails.
+    int ro = open(w.path, O_RDONLY);
+    WCHECK(ro >= 0 && dup2(ro, w.f.fd) >= 0, "swap fd");
+    close(ro);
+    err = 0;
+    for (int i = 0; i < 64 && !err; i++)   // libntfs-3g may buffer a few writes in memory
+        err = ue_write(w.e, a.ino, (uint64_t)i << 20, buf, sizeof(buf), &done);
+    if (!err)
+        err = ue_sync(w.e);
+    WCHECK(err != 0, "writes kept succeeding");
+    WCHECK(ue_has_failed(w.e), "not failed after a failed write");
+    WCHECK(ue_getattr(w.e, root, &b) == EIO, "getattr after failure");
+    WCHECK(ue_lookup(w.e, root, "kept.bin", &b) == EIO, "lookup after failure");
+    WCHECK(ue_create(w.e, root, "new.bin", UE_T_REG, 0644, &b) == EIO, "create after failure");
+    WCHECK(ue_sync(w.e) == EIO, "sync after failure");
+    err = ue_close(w.e);
+    file_io_close(&w.f);
+    CHECK(err != 0, "close after failure claimed success");
+    // What was synced before the failure is still there and the volume still parses.
+    CHECK(probe_file(w.path, &p) == 0 && p.state != UE_VOL_CORRUPT && p.state != UE_VOL_NOT_NTFS,
+          "probe after failure: %s", ue_vol_state_name(p.state));
+    unlink(w.path);                    // not a clean-unmount image; keep it out of the w-*.img checks
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "readloop") == 0) {
@@ -1067,6 +1109,7 @@ int main(int argc, char **argv)
     RUN(test_setattr);
     RUN(test_verifier);
     RUN(test_enospc);
+    RUN(test_device_failure);
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

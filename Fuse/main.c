@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // unlatch-fuse: mounts an NTFS image or device through macFUSE (plan Step 08, D-40).
 //
-//   unlatch-fuse [-f] [-d] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>
+//   unlatch-fuse [-f] [-d] [-r] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>
 //
 // The default backend is macFUSE's kernel extension: its FSKit backend fails large reads on
 // macOS 27 (D-42, D-43).
 //
-// The safety decision is made here, before mounting: CORRUPT and NOT_NTFS are refused,
-// anything else mounts read-only (read-write comes in Step 10). The verdict goes to the
-// status record (status.c).
+// The safety decision is made here, before mounting: CORRUPT and NOT_NTFS are refused;
+// read-write only when the volume probes CLEAN, the device opens writable and -r was not
+// given; everything else mounts read-only. The verdict goes to the status record (status.c).
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -30,17 +30,18 @@
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: unlatch-fuse [-f] [-d] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>\n"
+            "usage: unlatch-fuse [-f] [-d] [-r] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>\n"
             "  -f            stay in the foreground\n"
             "  -d            FUSE debug output (implies -f)\n"
+            "  -r            mount read-only even when the volume could be written\n"
             "  --backend B   macFUSE backend: kext (default) or fskit (no kernel extension;\n"
             "                mounts only under /Volumes; large reads fail on macOS 27, D-42)\n"
             "  -o opt,...    extra macFUSE mount options\n");
 }
 
-static void record_status(const char *bsd_name, const ue_probe_t *p, bool mounted)
+static void record_status(const char *bsd_name, const ue_probe_t *p, bool read_only, bool mounted)
 {
-    int err = status_write(bsd_name, p, true, mounted);
+    int err = status_write(bsd_name, p, read_only, mounted);
 
     if (err)
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "status record for %s: %s", bsd_name, strerror(err));
@@ -123,21 +124,23 @@ int main(int argc, char **argv)
 {
     static const struct option longopts[] = {
         { "backend", required_argument, NULL, 'b' },
-        { "ready-fd", required_argument, NULL, 'r' },
+        { "read-only", no_argument, NULL, 'R' },
+        { "ready-fd", required_argument, NULL, 'F' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     const char *backend = "kext", *extra = NULL;
-    bool foreground = false, debug = false;
+    bool foreground = false, debug = false, want_ro = false;
     int ch, ready_fd = -1;
 
-    while ((ch = getopt_long(argc, argv, "fdo:h", longopts, NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "fdro:h", longopts, NULL)) != -1) {
         switch (ch) {
         case 'f': foreground = true; break;
+        case 'r': case 'R': want_ro = true; break;
         case 'd': debug = foreground = true; break;
         case 'o': extra = optarg; break;
         case 'b': backend = optarg; break;
-        case 'r': ready_fd = atoi(optarg); break;
+        case 'F': ready_fd = atoi(optarg); break;
         default: usage(); return ch == 'h' ? 0 : 2;
         }
     }
@@ -180,17 +183,36 @@ int main(int argc, char **argv)
     }
     if (p.state == UE_VOL_CORRUPT || p.state == UE_VOL_NOT_NTFS) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s (%s), not mounting", source, ue_vol_state_name(p.state), p.reason);
-        record_status(bsd_name, &p, false);
+        record_status(bsd_name, &p, true, false);
         file_io_close(&f);
         return 1;
     }
-    if (p.state != UE_VOL_CLEAN)
-        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
 
+    // When in doubt, read-only.
     uf_fs_t fs = { .read_only = true, .uid = getuid(), .gid = getgid() };
+    if (p.state != UE_VOL_CLEAN) {
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
+    } else if (!want_ro) {
+        file_io_t w;
+        if ((err = file_io_open(&w, source, true))) {
+            uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s cannot be opened for writing (%s), read-only",
+                   source, strerror(err));
+        } else {
+            file_io_close(&f);
+            f = w;
+            f.io.ctx = &f;            // file_io's context is the struct itself
+            fs.read_only = false;
+        }
+    }
     ue_probe_t info;
     ue_attr_t root;
-    if ((err = ue_open(&f.io, UE_OPEN_RDONLY, &fs.engine, &info))) {
+    err = ue_open(&f.io, fs.read_only ? UE_OPEN_RDONLY : 0, &fs.engine, &info);
+    if (err == EROFS && !fs.read_only) {
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s is write-protected, read-only", source);
+        fs.read_only = true;
+        err = ue_open(&f.io, UE_OPEN_RDONLY, &fs.engine, &info);
+    }
+    if (err) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "open %s: %s", source, strerror(err));
         file_io_close(&f);
         return 1;
@@ -205,7 +227,7 @@ int main(int argc, char **argv)
 
     char volname[600], opts[2048];
     escape_opt(p.label[0] ? p.label : "NTFS", volname, sizeof(volname));
-    snprintf(opts, sizeof(opts), "ro,fsname=unlatch@%s,volname=%s,backend=%s%s%s",
+    snprintf(opts, sizeof(opts), "%sfsname=unlatch@%s,volname=%s,backend=%s%s%s", fs.read_only ? "ro," : "",
              bsd_name, volname, backend, extra ? "," : "", extra ? extra : "");
     char *fargv[] = { argv[0], "-o", opts, debug ? "-d" : NULL, NULL };
     struct fuse_args args = FUSE_ARGS_INIT(debug ? 4 : 3, fargv);
@@ -220,9 +242,9 @@ int main(int argc, char **argv)
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "mounting %s on %s failed (%s backend)", source, mountpoint, backend);
         goto signals;
     }
-    record_status(bsd_name, &p, true);
-    uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "mounted %s on %s read-only (%s, %s backend)", source, mountpoint,
-           ue_vol_state_name(p.state), backend);
+    record_status(bsd_name, &p, fs.read_only, true);
+    uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "mounted %s on %s %s (%s, %s backend)", source, mountpoint,
+           fs.read_only ? "read-only" : "read-write", ue_vol_state_name(p.state), backend);
     if (ready_fd >= 0) {              // tell the parent, then detach from its terminal
         int null = open("/dev/null", O_RDWR);
         if (write(ready_fd, "0", 1) != 1)
@@ -244,10 +266,16 @@ signals:
 destroy:
     fuse_session_destroy(se);
 close:
-    ue_close(fs.engine);
+    if (ue_has_failed(fs.engine))
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s failed during use; nothing more was written", source);
+    if ((err = ue_close(fs.engine))) {
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "closing %s: %s; the volume may need Windows chkdsk", source,
+               strerror(err));
+        rc = 1;
+    }
     free(fs.rbuf);
     free(fs.nodes);
-    record_status(bsd_name, &p, false);
+    record_status(bsd_name, &p, fs.read_only, false);
     file_io_close(&f);
     return rc;
 }

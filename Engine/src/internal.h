@@ -17,6 +17,7 @@
 typedef struct ue_dev {
     ue_io_t io;
     uint64_t pos;                     // seek position for read/write
+    bool failed;                      // a write failed or the device went away: all I/O -> EIO
 } ue_dev_t;
 
 // Allocates an ntfs_device backed by io. On success *ctx_out must outlive the device.

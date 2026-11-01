@@ -44,6 +44,8 @@ int ue_iget(ue_engine_t *e, ue_ino_t ino, ntfs_inode **out)
     uint16_t want = MSEQNO(ino);
     ntfs_inode *ni;
 
+    if (e->dev_ctx->failed)            // every call after a device failure (Step 10)
+        return EIO;
     ni = ue_iopen_rec(e, MREF(ino));
     if (!ni)                           // freed records fail with ENOENT
         return errno == ENOENT ? ESTALE : (errno ? errno : EIO);

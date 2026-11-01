@@ -72,12 +72,18 @@ static s64 dev_pread(struct ntfs_device *dev, void *buf, s64 count, s64 offset)
         errno = EINVAL;
         return -1;
     }
+    if (c->failed) {
+        errno = EIO;
+        return -1;
+    }
     if ((uint64_t)offset >= c->io.size_bytes || count == 0)
         return 0;
     if ((uint64_t)count > c->io.size_bytes - (uint64_t)offset)
         count = (s64)(c->io.size_bytes - (uint64_t)offset);
     err = c->io.pread(c->io.ctx, buf, (size_t)count, (uint64_t)offset);
     if (err) {
+        if (err == ENXIO || err == ENODEV)
+            c->failed = true;         // the device is gone (surprise removal)
         errno = err;
         return -1;
     }
@@ -97,6 +103,10 @@ static s64 dev_pwrite(struct ntfs_device *dev, const void *buf, s64 count, s64 o
         errno = EINVAL;
         return -1;
     }
+    if (c->failed) {
+        errno = EIO;
+        return -1;
+    }
     if (count == 0)
         return 0;
     if ((uint64_t)offset >= c->io.size_bytes) {
@@ -108,6 +118,8 @@ static s64 dev_pwrite(struct ntfs_device *dev, const void *buf, s64 count, s64 o
     NDevSetDirty(dev);
     err = c->io.pwrite(c->io.ctx, buf, (size_t)count, (uint64_t)offset);
     if (err) {
+        // Never retry a write: what reached the disk is unknown, so stop all I/O (Step 10).
+        c->failed = true;
         errno = err;
         return -1;
     }
@@ -137,11 +149,16 @@ static int dev_sync(struct ntfs_device *dev)
     ue_dev_t *c = CTX(dev);
     int err;
 
+    if (c->failed) {
+        errno = EIO;
+        return -1;
+    }
     if (NDevReadOnly(dev) || !NDevDirty(dev))
         return 0;
     if (c->io.flush) {
         err = c->io.flush(c->io.ctx);
         if (err) {
+            c->failed = true;
             errno = err;
             return -1;
         }

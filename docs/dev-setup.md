@@ -44,7 +44,7 @@ umount build/m
 hdiutil detach "$disk"
 ```
 
-Options: `-f` stays in the foreground, `-d` prints FUSE debug output, `--backend fskit` uses the FSKit backend (mount point under `/Volumes`), and `-o opt,...` passes extra macFUSE options. A block device needs no sudo when the user owns it, as with `hdiutil`-attached images. Step 08 always mounts read-only; dirty, hibernated and unclean-log volumes will stay read-only once writing arrives in Step 10.
+Options: `-f` stays in the foreground, `-d` prints FUSE debug output, `--backend fskit` uses the FSKit backend (mount point under `/Volumes`), and `-o opt,...` passes extra macFUSE options. A block device needs no sudo when the user owns it, as with `hdiutil`-attached images. A volume mounts read-write only when it probes clean and the image or disk opens writable; `-r` forces read-only. Dirty, hibernated and unclean-log volumes always mount read-only. Until xattrs are native (Step 16), macOS writes `._` AppleDouble files next to new files (D-47).
 
 **Apple's NTFS driver:** Apple's read-only NTFS driver may also claim a disk. `attach-image.sh` attaches with `-nomount`, so nothing mounts it first. Step 12 settles the auto-mount race.
 

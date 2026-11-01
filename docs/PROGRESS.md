@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 2 Mounting (macFUSE, D-39) |
-| Last completed step | 09 read path: logging, attributes, Finder, read speed (2026-11-01). 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
-| Next step | 10 Write path through FUSE |
+| Last completed step | 10 write path through FUSE (2026-11-01; git clone and Windows chkdsk left, see entry). 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Next step | 16 (xattr part, brought forward, D-47), then 11 |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -350,13 +350,42 @@ $F $img build/m && ls -laO build/m && qlmanage -t -s 128 -o /tmp build/m/visible
 - macFUSE's kext sizes reads from `st_blksize`, not `iosize` or `f_iosize`.
 - The NTFS root is hidden+system.
 
+### Step 10: Write path through FUSE — done 2026-11-01, except the git check (needs Step 16) and Windows chkdsk (needs the VM)
+
+**Done:**
+- Engine: failed state (D-46). A failed device write, or ENXIO/ENODEV on a read, makes every later call return EIO (`ue_iget`, `ue_sync`, the device ops); `ue_close` deletes no ghosts and reports EIO; `ue_has_failed` in the seam. Test `test_device_failure`: the device turns read-only under a mounted engine.
+- Daemon: read-write when CLEAN, writable and no `-r` (D-46). `write`, `create`, `mkdir`, `mknod` (regular files), `unlink`/`rmdir` (open files live on as ghosts until forget), `rename` (EXCL; SWAP → ENOTSUP), `setattr` (size, times incl. birth, mode → DOS read-only, `UF_HIDDEN`, chown as a no-op), `flush`, `fsync`/`fsyncdir`. Symlinks and hard links → ENOTSUP. Close logs an EIO from `ue_close` ("may need Windows chkdsk").
+- `FUSE_DARWIN_CAP_CASE_INSENSITIVE` and `RENAME_EXT` (D-47); the first fixed case-only renames.
+- `Tests/Fuse/rw-suite.sh [--runs N] [--backend] [--git]`.
+
+**Verify:**
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh      # includes test_device_failure
+Tests/Fuse/rw-suite.sh --runs 3                # "3 run(s) passed", ~23 s
+#   per run: fresh 2 GiB image; cp -R, rsync -a, ditto of Engine/vendor/ntfs-3g and a 300 MiB file, all by SHA-256;
+#   mv, case-only rename, rm -rf, truncate grow/shrink (zero tail), touch -t, chflags hidden, read after unlink;
+#   unmount, probe CLEAN, ntfsfix -n; read-only remount and every hash again
+F=build/DerivedData/Build/Products/Debug/unlatch-fuse
+zstd -d Tests/Images/dirty-ntfs3g.img.zst -o build/d.img && $F build/d.img build/m   # "read-only (dirty ...)"; writes fail EROFS
+```
+
+**Left:**
+- The git clone check (`rw-suite.sh --git`): macOS writes `._` files for `com.apple.provenance` into `.git/refs`, and `git fsck` rejects them (D-47). Passes once Step 16's native xattrs land; the default suite gains `--git` then.
+- Windows `chkdsk /scan` on a suite image: needs the Windows VM (Step 06).
+- Surprise removal through a real mount: `hdiutil detach -force` refuses while the daemon holds the disk ("Resource busy"), so only the engine test covers it. Try a USB stick in Step 17.
+
+**Surprises:**
+- Without the case-insensitive capability, `mv README readme` succeeds and does nothing.
+- libntfs-3g's readdir is in index-block order, not collation order.
+- macOS 27 tags every new file with `com.apple.provenance`.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Owner (blocks Step 07 "Done when"):** Windows-made golden images, once the Windows VM exists (`Tests/Images/README.md`).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
-- **Step 10/11:** the kext mount shows `synchronous`; check whether that comes from macFUSE defaults and what it costs for writes.
-- **Step 10:** readdir cookies are index positions; deleting an entry while a listing is in progress shifts later entries by one, so one existing entry can be skipped. Test `rm -rf` of a large directory, and switch the cookie to something stable (for example the last name returned) if it fails.
+- **Step 11:** the kext mount shows `synchronous`; check whether that comes from macFUSE defaults and what it costs for writes.
+- **Step 16/17:** readdir cookies are index positions; deleting entries while a listing is in progress could shift later entries. `rm -rf` of 1,000-file trees passes because fts reads a directory fully before deleting; test a concurrent writer in Step 17.
 - **Step 12:** when the app launches `unlatch-fuse`, it can use `-f` under launchd or the default `posix_spawn` backgrounding (D-45).
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
 - **Owner (blocks Step 06 "Done when"):** run the Windows chkdsk oracle once a Windows VM exists (see Step 06 "Left").
