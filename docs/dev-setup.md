@@ -6,7 +6,7 @@ Never use a drive that holds real data. Use image files (`Scripts/make-image.sh`
 
 Without a team, the app and extension build ad-hoc signed with no entitlements. That's enough for CI and the engine work, but macOS won't load the FSKit extension (D-06). To sign for real:
 
-1. Sign in to Xcode with your Apple ID: Xcode → Settings → Accounts. A free Personal Team creates development certificates. Whether a Personal Team may use `com.apple.developer.fskit.fsmodule` and App Groups is recorded in DECISIONS when first tried. If it can't, a paid Apple Developer membership is needed.
+1. Sign in to Xcode with your Apple ID: Xcode → Settings → Accounts. A paid Apple Developer Program team is needed: Xcode refuses the FSKit Module capability for a free Personal Team (D-38).
 2. Copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (git-ignored) and set `DEVELOPMENT_TEAM` to your team ID (Xcode → Settings → Accounts → the team, or developer.apple.com → Membership).
 3. Regenerate and build:
    ```sh
