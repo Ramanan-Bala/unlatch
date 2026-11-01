@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "unlatch_engine.h"
+
+const char *ue_version(void)
+{
+    return "0.0.0";
+}

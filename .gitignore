@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcresult
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Build output
+build/
+
+# Disk images (golden images live in Tests/Images/*.img.zst via Git LFS)
+*.img
+
+# Benchmark raw output
+Bench/results/raw/

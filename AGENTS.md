@@ -1,0 +1,74 @@
+# AGENTS.md
+
+Guidance for anyone (human or agent) working in this repository. The plan is [`docs/Unlatch-Implementation-Plan.md`](docs/Unlatch-Implementation-Plan.md); where this file and the plan disagree, the plan wins.
+
+## Session rules
+
+1. **Scope.** Do only the step you were given. If you find a problem that belongs to a later step, write it under "Carry-overs" in `docs/PROGRESS.md` and leave it unfixed.
+2. **Handoff.** Before the session ends, add an entry to `docs/PROGRESS.md` with: what was done, the exact commands that verify it, what is left, and any surprises.
+3. **Decisions.** Any choice another step depends on goes in `docs/DECISIONS.md`, one line each: `D-NN: decision — reason — step`.
+4. **Real data.** Never use a drive that holds real data. Use image files and disposable disks only.
+5. **Commits.** One commit per step at least, with the message `step NN: <summary>`, signed off (`git commit -s`).
+6. **Apple APIs.** Before writing any FSKit, DiskArbitration or ServiceManagement code, check the current signatures in Apple's docs (`https://developer.apple.com/documentation/fskit/<symbol>`; adding `.md` gives text). The signatures in the plan show the shape of the code and may not match the SDK exactly.
+
+## Build and test
+
+Each step updates this list.
+
+| What | Command |
+|---|---|
+| Check tools, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
+| Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
+| Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
+| Build UnlatchCore | `swift build --package-path Shared` |
+| Test UnlatchCore | `swift test --package-path Shared` |
+| Build CLI | `swift build --package-path CLI` |
+| Run CLI | `swift run --package-path CLI unlatch --help` |
+
+`Unlatch.xcodeproj` is generated from `project.yml` and is not committed. After changing `project.yml`, run `Scripts/bootstrap.sh` again.
+
+Builds are ad-hoc signed (`CODE_SIGN_IDENTITY = -`). The entitlements files in `App/Resources/` and `Extension/Resources/` exist but are not applied yet, because restricted entitlements need a provisioning profile (D-06).
+
+## Layout
+
+```
+Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c, vendor/ntfs-3g (Step 02)
+EngineTool/  unlatch-engine host harness (works on image files)
+Extension/   Swift FSKit module
+Shared/      Swift package UnlatchCore
+CLI/         Swift package, the `unlatch` executable
+App/         SwiftUI menu-bar app (LSUIElement), embeds the extension
+Tests/       Engine C tests, Images/ (golden images, Git LFS)
+Bench/       benchmark scripts and results
+Scripts/     build and release scripts
+```
+
+## Code conventions
+
+- **Swift:** Swift 6 language mode with strict concurrency (`SWIFT_STRICT_CONCURRENCY = complete` in Xcode; `swift-tools-version: 6.0` in packages).
+- **C:** C11, compiled with `-Wall -Wextra -Werror` in `Engine/` and `EngineTool/`.
+- **Engine boundary:** no ntfs-3g headers outside `Engine/src`. Everything else includes only `Engine/include/unlatch_engine.h` (prefix `ue_`).
+- **Errors:** engine functions return 0 or a POSIX `errno` value.
+- **Architecture:** arm64 only, macOS 27+.
+- **License header:** new source files start with `SPDX-License-Identifier: GPL-3.0-or-later`.
+- **Safety:** when in doubt, mount read-only. Never pass `NTFS_MNT_RECOVER` or `NTFS_MNT_IGNORE_HIBERFILE` unless the user explicitly confirms.
+
+## Identifiers
+
+| Item | Value |
+|---|---|
+| Bundle prefix (`BUNDLE_PREFIX` in `project.yml`) | `io.github.ramanan-bala` |
+| App / extension | `io.github.ramanan-bala.Unlatch` / `io.github.ramanan-bala.Unlatch.FSModule` |
+| App Group | `group.io.github.ramanan-bala.Unlatch` |
+| FS short name | `unlatch` |
+
+In Swift, use the constants in `UnlatchCore.Unlatch` rather than repeating these strings.
+
+## Logging
+
+One `OSLog` subsystem, `io.github.ramanan-bala.unlatch`, with categories `engine`, `io`, `mount`, `app`, `cli`. In Swift: `Unlatch.logger("mount")`.
+
+```sh
+log stream --level debug --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'
+log stream --level debug --predicate 'subsystem == "io.github.ramanan-bala.unlatch" AND category == "engine"'
+```

@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unlatch — Libraries &amp; Licenses Explained</title>
+<style>
+  :root{
+    --ink:#13161c; --muted:#5b6472; --line:#e3e7ee; --bg:#fbfcfe;
+    --accent:#2f6bff; --accent-soft:#eaf0ff;
+    --good:#0b7a4b; --good-soft:#e6f6ee;
+    --warn:#8a5a00; --warn-soft:#fff5df;
+    --bad:#b3261e; --bad-soft:#fdecea;
+    --code:#f2f4f8;
+    --radius:14px;
+    --max:1140px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent); text-decoration-thickness:1px; text-underline-offset:2px}
+  header.hero{
+    background:linear-gradient(160deg,#0f172a 0%,#1a2a4a 55%,#20365e 100%);
+    color:#fff; padding:56px 24px 48px;
+  }
+  .wrap{max-width:var(--max); margin:0 auto}
+  .hero h1{font-size:clamp(30px,4vw,46px); line-height:1.1; margin:0 0 12px; letter-spacing:-.02em}
+  .hero p{font-size:18px; color:#c7d2e4; max-width:70ch; margin:0 0 22px}
+  .hero .meta{display:flex; flex-wrap:wrap; gap:10px 22px; font-size:13.5px; color:#9fb0c8}
+  .pill{display:inline-block; padding:3px 10px; border-radius:999px; font-size:12.5px; font-weight:600; letter-spacing:.01em}
+  .pill.light{background:#ffffff1a; color:#dbe5f5; border:1px solid #ffffff26}
+
+  .layout{max-width:var(--max); margin:0 auto; padding:40px 24px 80px; display:grid; grid-template-columns:250px 1fr; gap:44px}
+  @media (max-width:920px){ .layout{grid-template-columns:1fr; gap:24px} nav.toc{position:static !important} }
+
+  nav.toc{position:sticky; top:24px; align-self:start; font-size:14px}
+  nav.toc h2{font-size:11.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); margin:0 0 10px}
+  nav.toc ol{list-style:none; margin:0; padding:0}
+  nav.toc li{margin:0 0 2px}
+  nav.toc a{display:block; padding:5px 10px; border-radius:8px; color:#3d4654; text-decoration:none}
+  nav.toc a:hover{background:#eef2f9; color:var(--ink)}
+
+  main{min-width:0}
+  section{margin:0 0 46px; scroll-margin-top:20px}
+  h2{font-size:26px; line-height:1.25; letter-spacing:-.015em; margin:0 0 6px}
+  h2 .num{color:#9aa6b8; font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:18.5px; margin:30px 0 8px}
+  h4{font-size:15.5px; margin:20px 0 6px}
+  p{margin:0 0 14px}
+  .lead{color:var(--muted); font-size:17px; margin-bottom:22px}
+  ul,ol{margin:0 0 14px; padding-left:22px}
+  li{margin:0 0 7px}
+  code{background:var(--code); padding:1px 6px; border-radius:6px; font-size:.88em;
+       font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  small,.small{font-size:13px; color:var(--muted)}
+
+  .card{background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:20px 22px; margin:0 0 16px;
+        box-shadow:0 1px 2px #0b122010}
+  .card h3{margin-top:0}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:14px}
+  @media (max-width:820px){ .grid2,.grid3{grid-template-columns:1fr} }
+
+  .callout{border-left:4px solid var(--accent); background:var(--accent-soft); padding:14px 18px; border-radius:10px; margin:0 0 16px}
+  .callout.warn{border-color:#d9a300; background:var(--warn-soft)}
+  .callout.bad{border-color:#d64545; background:var(--bad-soft)}
+  .callout.good{border-color:#1f9d64; background:var(--good-soft)}
+  .callout p:last-child{margin-bottom:0}
+  .callout strong{display:block; margin-bottom:4px}
+
+  table{width:100%; border-collapse:separate; border-spacing:0; margin:6px 0 20px; font-size:14.5px;
+        background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden}
+  th,td{text-align:left; padding:11px 13px; vertical-align:top; border-bottom:1px solid var(--line)}
+  th{background:#f4f6fa; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em; color:#4b5563; font-weight:600}
+  tr:last-child td{border-bottom:none}
+  td.num{font-variant-numeric:tabular-nums; white-space:nowrap}
+  .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
+
+  .badge{display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:650; white-space:nowrap}
+  .b-good{background:var(--good-soft); color:var(--good)}
+  .b-warn{background:var(--warn-soft); color:var(--warn)}
+  .b-bad{background:var(--bad-soft); color:var(--bad)}
+  .b-neutral{background:#eef1f6; color:#495366}
+
+  .tldr{background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:6px 0; margin-bottom:26px}
+  .tldr ol{margin:14px 24px 14px 44px}
+  .tldr li{margin:0 0 10px}
+
+  .qa{border:1px solid var(--line); border-radius:12px; background:#fff; padding:4px 20px; margin:0 0 12px}
+  .qa summary{cursor:pointer; padding:12px 0; font-weight:600; list-style:none}
+  .qa summary::-webkit-details-marker{display:none}
+  .qa summary::before{content:"+"; display:inline-block; width:18px; color:var(--accent); font-weight:700}
+  .qa[open] summary::before{content:"–"}
+  .qa .a{padding:0 0 14px 18px; color:#2a3240}
+  .qa .a p:last-child{margin-bottom:0}
+
+  .decision{display:grid; gap:14px}
+  .drow{background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 18px}
+  .drow .q{font-weight:650; margin-bottom:6px}
+  .drow .rec{font-size:14.5px; color:#2a3240; background:var(--good-soft); border-radius:9px; padding:10px 12px; margin-top:8px}
+  .drow .rec b{color:var(--good)}
+
+  footer{border-top:1px solid var(--line); background:#fff; padding:28px 24px 40px; font-size:13.5px; color:var(--muted)}
+  footer .wrap{max-width:var(--max)}
+  hr{border:none; border-top:1px solid var(--line); margin:34px 0}
+
+  @media print{
+    header.hero{background:#fff; color:#000; padding:0 0 16px}
+    .hero p,.hero .meta{color:#333}
+    nav.toc{display:none}
+    .layout{display:block; padding:0}
+    body{background:#fff; font-size:11pt}
+    section{page-break-inside:avoid}
+    .card,.tldr,table{box-shadow:none}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="pill light" style="margin-bottom:16px">Unlatch · decision brief</div>
+    <h1>Libraries, licenses and what they cost you</h1>
+    <p>Everything Unlatch depends on, why there is no drop-in proprietary alternative, and the exact obligations that come with shipping it. Read this once, then answer the decision sheet at the end.</p>
+    <div class="meta">
+      <span><strong>Checked:</strong> 31 October 2026</span>
+      <span><strong>Scope:</strong> macOS 27+, Apple Silicon, GPL-3.0-or-later</span>
+      <span><strong>Status:</strong> engineering summary, not legal advice</span>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="toc">
+    <h2>On this page</h2>
+    <ol>
+      <li><a href="#tldr">1. The short version</a></li>
+      <li><a href="#parts">2. What Unlatch is made of</a></li>
+      <li><a href="#primer">3. License primer</a></li>
+      <li><a href="#ntfs3g">4. libntfs-3g in depth</a></li>
+      <li><a href="#engines">5. Engine options compared</a></li>
+      <li><a href="#hosts">6. Mounting approaches compared</a></li>
+      <li><a href="#obligations">7. Your GPL obligations, concretely</a></li>
+      <li><a href="#risks">8. Risk register</a></li>
+      <li><a href="#decisions">9. Decision sheet</a></li>
+      <li><a href="#faq">10. Questions you'll be asked</a></li>
+      <li><a href="#glossary">11. Glossary</a></li>
+      <li><a href="#sources">12. Sources</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+  <!-- 1 ------------------------------------------------------------------>
+  <section id="tldr">
+    <h2><span class="num">01</span>The short version</h2>
+    <p class="lead">If you read only one section, read this.</p>
+
+    <div class="tldr">
+      <ol>
+        <li><strong>There is only one mature, open, read-write NTFS library you can run in-process: libntfs-3g.</strong> It is GPL v2 <em>or later</em>, not LGPL. Linking it into your extension makes the whole extension a GPL work. That is already your decision: GPL-3.0-or-later.</li>
+        <li><strong>“GPL-2.0 or later” combines cleanly with GPL-3.0.</strong> This is the one compatibility direction that unquestionably works. If it had been “GPL-2.0 only”, GPL-3.0 would have been incompatible and you would be forced to GPL-2.0.</li>
+        <li><strong>GPL forbids the Mac App Store, not the DMG.</strong> Developer ID signing, notarization and Sparkle updates are all fine. Charging money is fine. Hiding the source is not.</li>
+        <li><strong>The FUSE layer is optional.</strong> ntfs-3g is built from a library plus a FUSE driver. Unlatch uses the library only, so macFUSE and FUSE-T never ship — avoiding their own restrictive terms (macFUSE forbids bundling in commercial software; FUSE-T requires a paid license for commercial use).</li>
+        <li><strong>Everything else in the stack is permissive</strong> (Apache-2.0, MIT, BSD). They only need attribution, not source disclosure. Only the engine drives the GPL decision.</li>
+        <li><strong>The library is alive:</strong> latest release 2026.9.28, a few weeks before this page was written. It is mature rather than modern: single-threaded, no real fsck, and its allocation policy is not tuned for 4K random writes.</li>
+      </ol>
+    </div>
+
+    <div class="callout"><strong>What this means for you</strong>
+      <p>Say “yes, open source, GPL-3.0-or-later, source on GitHub, free DMG” and nothing else on this page changes. Say “no, I may want this closed or paid-proprietary someday” and the whole engine plan changes: there is no credible closed-source replacement, so you would be starting a multi-year engine project or licensing one commercially.</p>
+    </div>
+  </section>
+
+  <!-- 2 ------------------------------------------------------------------>
+  <section id="parts">
+    <h2><span class="num">02</span>What Unlatch is made of</h2>
+    <p class="lead">Nine moving parts. Only one has a copyleft license, and only one is not distributable at all.</p>
+
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Component</th><th>Role</th><th>License</th><th>Ships to users?</th><th>What it obliges</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>libntfs-3g</strong><br><span class="small">Tuxera / NTFS-3G project</span></td>
+          <td>The NTFS read/write engine, linked into the FSKit extension</td>
+          <td><span class="badge b-warn">GPL-2.0-or-later</span></td>
+          <td>Yes, as part of the extension binary; source published</td>
+          <td>Release your source under the GPL; keep notices; no extra restrictions</td>
+        </tr>
+        <tr>
+          <td><strong>ntfsprogs</strong><br><span class="small">same source tree: <code>mkntfs</code>, <code>ntfsinfo</code>, <code>ntfsfix</code>, <code>ntfsls</code></span></td>
+          <td>Creating test images and inspecting them</td>
+          <td><span class="badge b-warn">GPL-2.0-or-later</span></td>
+          <td>No (developer-only). You may bundle them for a format command later.</td>
+          <td>Nothing extra unless you ship them; then same as above</td>
+        </tr>
+        <tr>
+          <td><strong>FSKit</strong><br><span class="small">Apple framework</span></td>
+          <td>The user-space filesystem host that replaced FUSE and kernel extensions</td>
+          <td><span class="badge b-neutral">Apple SDK license</span> (proprietary)</td>
+          <td>No — part of macOS; you only link against it</td>
+          <td>Use only to build software for Apple platforms. Entitlement approval is a separate gate.</td>
+        </tr>
+        <tr>
+          <td><strong>Swift Argument Parser</strong><br><span class="small">apple/swift-argument-parser</span></td>
+          <td>The <code>unlatch</code> CLI</td>
+          <td><span class="badge b-good">Apache-2.0 + runtime exception</span></td>
+          <td>Yes, statically in the CLI</td>
+          <td>Attribution + keep the NOTICE file. No source disclosure.</td>
+        </tr>
+        <tr>
+          <td><strong>Sparkle 2</strong></td>
+          <td>Auto-updates for the app</td>
+          <td><span class="badge b-good">MIT</span> (bundles MIT/BSD helper code)</td>
+          <td>Yes</td>
+          <td>Attribution. Sign your update feed (EdDSA).</td>
+        </tr>
+        <tr>
+          <td><strong>XcodeGen</strong></td>
+          <td>Generates the Xcode project from <code>project.yml</code></td>
+          <td><span class="badge b-good">MIT</span></td>
+          <td>No (developer tool)</td>
+          <td>None beyond attribution in the repo</td>
+        </tr>
+        <tr>
+          <td><strong>libFuzzer / LLVM</strong></td>
+          <td>Fuzzing the engine boundary</td>
+          <td><span class="badge b-good">Apache-2.0 with LLVM exception</span></td>
+          <td>No (test-only)</td>
+          <td>None in the shipping product</td>
+        </tr>
+        <tr>
+          <td><strong>zstd</strong></td>
+          <td>Compressing golden test images in Git LFS</td>
+          <td><span class="badge b-good">BSD-3-Clause / GPL-2.0 dual</span></td>
+          <td>No (test assets)</td>
+          <td>None (BSD side applies to dev tools)</td>
+        </tr>
+        <tr>
+          <td><strong>Apple NTFS driver</strong><br><span class="small">built into macOS</span></td>
+          <td>Apple's read-only NTFS mount; the thing Unlatch replaces</td>
+          <td><span class="badge b-neutral">macOS</span></td>
+          <td>No</td>
+          <td>You never link it; you just coexist with it</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="callout warn"><strong>The one-line summary</strong>
+      <p>License risk in Unlatch is 95% “do I accept GPL-3.0”, 5% “credit the Apache/MIT libraries”. There is no per-seat cost and no royalty to anyone.</p>
+    </div>
+  </section>
+
+  <!-- 3 ------------------------------------------------------------------>
+  <section id="primer">
+    <h2><span class="num">03</span>License primer, in the order it matters to you</h2>
+
+    <h3>GPL-2.0-only vs GPL-2.0-or-later vs GPL-3.0</h3>
+    <p>A license header that says “version 2, or (at your option) any later version” lets you use the code under GPLv2 <em>or</em> any later GPL, including v3. That is why libntfs-3g's <code>volume.c</code> header says “either version 2 of the License, or (at your option) any later version”, and why the project ships a GPLv2 <code>COPYING</code> file while still being usable in a GPLv3 work.</p>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>If the dependency were…</th><th>Combining with GPL-3.0 code</th><th>Meaning for Unlatch</th></tr></thead>
+      <tbody>
+        <tr><td>GPL-2.0-or-later <span class="small">(what it is)</span></td><td><span class="badge b-good">Allowed</span></td><td>Whole work is GPL-3.0-or-later. Done.</td></tr>
+        <tr><td>GPL-2.0-only</td><td><span class="badge b-bad">Incompatible</span></td><td>You would have to license Unlatch GPL-2.0-only.</td></tr>
+        <tr><td>GPL-3.0-only</td><td><span class="badge b-good">Allowed</span></td><td>Same as now.</td></tr>
+        <tr><td>LGPL-2.1 / LGPL-3.0</td><td><span class="badge b-good">Allowed</span></td><td>You could keep Unlatch closed if you dynamically link and allow relinking. Not the case here.</td></tr>
+        <tr><td>Apache-2.0 / MIT / BSD</td><td><span class="badge b-good">Allowed</span></td><td>No source obligation, just notices.</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h3>What “linking” means, and why in-process matters</h3>
+    <p>GPL obligations trigger when you form a <em>combined work</em>. A separate program that talks to another over a socket or command line can stay independent. Code compiled and linked into the same binary — or loaded as a plugin into the same process — is the classic combined work.</p>
+    <ul>
+      <li><strong>Unlatch links libntfs-3g statically into the extension.</strong> Combined work. The extension, and the app that embeds it, are GPL.</li>
+      <li><strong>The FUSE design was no different.</strong> ntfs-3g running as a separate process would have been a boundary, but you would then be GPL-ing the driver too, and paying the FUSE performance cost for the privilege.</li>
+      <li><strong>Your engine seam does not change the license.</strong> It changes who you can swap in later. As long as libntfs-3g is in the product, the product is GPL.</li>
+    </ul>
+
+    <h3>What GPL-3.0 lets you do to users' machines</h3>
+    <div class="grid2">
+      <div class="card">
+        <h4>Fine</h4>
+        <ul>
+          <li>Charge money for the DMG, or ask for donations.</li>
+          <li>Sign and notarize with your Developer ID.</li>
+          <li>Ship updates through Sparkle, signed with your key.</li>
+          <li>Require users to enable the extension in System Settings.</li>
+          <li>Use Apple's proprietary frameworks, as long as you don't redistribute them.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Not fine</h4>
+        <ul>
+          <li>Distributing a binary without the corresponding source.</li>
+          <li>Adding terms that forbid reverse engineering or redistribution (every App Store and most EULAs).</li>
+          <li>DRM or a licence check that stops a modified build from running.</li>
+          <li>Relicensing the combined work as “GPL plus commercial” unless you own every line.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout"><strong>Why the App Store is out either way</strong>
+      <p>Two independent blockers: (1) the Mac App Store terms add restrictions the GPL forbids; (2) FSKit filesystem extensions are distributed outside the store and need a Developer ID + user approval. This was never a real option, so losing it costs you nothing.</p>
+    </div>
+  </section>
+
+  <!-- 4 ------------------------------------------------------------------>
+  <section id="ntfs3g">
+    <h2><span class="num">04</span>libntfs-3g in depth</h2>
+
+    <h3>What it is</h3>
+    <p>ntfs-3g began as the Linux-NTFS project's userspace driver and is now maintained by Tuxera. The source tree produces two things:</p>
+    <ul>
+      <li><strong><code>libntfs-3g</code></strong> — the engine: boot sector parsing, <code>$MFT</code>, runlists, attributes, directory indexes, the journal, compression, encryption. This is what Unlatch links.</li>
+      <li><strong><code>ntfs-3g</code> the driver</strong> — a thin FUSE front end over the library. This is what you are <em>not</em> using, and what the old design used.</li>
+    </ul>
+    <p>Both are GPLv2-or-later. The library is not independently LGPL, despite what older blog posts and the guide said.</p>
+
+    <h3>Why it is the only realistic engine</h3>
+    <div class="grid3">
+      <div class="card"><h4>It actually writes</h4><p>Full file and directory create, write, rename, delete, truncate, compression, sparse files, and journal handling. Decades of bug reports behind it.</p></div>
+      <div class="card"><h4>It accepts foreign block I/O</h4><p><code>ntfs_device_operations</code> lets you supply read/write callbacks, so it never opens <code>/dev/disk</code> itself. That is the property that makes the FSKit design possible at all.</p></div>
+      <div class="card"><h4>It is maintained</h4><p>Release 2026.9.28 landed five weeks before this page. Slower than a startup, but not abandoned.</p></div>
+    </div>
+
+    <h3>Where it hurts</h3>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Weakness</th><th>Consequence for Unlatch</th><th>Mitigation already in the plan</th></tr></thead>
+      <tbody>
+        <tr><td>Not thread-safe; one call at a time</td><td>All engine calls serialize on one queue</td><td>Kernel-offloaded I/O moves bulk file data out of the engine entirely (Step 15)</td></tr>
+        <tr><td>No real fsck; <code>ntfsfix</code> only resets the journal and dirty flag</td><td>You cannot honestly offer “repair”</td><td>Read-only on dirty volumes; Windows <code>chkdsk</code> as the oracle in tests (Step 06)</td></tr>
+        <tr><td>Conservative allocator, no read-ahead or write coalescing tuned for macOS</td><td>Large sequential copies may trail APFS</td><td>Extent-based kernel I/O; allocation growth steps; benchmark gate M0 (Step 11)</td></tr>
+        <tr><td>Hibernation and Fast Startup handling is a hard refusal</td><td>Users with Fast Startup on get read-only</td><td>Explicit refusal with a clear message; never silently ignore (Step 08)</td></tr>
+        <tr><td>No metadata checksums in NTFS itself</td><td>Silent corruption is possible on any NTFS writer</td><td>Bounded writes, metadata-first ordering, chkdsk oracle, fsx model test</td></tr>
+        <tr><td>API is C, old-style, and not designed as an embeddable SDK</td><td>The seam is work: device table, inode cache, error mapping</td><td>One narrow header, tested on the host before FSKit (Steps 03–07)</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="callout warn"><strong>Commercial licensing exists</strong>
+      <p>Tuxera sells commercial licences for the NTFS-3G technology. If you ever want a closed-source Unlatch, that is the conversation — expect per-product or per-seat terms, an NDA, and no public pricing. Treat it as a fallback, not a plan.</p>
+    </div>
+  </section>
+
+  <!-- 5 ------------------------------------------------------------------>
+  <section id="engines">
+    <h2><span class="num">05</span>Engine options compared</h2>
+    <p class="lead">Every serious way to read and write NTFS from macOS user space, and why only one survives the constraints.</p>
+
+    <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Engine</th><th>Read/write</th><th>License</th><th>Runs in-process</th><th>Effort to adopt</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>libntfs-3g</strong><br><span class="small">C, Tuxera/NTFS-3G</span></td>
+          <td><span class="badge b-good">Full</span></td>
+          <td>GPL-2.0-or-later</td>
+          <td><span class="badge b-good">Yes</span>, custom device callbacks</td>
+          <td>Weeks (seam, device table, tests)</td>
+          <td><span class="badge b-good">Chosen</span> only mature option</td>
+        </tr>
+        <tr>
+          <td><strong>ntfs3</strong><br><span class="small">Linux kernel driver, Paragon-donated</span></td>
+          <td><span class="badge b-good">Full</span></td>
+          <td>GPL-2.0-only</td>
+          <td><span class="badge b-bad">No</span> — kernel code, would need a user-space port</td>
+          <td>Years; also forces GPL-2.0-only for Unlatch</td>
+          <td><span class="badge b-bad">Reject</span></td>
+        </tr>
+        <tr>
+          <td><strong>Rust <code>ntfs</code> crate</strong><br><span class="small">Colin Finck</span></td>
+          <td><span class="badge b-warn">Read-focused</span>; write support is incomplete</td>
+          <td>Apache-2.0</td>
+          <td>Yes</td>
+          <td>Small to read, open-ended to write</td>
+          <td><span class="badge b-warn">Watch</span> a future engine behind the seam</td>
+        </tr>
+        <tr>
+          <td><strong>libfsntfs</strong><br><span class="small">libyal</span></td>
+          <td><span class="badge b-bad">Read only</span></td>
+          <td>LGPL-3.0-or-later</td>
+          <td>Yes</td>
+          <td>Days to read</td>
+          <td><span class="badge b-bad">Reject</span> for writing</td>
+        </tr>
+        <tr>
+          <td><strong>Tuxera NTFS</strong> / <strong>Paragon NTFS for Mac</strong><br><span class="small">commercial</span></td>
+          <td><span class="badge b-good">Full</span></td>
+          <td>Proprietary, paid</td>
+          <td>Vendor-dependent; usually a kernel extension or their own FSKit module</td>
+          <td>Contract + integration, no source</td>
+          <td><span class="badge b-warn">Fallback</span> only if you go closed</td>
+        </tr>
+        <tr>
+          <td><strong>Apple's built-in NTFS</strong></td>
+          <td><span class="badge b-bad">Read only</span></td>
+          <td>macOS</td>
+          <td>n/a</td>
+          <td>Zero</td>
+          <td><span class="badge b-neutral">Baseline</span> what users have today</td>
+        </tr>
+        <tr>
+          <td><strong>Write your own</strong></td>
+          <td>Whatever you build</td>
+          <td>Yours</td>
+          <td>Yes</td>
+          <td>Multiple years, ongoing corruption risk</td>
+          <td><span class="badge b-bad">No</span> for v1</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="callout"><strong>The license trap in the table</strong>
+      <p>Both fully capable open engines are GPL. The permissive options cannot write. So “permissive license + full read/write” does not exist today at any price except a commercial contract. That single fact decides your project license.</p>
+    </div>
+  </section>
+
+  <!-- 6 ------------------------------------------------------------------>
+  <section id="hosts">
+    <h2><span class="num">06</span>Mounting approaches compared</h2>
+    <p class="lead">How the filesystem reaches macOS decides performance, install friction and your own license exposure. This is the part the original guide got mostly right.</p>
+
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Approach</th><th>Install</th><th>Speed</th><th>License / distribution</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>FSKit extension</strong> (chosen)</td>
+          <td>App + user enables the extension once</td>
+          <td>Best: no FUSE round trip; macOS 27 can hand file data straight to the kernel</td>
+          <td>Apple SDK terms; needs the FSKit module entitlement. Your code stays GPL.</td>
+          <td><span class="badge b-good">Supported, current</span></td>
+        </tr>
+        <tr>
+          <td><strong>FUSE-T</strong></td>
+          <td>Bundled or separately installed runtime</td>
+          <td>Good; still a user-space round trip per I/O</td>
+          <td>Free for non-commercial use; <strong>commercial use or bundling needs a paid licence</strong>. Its libfuse fork is LGPL.</td>
+          <td><span class="badge b-warn">Legacy path</span> the design removes</td>
+        </tr>
+        <tr>
+          <td><strong>macFUSE</strong></td>
+          <td>Kernel extension + reboot + security approval on recent macOS</td>
+          <td>Good; kernel extension, older interface</td>
+          <td>BSD-style, but <strong>clause 4 forbids bundling in commercial software</strong> without permission; the kernel extension is closed source.</td>
+          <td><span class="badge b-warn">Legacy, higher friction</span></td>
+        </tr>
+        <tr>
+          <td><strong>Your own kernel extension</strong></td>
+          <td>Keystore approval, SIP changes on Apple Silicon</td>
+          <td>Best possible</td>
+          <td>Effectively impossible to ship broadly today</td>
+          <td><span class="badge b-bad">Dead end</span></td>
+        </tr>
+        <tr>
+          <td><strong>Helper daemon + <code>ntfs-3g</code> CLI</strong></td>
+          <td>Root daemon or privileged helper</td>
+          <td>Worst: process boundary plus FUSE</td>
+          <td>Same GPL obligations, more moving parts</td>
+          <td><span class="badge b-bad">Rejected</span></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="callout good"><strong>Why this matters for licensing</strong>
+      <p>By choosing FSKit you avoid redistributing macFUSE or FUSE-T. That removes two separate commercial-use restrictions and one closed-source kernel extension from your product. Your only copyleft obligation is the one you already accepted.</p>
+    </div>
+  </section>
+
+  <!-- 7 ------------------------------------------------------------------>
+  <section id="obligations">
+    <h2><span class="num">07</span>Your GPL-3.0 obligations, concretely</h2>
+    <p class="lead">A checklist you can hand to a lawyer, or just follow. Every item is cheap; skipping one is what gets projects in trouble.</p>
+
+    <div class="scroll">
+    <table>
+      <thead><tr><th>#</th><th>Obligation</th><th>How Unlatch satisfies it</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>License your own code under GPL-3.0-or-later</td><td><code>LICENSE</code> at repo root; short SPDX headers in source files</td></tr>
+        <tr><td class="num">2</td><td>Provide complete corresponding source for each binary you distribute</td><td>Public repo, one tag per release, and the exact <code>project.yml</code>, patches and scripts needed to rebuild</td></tr>
+        <tr><td class="num">3</td><td>Include the full license texts of everything you ship</td><td>In-app “Open Source Licences” screen plus a <code>NOTICES</code> file in the DMG: GPL-3.0, ntfs-3g's GPL-2.0, Apache-2.0 + NOTICE, MIT</td></tr>
+        <tr><td class="num">4</td><td>Do not add restrictions on top</td><td>No EULA terms that forbid reverse engineering or redistribution; the DMG can be copied and shared freely</td></tr>
+        <tr><td class="num">5</td><td>Do not prevent modified versions from running</td><td>No licence check or DRM. Notarization does not prevent this: anyone can build and run their own signed copy</td></tr>
+        <tr><td class="num">6</td><td>Keep copyright notices intact</td><td>Vendored source retains its headers; patches documented</td></tr>
+        <tr><td class="num">7</td><td>State changes if you modify the engine</td><td>Patches live in <code>Engine/vendor/patches/</code> with a note in <code>README</code></td></tr>
+        <tr><td class="num">8</td><td>Offer source to anyone who receives the binary</td><td>“Source” link in the app's About screen pointing at the matching tag, plus the repo URL in the DMG</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="callout warn"><strong>Two things people get wrong</strong>
+      <p><strong>“I'll publish the source later.”</strong> The obligation starts when the first binary is distributed, not when you feel ready.</p>
+      <p><strong>“The engine is a separate module, so only it is GPL.”</strong> Statically linked into one extension means one combined work. The seam keeps the code clean and replaceable; it does not partition the license.</p>
+    </div>
+
+    <h3>Do you need a CLA?</h3>
+    <p>If you might ever dual-license (GPL for the community, paid licence for closed integrators) or sell the project, you need the right to relicense every contribution. Choose now, because retrofitting is painful:</p>
+    <ul>
+      <li><strong>DCO</strong> (Developer Certificate of Origin) — lightweight, keeps the project purely GPL. Default choice for a community project.</li>
+      <li><strong>CLA</strong> — contributors grant you relicensing rights. Slightly more friction, keeps the commercial option open.</li>
+    </ul>
+  </section>
+
+  <!-- 8 ------------------------------------------------------------------>
+  <section id="risks">
+    <h2><span class="num">08</span>Risk register</h2>
+
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>What to do</th></tr></thead>
+      <tbody>
+        <tr><td>You later want closed source</td><td>Low–medium</td><td>High</td><td>Decide now. If yes, talk to Tuxera before writing code. If no, add a CLA only if dual licensing is plausible.</td></tr>
+        <tr><td>A contributor's code is incompatible</td><td>Low</td><td>Medium</td><td>Require SPDX headers and a DCO/CLA check in CI.</td></tr>
+        <tr><td>Someone redistributes a modified build</td><td>Certain</td><td>None</td><td>That is the license working as intended. Protect the name with a trademark policy, not with code.</td></tr>
+        <tr><td>Microsoft NTFS patents</td><td>Low</td><td>Medium</td><td>ntfs-3g has shipped worldwide since 2007 without incident; relevant patents are old. GPLv3 adds a patent grant from contributors. Not a reason to change course.</td></tr>
+        <tr><td>FSKit entitlement refused or changed</td><td>Low–medium</td><td>High</td><td>Technical gate, not a licence gate. Verify in the Step 08 spike before building further.</td></tr>
+        <tr><td>ntfs-3g abandoned upstream</td><td>Low</td><td>Medium</td><td>Source is vendored and pinned; you can maintain your own fork. The seam allows replacement later.</td></tr>
+        <tr><td>Apple ships NTFS write support</td><td>Very low</td><td>High (product)</td><td>Watch macOS releases. Being open source means the code survives even if the product does not.</td></tr>
+        <tr><td>Tuxera licence offer arrives</td><td>n/a</td><td>n/a</td><td>Only relevant if you chose closed source. Until then, GPL terms are irreversible for published versions — but you may stop distributing at any time.</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <!-- 9 ------------------------------------------------------------------>
+  <section id="decisions">
+    <h2><span class="num">09</span>Decision sheet</h2>
+    <p class="lead">Ten questions, each with a recommended answer. You can approve the whole column in one line.</p>
+
+    <div class="decision">
+      <div class="drow">
+        <div class="q">1. Which NTFS engine?</div>
+        <div class="small">Options: libntfs-3g · Linux ntfs3 port · Rust crate · commercial · write our own</div>
+        <div class="rec"><b>libntfs-3g.</b> Only mature read-write option that accepts foreign block I/O. Everything else is a multi-year detour.</div>
+      </div>
+      <div class="drow">
+        <div class="q">2. What license does Unlatch ship under?</div>
+        <div class="small">GPL-2.0-only · GPL-3.0-or-later · dual GPL + commercial</div>
+        <div class="rec"><b>GPL-3.0-or-later.</b> Compatible with the engine, gives you the stronger patent and anti-DRM terms.</div>
+      </div>
+      <div class="drow">
+        <div class="q">3. Is the source public from the first release?</div>
+        <div class="small">Public repo · source tarball per release only</div>
+        <div class="rec"><b>Public repo, tag per release.</b> A tarball alone is legal but looks evasive and makes contributions harder.</div>
+      </div>
+      <div class="drow">
+        <div class="q">4. Distribution channel?</div>
+        <div class="small">Free DMG · paid DMG · Mac App Store · Homebrew cask too</div>
+        <div class="rec"><b>Developer ID DMG, free, plus a Homebrew cask.</b> App Store is impossible; charge later if you want, the license allows it.</div>
+      </div>
+      <div class="drow">
+        <div class="q">5. Will you ever sell a closed-source version?</div>
+        <div class="small">No, never · maybe · yes</div>
+        <div class="rec"><b>“No, not planned.”</b> If “maybe”, adopt a CLA now and contact Tuxera for pricing before Step 03 — not after the code exists.</div>
+      </div>
+      <div class="drow">
+        <div class="q">6. Contributor policy?</div>
+        <div class="small">DCO · CLA · none</div>
+        <div class="rec"><b>DCO.</b> Unless answer 5 was “maybe” or “yes”, in which case CLA.</div>
+      </div>
+      <div class="drow">
+        <div class="q">7. Can the app be commercial in other ways (support, sponsorship, paid builds)?</div>
+        <div class="small">Yes · no</div>
+        <div class="rec"><b>Yes.</b> Selling binaries, support or sponsorship is allowed by GPL-3.0. Only the source obligation cannot be waived.</div>
+      </div>
+      <div class="drow">
+        <div class="q">8. Do we bundle the ntfsprogs tools (format, repair)?</div>
+        <div class="small">Never · format only · format + repair</div>
+        <div class="rec"><b>Not in v1.</b> If format ships later, ship the GPL notices and source link for it too — same obligation, no extra cost.</div>
+      </div>
+      <div class="drow">
+        <div class="q">9. Do we ship or support macFUSE / FUSE-T at all?</div>
+        <div class="small">No · as an optional fallback</div>
+        <div class="rec"><b>No.</b> Both add restrictive redistribution terms and install friction, and neither is needed with FSKit.</div>
+      </div>
+      <div class="drow">
+        <div class="q">10. What goes in the notices bundle?</div>
+        <div class="small">Minimal · complete</div>
+        <div class="rec"><b>Complete:</b> GPL-3.0 text, GPL-2.0 text (engine), Apache-2.0 + NOTICE (CLI), MIT (Sparkle), plus an “Open Source” screen linking the exact source tag.</div>
+      </div>
+    </div>
+
+    <div class="callout good" style="margin-top:18px"><strong>If you accept all ten recommendations</strong>
+      <p>Nothing further is needed before Step 01. The plan already assumes exactly this. If you change any of 1, 2, 5 or 6, tell me before the next session — those four ripple into the plan.</p>
+    </div>
+  </section>
+
+  <!-- 10 ----------------------------------------------------------------->
+  <section id="faq">
+    <h2><span class="num">10</span>Questions you'll be asked</h2>
+
+    <details class="qa"><summary>Can I sell Unlatch?</summary>
+      <div class="a"><p>Yes. GPL-3.0 lets you charge any price for binaries and support. What you cannot do is stop recipients from copying, modifying or redistributing the source. In practice: free build + paid support/company sponsorship is the common model.</p></div>
+    </details>
+
+    <details class="qa"><summary>Can I keep the source private and just ship the binary?</summary>
+      <div class="a"><p>No. That is the one thing GPL forbids. And because the engine is GPL-linked, there is no “keep only my part closed” arrangement — the combined work is GPL.</p></div>
+    </details>
+
+    <details class="qa"><summary>What if I only dynamically link libntfs-3g?</summary>
+      <div class="a"><p>Dynamic linking does not escape the GPL the way it can with the LGPL. Both static and dynamic linking of GPL code into your program produce a combined work. The LGPL is the license that permits closed linking under conditions; the engine is not LGPL.</p></div>
+    </details>
+
+    <details class="qa"><summary>Wasn't libntfs-3g LGPL? I read that somewhere.</summary>
+      <div class="a"><p>Older summaries are wrong or refer to a different project. The checked source header in <code>libntfs-3g/volume.c</code> reads “GNU General Public License … either version 2 of the License, or (at your option) any later version”, and the tree ships a GPL-2.0 <code>COPYING</code>. Treat it as GPL-2.0-or-later.</p></div>
+    </details>
+
+    <details class="qa"><summary>Does notarization or Developer ID conflict with GPL?</summary>
+      <div class="a"><p>No. Signing proves who built the binary; it does not restrict anyone from building and running a modified version. Apple's notarization service does not add license terms to your code.</p></div>
+    </details>
+
+    <details class="qa"><summary>Does Sparkle auto-update violate GPL?</summary>
+      <div class="a"><p>No, as long as updates are optional and do not lock users to your build. Do not require a signature only you can produce in order to run the app.</p></div>
+    </details>
+
+    <details class="qa"><summary>Can I use macFUSE or FUSE-T in my build?</summary>
+      <div class="a"><p>Technically yes for a free project. macFUSE's license forbids bundling its binaries in commercial software without permission; FUSE-T requires a paid licence for commercial use or bundling. Unlatch's FSKit design avoids both, which is one reason it exists.</p></div>
+    </details>
+
+    <details class="qa"><summary>What happens if Tuxera changes the license of a future release?</summary>
+      <div class="a"><p>Pin the current tag and vendor the source. You can keep shipping the pinned version forever under its existing license. A newer release with worse terms is optional, not forced.</p></div>
+    </details>
+
+    <details class="qa"><summary>Can I switch to a permissive engine later?</summary>
+      <div class="a"><p>Yes, but relicensing the project back to closed source requires owning every contribution. With a DCO-only policy you cannot; with a CLA you can. The seam makes the engine swap technical, not legal.</p></div>
+    </details>
+
+    <details class="qa"><summary>Is ntfs-3g safe enough for other people's data?</summary>
+      <div class="a"><p>It is the same engine that has written NTFS volumes from Linux for nearly two decades, and it is more conservative than most alternatives (it refuses hibernated and unclean volumes rather than guessing). The plan adds a read-only-first safety rule, fsx randomized testing, and Windows <code>chkdsk</code> as the oracle. No NTFS writer is risk-free; NTFS has no metadata checksums.</p></div>
+    </details>
+
+    <details class="qa"><summary>What about Microsoft patents on NTFS?</summary>
+      <div class="a"><p>ntfs-3g has been distributed worldwide since 2007 without a known action, and the relevant patents are old. GPLv3 also includes a patent grant from contributors. This is a residual risk to note, not a reason to avoid the design — and it applies equally to any NTFS implementation you could build.</p></div>
+    </details>
+
+    <details class="qa"><summary>Do I need a lawyer?</summary>
+      <div class="a"><p>For a free GPL project using GPL libraries, the checklist in section 7 is the standard practice and is well understood. Get counsel if you plan to sell, if you accept outside investment, or if you want a commercial engine licence.</p></div>
+    </details>
+  </section>
+
+  <!-- 11 ----------------------------------------------------------------->
+  <section id="glossary">
+    <h2><span class="num">11</span>Glossary</h2>
+    <div class="grid2">
+      <div class="card">
+        <h4>Copyleft</h4>
+        <p>A license that requires derivative works to keep the same license. GPL is strong copyleft; LGPL is weak (library) copyleft.</p>
+        <h4>Combined work</h4>
+        <p>One program built from parts that call each other in-process. Linking GPL code into it makes the whole work GPL.</p>
+        <h4>Corresponding source</h4>
+        <p>Everything needed to build the exact binary: source, build scripts, patches, and license texts.</p>
+      </div>
+      <div class="card">
+        <h4>FSKit</h4>
+        <p>Apple's framework for user-space filesystems, available from macOS 15.4 and substantially extended in macOS 27. Replaces kernel extensions and FUSE for this use case.</p>
+        <h4>FUSE</h4>
+        <p>Filesystem in User Space. The classic way to mount ntfs-3g on macOS; adds a process boundary and needs a runtime (macFUSE or FUSE-T).</p>
+        <h4>Entitlement</h4>
+        <p>An Apple-issued permission embedded in a code signature. The FSKit module and mount entitlements are granted through the Developer portal.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 ----------------------------------------------------------------->
+  <section id="sources">
+    <h2><span class="num">12</span>Sources</h2>
+    <ul class="small">
+      <li>ntfs-3g source tree: <code>COPYING</code> (GPL-2.0) and the per-file header in <code>libntfs-3g/volume.c</code> (“version 2 … or any later version”). Checked 31 Oct 2026. Releases: 2026.9.28, 2026.9.18, 2026.7.7.</li>
+      <li>macFUSE <code>LICENSE.txt</code>: BSD-style with clause 4 restricting commercial bundling; kernel extension closed source (checked in the repo README).</li>
+      <li>FUSE-T <code>License.txt</code>: free for non-commercial use; commercial use or bundling requires a licence from the authors.</li>
+      <li>apple/swift-argument-parser: Apache-2.0. Sparkle: MIT. XcodeGen: MIT. libyal/libfsntfs: LGPL-3.0. ColinFinck/ntfs: Apache-2.0. Linux <code>fs/ntfs3</code>: GPL-2.0-only.</li>
+      <li>Apple FSKit documentation (developer.apple.com/documentation/fskit) and the FSKit entitlement requirements in the Developer portal.</li>
+    </ul>
+    <p class="small">This page records what the code and license files actually said on the date above, plus engineering judgement. It is not legal advice.</p>
+  </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <strong>Unlatch</strong> — decision brief on dependencies and licensing. Companion docs: <code>docs/Unlatch-Implementation-Plan.md</code>, <code>docs/Unlatch-Review.md</code>.
+  </div>
+</footer>
+
+</body>
+</html>

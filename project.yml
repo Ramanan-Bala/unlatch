@@ -1,0 +1,104 @@
+# XcodeGen spec. Regenerate with Scripts/bootstrap.sh (the .xcodeproj is not committed).
+name: Unlatch
+
+options:
+  bundleIdPrefix: io.github.ramanan-bala
+  deploymentTarget:
+    macOS: "27.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    BUNDLE_PREFIX: io.github.ramanan-bala
+    MACOSX_DEPLOYMENT_TARGET: "27.0"
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: NO
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    GCC_C_LANGUAGE_STANDARD: c11
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: YES
+    MARKETING_VERSION: "0.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  Unlatch:
+    type: application
+    platform: macOS
+    sources: [App/Sources]
+    info:
+      path: App/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Unlatch
+        LSUIElement: true
+        NSHumanReadableCopyright: "Copyright © 2026 Unlatch contributors. GPL-3.0-or-later."
+    # Entitlements: App/Resources/Unlatch.entitlements, applied once a signing team exists (D-06).
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_PREFIX).Unlatch
+    dependencies:
+      - target: UnlatchFSModule
+        embed: true
+        codeSign: true
+      - target: unlatch-engine
+        embed: false
+        link: false
+
+  UnlatchFSModule:
+    type: extensionkit-extension
+    platform: macOS
+    sources: [Extension/Sources]
+    info:
+      path: Extension/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Unlatch
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.fskit.fsmodule
+    # Entitlements: Extension/Resources/UnlatchFSModule.entitlements, applied once a signing team exists (D-06).
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_PREFIX).Unlatch.FSModule
+        PRODUCT_NAME: UnlatchFSModule
+    dependencies:
+      - target: UnlatchEngine
+
+  UnlatchEngine:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Engine/src
+      - path: Engine/include
+        buildPhase: none
+    settings:
+      base:
+        PRODUCT_NAME: UnlatchEngine
+        HEADER_SEARCH_PATHS: $(SRCROOT)/Engine/include
+        OTHER_CFLAGS: [-Wall, -Wextra, -Werror]
+
+  unlatch-engine:
+    type: tool
+    platform: macOS
+    sources: [EngineTool]
+    settings:
+      base:
+        PRODUCT_NAME: unlatch-engine
+        HEADER_SEARCH_PATHS: $(SRCROOT)/Engine/include
+        OTHER_CFLAGS: [-Wall, -Wextra, -Werror]
+    dependencies:
+      - target: UnlatchEngine
+
+schemes:
+  Unlatch:
+    build:
+      targets:
+        Unlatch: all
+        UnlatchFSModule: all
+        UnlatchEngine: all
+        unlatch-engine: all
+  unlatch-engine:
+    build:
+      targets:
+        UnlatchEngine: all
+        unlatch-engine: all
