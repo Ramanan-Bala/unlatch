@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Installed by `sudo unlatch install-helper` into /Library/LaunchDaemons (D-57). -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.github.ramanan-bala.unlatch.helper</string>
+    <key>Program</key>
+    <string>/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper</string>
+    <key>Sockets</key>
+    <dict>
+        <key>Listeners</key>
+        <dict>
+            <key>SockPathName</key>
+            <string>/var/run/io.github.ramanan-bala.unlatch.helper.sock</string>
+            <key>SockPathMode</key>
+            <integer>438</integer>
+        </dict>
+    </dict>
+</dict>
+</plist>

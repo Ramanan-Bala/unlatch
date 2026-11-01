@@ -170,6 +170,18 @@ targets:
     dependencies:
       - target: UnlatchEngine
 
+  unlatch-helper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Helper
+        excludes: ["*.plist"]
+    settings:
+      base:
+        PRODUCT_NAME: io.github.ramanan-bala.unlatch.helper
+        OTHER_CFLAGS: [-Wall, -Wextra, -Werror]
+        OTHER_LDFLAGS: [-framework, CoreFoundation, -framework, DiskArbitration]
+
 schemes:
   Unlatch:
     build:
@@ -179,6 +191,7 @@ schemes:
         UnlatchEngine: all
         unlatch-engine: all
         unlatch-fuse: all
+        unlatch-helper: all
   unlatch-engine:
     build:
       targets:

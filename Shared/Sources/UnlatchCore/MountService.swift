@@ -40,7 +40,7 @@ public actor MountService {
     private let log = Unlatch.logger("mount")
 
     /// `daemon` is the `unlatch-fuse` binary; by default the one next to this executable.
-    public init(daemon: URL? = nil, opener: DeviceOpener = DirectOpener(), statusStore: StatusStore = StatusStore()) throws {
+    public init(daemon: URL? = nil, opener: DeviceOpener = AutoOpener(), statusStore: StatusStore = StatusStore()) throws {
         guard let s = DASessionCreate(kCFAllocatorDefault) else { throw MountError.refused("DiskArbitration is unavailable.") }
         session = s
         DASessionSetDispatchQueue(s, queue)

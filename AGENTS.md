@@ -28,7 +28,9 @@ Each step updates this list.
 | Build UnlatchCore | `swift build --package-path Shared` |
 | Test UnlatchCore | `swift test --package-path Shared`; with attached images and macFUSE: `UNLATCH_INTEGRATION=1 swift test --package-path Shared` |
 | Build CLI | `swift build --package-path CLI` |
-| Run CLI | `swift run --package-path CLI unlatch --help` |
+| Run CLI | `swift run --package-path CLI unlatch --help`; commands in `docs/cli.md` |
+| Test CLI | `swift test --package-path CLI` |
+| Install the privileged helper (real disks only) | `sudo CLI/.build/debug/unlatch install-helper` |
 | Engine tests (unit, harness, leaks, written-image checks, include boundary; ~2 min, ~18 GB of sparse images, ~8 GB really written) | `Scripts/test-engine.sh` |
 | Engine tests without the 4 GiB `cat` and `put`/`get` checks (~40 s) | `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` |
 | Probe an image | `build/DerivedData/Build/Products/Debug/unlatch-engine probe t1.img` (after `xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build`) |
@@ -61,6 +63,7 @@ Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c,
              vendor/ntfs-3g (pinned in vendor/VERSION), vendor/patches/
 EngineTool/  unlatch-engine host harness (works on image files); file_io.c is the file-backed
              ue_io_t, walk.c the host-side path walk
+Helper/      the privileged helper: opens NTFS device nodes for the console user (D-57)
 Fuse/        unlatch-fuse: the mount daemon, libfuse3 low-level ops over the engine (D-40)
 Extension/   dormant Swift FSKit module (needs a paid team, D-38); imports the engine as
              module UnlatchEngineC (Engine/include/module.modulemap)

@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import ArgumentParser
-import UnlatchCore
+import UnlatchCLI
 
 @main
-struct UnlatchCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "unlatch",
-        abstract: "Mount NTFS volumes read-write on macOS.",
-        discussion: "Subcommands arrive in Step 13.",
-        version: Unlatch.version
-    )
+enum Main {
+    static func main() async {
+        await UnlatchCLI.run(CommandLine.arguments.dropFirst().map { $0 })
+    }
 }

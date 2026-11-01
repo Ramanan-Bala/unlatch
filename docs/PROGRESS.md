@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 12 UnlatchCore: DiskWatcher, StatusStore, MountService (2026-11-01). 11 M0 GO; 16 early; Windows oracle passes. 07 left: Windows-made golden images |
-| Next step | 13 CLI `unlatch` (plus the privileged helper, D-57) |
+| Last completed step | 13 CLI `unlatch` and the privileged helper (2026-11-01; helper not yet installed on the owner's Mac). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Next step | 14 Menu-bar app and onboarding |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -487,6 +487,38 @@ UNLATCH_INTEGRATION=1 swift test --package-path Shared        # 8 of 8: list, mo
 - A stray copy of the stderr pipe's write end in the spawned daemon made reading it hang.
 - Finishing an `AsyncStream` runs its termination handler synchronously, which re-entered `stop()` and trapped in `queue.sync`.
 
+### Step 13: CLI `unlatch` and the privileged helper — done 2026-11-01 (helper verified once the owner installs it)
+
+**Done:**
+- `Helper/main.c` → `io.github.ramanan-bala.unlatch.helper` (D-57). A launchd socket job; it accepts only the console user, only `diskN`/`diskNsM` names, and only volumes DiskArbitration calls NTFS. It opens the node and returns the descriptor over `SCM_RIGHTS`, and exits after 30 s idle.
+- UnlatchCore: `HelperOpener` (the client) and `AutoOpener` (direct, then the helper), which is now `MountService`'s default.
+- `CLI/`: the `UnlatchCLI` library plus a thin `unlatch` executable (D-59):
+  - `list`, `mount`, `unmount`, `eject`, `status`, each with `--json` where it makes sense;
+  - `doctor`, `install-helper`, `uninstall-helper`;
+  - exit codes 0 to 4, and `docs/cli.md`.
+- Tests: argument parsing, disk resolution, exit codes, and a JSON schema-1 snapshot.
+
+**Verify:**
+```sh
+xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build     # unlatch-fuse, the helper
+swift test --package-path CLI                                                  # 4 of 4
+U=CLI/.build/debug/unlatch
+d=$(Scripts/attach-image.sh build/cli.img)          # an image from make-image.sh
+$U list; $U mount CLITEST; $U status $d --json | jq; $U unmount /Volumes/CLITEST; $U eject $d
+zstd -d Tests/Images/dirty-ntfs3g.img.zst -o build/d.img; $U mount $(Scripts/attach-image.sh build/d.img); echo $?   # 3, with the reason
+$U mount; echo $?                                    # 2
+$U doctor
+```
+
+**Left:**
+- The helper end to end on a real disk: `sudo unlatch install-helper`, then `unlatch mount <disk> -r`.
+- An auto-mount loop (`DiskWatcher` plus `MountService` plus `AutoMountPolicy`); the app runs it in Step 14.
+
+**Surprises:**
+- ArgumentParser's `CommandError` is not public, so parse errors are caught on their own to map them to exit 2.
+- The macFUSE kext's bundle ID carries a macOS-major suffix (`.25`).
+- The installed macFUSE is still 5.4.0, although Homebrew lists 5.5.0.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
@@ -495,7 +527,7 @@ UNLATCH_INTEGRATION=1 swift test --package-path Shared        # 8 of 8: list, mo
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
 - **Step 15:** close the disk-path gap (D-51, D-52): engine-side block cache over `/dev/rdiskN`, coalesced transfers, a multi-threaded session loop; check whether the kext mount's `synchronous` flag costs writes.
 - **Step 16/17:** readdir cookies are index positions; deleting entries while a listing is in progress could shift later entries. `rm -rf` of 1,000-file trees passes because fts reads a directory fully before deleting; test a concurrent writer in Step 17.
-- **Step 13:** the privileged helper (D-57) and `unlatch install-helper`; until then real disks need `sudo unlatch-fuse` (D-53).
+- **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
 - **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
 - **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
