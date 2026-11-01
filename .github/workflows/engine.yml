@@ -28,6 +28,7 @@ jobs:
           key: ntfs3g-${{ runner.os }}-${{ hashFiles('Engine/vendor/VERSION', 'Engine/vendor/patches/**', 'Scripts/build-ntfs3g.sh') }}
 
       - name: Build libntfs-3g
+        timeout-minutes: 15
         run: |
           [ -f build/ntfs3g/lib/libntfs-3g.a ] || Scripts/build-ntfs3g.sh
           [ -f build/ntfs3g-fuzz/lib/libntfs-3g.a ] || Scripts/build-ntfs3g.sh --fuzz

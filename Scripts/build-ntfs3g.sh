@@ -45,13 +45,18 @@ if [ -n "$variant" ]; then
     done
     [ -n "$llvm" ] || { echo "build-ntfs3g: --fuzz needs Homebrew LLVM (brew install llvm) or LLVM_PREFIX" >&2; exit 1; }
     export CC="$llvm"
-    export CFLAGS="-arch arm64 -mmacosx-version-min=27.0 -isysroot $SDKROOT -O1 -g -fno-omit-frame-pointer \
--fsanitize=address,undefined,fuzzer-no-link -fno-sanitize=alignment,shift-base -fno-sanitize-recover=undefined"
-    export LDFLAGS="-arch arm64 -mmacosx-version-min=27.0 -isysroot $SDKROOT -fsanitize=address,undefined -fno-sanitize=alignment,shift-base"
+    export CFLAGS="-arch arm64 -mmacosx-version-min=27.0 -isysroot $SDKROOT -O1 -g -fno-omit-frame-pointer"
+    export LDFLAGS="-arch arm64 -mmacosx-version-min=27.0 -isysroot $SDKROOT"
+    # Sanitizers are added at make time only: configure's test programs built with ASan can
+    # hang at startup (seen on the CI runner), and configure needs none of them.
+    nosan="-fno-sanitize=alignment,shift-base"
+    make_flags=(CFLAGS="$CFLAGS -fsanitize=address,undefined,fuzzer-no-link $nosan -fno-sanitize-recover=undefined"
+                LDFLAGS="$LDFLAGS -fsanitize=address,undefined $nosan")
 else
     export CC="$(xcrun -f clang)"
     export CFLAGS="-arch arm64 -mmacosx-version-min=27.0 -O2 -g"
     export LDFLAGS="-arch arm64 -mmacosx-version-min=27.0"
+    make_flags=()
 fi
 
 # --exec-prefix stops configure from installing into /bin, /sbin and /lib.
@@ -74,8 +79,8 @@ cd "$obj"
     --enable-silent-rules \
     > configure.log 2>&1 || { tail -40 configure.log >&2; exit 1; }
 
-make -j"$jobs" > make.log 2>&1 || { grep -E 'error' make.log | head -40 >&2; tail -20 make.log >&2; exit 1; }
-make install > install.log 2>&1 || { tail -40 install.log >&2; exit 1; }
+make -j"$jobs" ${make_flags[@]+"${make_flags[@]}"} > make.log 2>&1 || { grep -E 'error' make.log | head -40 >&2; tail -20 make.log >&2; exit 1; }
+make install ${make_flags[@]+"${make_flags[@]}"} > install.log 2>&1 || { tail -40 install.log >&2; exit 1; }
 
 # sbin tools (mkntfs, ntfsfix, ...) go next to the bin tools.
 if [ -d "$prefix/sbin" ]; then
