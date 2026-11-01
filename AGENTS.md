@@ -25,6 +25,9 @@ Each step updates this list.
 | Test UnlatchCore | `swift test --package-path Shared` |
 | Build CLI | `swift build --package-path CLI` |
 | Run CLI | `swift run --package-path CLI unlatch --help` |
+| Engine tests (unit, harness, leaks, include boundary) | `Scripts/test-engine.sh` |
+| Probe an image | `build/DerivedData/Build/Products/Debug/unlatch-engine probe t1.img` (after `xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build`) |
+| Open an image and print it | `unlatch-engine info [--rw] t1.img` |
 | Make a test NTFS image (prints its path) | `Scripts/make-image.sh t1 512m T1` |
 | Inspect an image | `build/ntfs3g/bin/ntfsinfo -m t1.img`, `build/ntfs3g/bin/ntfsls -s t1.img` |
 | Attach an image as a block device, unmounted (prints `diskN`) | `Scripts/attach-image.sh t1.img`; detach with `hdiutil detach diskN` |
@@ -40,12 +43,12 @@ Builds are ad-hoc signed (`CODE_SIGN_IDENTITY = -`). The entitlements files in `
 ```
 Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c,
              vendor/ntfs-3g (pinned in vendor/VERSION), vendor/patches/
-EngineTool/  unlatch-engine host harness (works on image files)
+EngineTool/  unlatch-engine host harness (works on image files); file_io.c is the file-backed ue_io_t
 Extension/   Swift FSKit module
 Shared/      Swift package UnlatchCore
 CLI/         Swift package, the `unlatch` executable
 App/         SwiftUI menu-bar app (LSUIElement), embeds the extension
-Tests/       Engine C tests, Images/ (golden images, Git LFS)
+Tests/       Engine/ C tests (run by Scripts/test-engine.sh), Images/ (golden images, Git LFS)
 Bench/       benchmark scripts and results
 Scripts/     build and release scripts
 ```
@@ -57,6 +60,8 @@ Scripts/     build and release scripts
 - **Engine boundary:** no ntfs-3g headers outside `Engine/src`. Everything else includes only `Engine/include/unlatch_engine.h` (prefix `ue_`). Only the `UnlatchEngine` target has `build/ntfs3g/include` on its header search path.
 - **Vendored code:** never edit `Engine/vendor/ntfs-3g/`. Fixes go in `Engine/vendor/patches/`. To bump the version, replace the tree from the release tarball and update `Engine/vendor/VERSION`.
 - **Errors:** engine functions return 0 or a POSIX `errno` value.
+- **Engine internals:** `Engine/src/internal.h` is the one place that includes `config.h` and ntfs-3g headers; every engine `.c` includes it first. The ntfs-3g headers come in through `-isystem` (D-13).
+- **Engine threading:** not thread-safe. The host serializes every call on an engine, and `ue_probe` and `ue_open` calls with each other, because libntfs-3g has globals.
 - **Architecture:** arm64 only, macOS 27+.
 - **License header:** new source files start with `SPDX-License-Identifier: GPL-3.0-or-later`.
 - **Safety:** when in doubt, mount read-only. Never pass `NTFS_MNT_RECOVER` or `NTFS_MNT_IGNORE_HIBERFILE` unless the user explicitly confirms.

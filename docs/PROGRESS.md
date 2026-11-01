@@ -4,9 +4,9 @@
 
 | Field | Value |
 |---|---|
-| Current phase | 0 Foundations |
-| Last completed step | 02 Vendor and build libntfs-3g plus ntfsprogs (2026-11-01) |
-| Next step | 03 Engine core (device bridge, probe, open/close) and host harness |
+| Current phase | 1 Engine on host |
+| Last completed step | 03 Engine core: device bridge, probe, open/close, host harness (2026-11-01) |
+| Next step | 04 Engine read path |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -15,7 +15,7 @@
 | Risk | Where it is settled | Fallback | State |
 |---|---|---|---|
 | FSKit read-write throughput too low | Step 11 gate, Step 15 KOIO | Bring KOIO forward; NO-GO review | open |
-| libntfs-3g custom device quirks | Step 03 | Patch in `Engine/vendor/patches/` | open |
+| libntfs-3g custom device quirks | Step 03 | Patch in `Engine/vendor/patches/` | settled: works unpatched, one EROFS workaround (D-14) |
 | Restricted entitlement on the CLI | Step 12 S1 | CLI talks to the app over XPC | open |
 | Apple's NTFS driver wins the mount race | Step 12 S2 | Unmount-and-swap | open |
 | Corruption | Steps 05–07, 10, 15, 17 | Read-only default for that scenario until fixed | open |
@@ -84,12 +84,56 @@ I also tested write and read-back with `ntfscp`/`ntfscat`, and an `attach-image.
 - `hdiutil attach -nomount` and `hdiutil detach` now print deprecation warnings that recommend `diskutil image attach --noMount` and `diskutil eject`. They still work.
 - macOS identifies the attached image as NTFS (`File System Personality: NTFS`). With `-nomount`, Apple's driver does not mount it.
 
+### Step 03: Engine core (device bridge, probe, open/close) and host harness — done 2026-11-01
+
+**Done:**
+- `Engine/include/unlatch_engine.h`: the full seam from the plan, with Step 03 functions plus declarations for the read side (Step 04) and write side (Step 05). Adds `ue_vol_state_name()` and documents what `ue_probe` and `ue_open` return.
+- `Engine/src/internal.h`: the only file that includes ntfs-3g headers, after libntfs-3g's own `config.h` (D-13).
+- `Engine/src/device.c`: `ntfs_device_operations` backed by `ue_io_t`. Seek position, bounds checks (seek past the end fails), `EROFS` on a read-write open of a read-only `ue_io_t`, `stat` reports a block device, and `ioctl` answers `DKIOCGETBLOCKSIZE` and `DKIOCGETBLOCKCOUNT`, the two queries libntfs-3g makes on Darwin.
+- `Engine/src/volume.c`:
+  - `ue_probe`: boot-sector check, read-only mount, dirty flag, hiberfile check, logfile check, mapped to a state with a readable reason (D-15). It also fills label, serial, version, cluster size and total/free bytes.
+  - `ue_open`: read-only or strict read-write, then `ntfs_create_lru_caches`, `ntfs_set_ignore_case`, `ntfs_set_shown_files(vol, FALSE, TRUE, FALSE)`.
+  - `ue_close` and `ue_is_readonly`.
+- `EngineTool`: `unlatch-engine probe <img>` and `info [--rw] <img>`, using the file-backed `ue_io_t` in `file_io.c` (pread/pwrite loops, `F_FULLFSYNC`).
+- `Tests/Engine/test_engine.c`, 8 tests:
+  - clean image → CLEAN, with label, sizes and version
+  - dirty image → DIRTY
+  - zeroed boot sector → NOT_NTFS
+  - truncated image → CORRUPT
+  - active `hiberfil.sys` → HIBERNATED; read-write open fails with EPERM, read-only open works
+  - read-only `ue_io_t` with a read-write open → EROFS
+  - bad arguments → EINVAL
+  - 100 read-write plus 100 read-only open/close cycles, and the volume is still CLEAN afterwards
+
+  `Tests/Engine/set_dirty.c` is the dirty-flag fixture tool. `Scripts/test-engine.sh` runs everything (D-17).
+
+**Verify:**
+```sh
+Scripts/test-engine.sh                       # ends with "test-engine: PASSED"
+xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build
+build/DerivedData/Build/Products/Debug/unlatch-engine probe build/test-engine/clean.img
+grep -rnE '#\s*include\s*[<"]ntfs-3g/' --include='*.[ch]' --include='*.swift' . --exclude-dir=vendor --exclude-dir=build   # only Engine/src
+xcodebuild -scheme Unlatch build             # still green
+```
+`leaks --atExit` over 100 read-write open/close cycles reports 0 leaks. For the dirty fixture, `ntfsinfo -f` independently reports `Volume Flags: 0x0001 DIRTY`.
+
+**Left:** nothing in scope. The UNCLEAN_LOG and Fast Startup paths have no fixture yet; they need a Windows-made image (Step 07).
+
+**Surprises:**
+- Open question 3: the custom device path worked first time. The one trap is `ntfs_volume_startup`'s silent read-only retry on `EROFS` (D-14).
+- `ntfs_volume_check_logfile` is `static`, so the probe rebuilds it from the exported functions. `ntfs_volume` doesn't keep the serial number, so the probe reads it from the boot sector.
+- The installed ntfs-3g headers fail `-Wdocumentation` under `-Werror`, so they are included with `-isystem`.
+- A failed `ntfs_device_mount` releases the volume and closes the device but does not free it; `ntfs_umount` frees both. `mount_volume` and `unmount_volume` in `volume.c` encode this.
+- The Xcode project has to be regenerated (`Scripts/bootstrap.sh`) after adding a source file. `test-engine.sh` only generates the project when it's missing.
+
 ## Carry-overs
 
 - **Step 08:** set a development team and reference `Extension/Resources/UnlatchFSModule.entitlements` and `App/Resources/Unlatch.entitlements` from `project.yml` (D-06). The extension cannot load without `com.apple.developer.fskit.fsmodule`. Keep an ad-hoc build path for CI (Step 07), for example an xcconfig override.
 - **Step 08:** `Extension/Sources/UnlatchFSModule.swift` is a placeholder with no `@main`; the appex builds but is not a working extension.
-- **Step 03:** installed ntfs-3g headers depend on feature macros (`HAVE_STDINT_H`, etc.) that normally come from `config.h`. Engine sources may need `-DHAVE_CONFIG_H` with `build/ntfs3g-obj/config.h` on the path, or explicit defines. Check this when the first `#include <ntfs-3g/volume.h>` goes in.
-- **Step 03:** the ntfs-3g build sets no `-DDEBUG` and no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging.
+- **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
+- **Step 07:** add fixtures for UNCLEAN_LOG and Fast Startup (`$LogFile` restart page 2.0), from Windows-made images. The probe code paths exist but are untested.
+- **Step 07 (CI):** run `Scripts/test-engine.sh`. It needs `leaks`, which comes with Xcode command-line tools.
+- **Step 08:** route libntfs-3g logging (`ntfs_log_set_handler`) to OSLog category `engine` (D-16).
 - **Step 07 (CI):** cache `build/ntfs3g`, keyed on `Engine/vendor/VERSION` plus `Engine/vendor/patches/*` plus `Scripts/build-ntfs3g.sh`.
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
 - **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.

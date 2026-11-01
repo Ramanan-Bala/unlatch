@@ -75,16 +75,18 @@ targets:
       base:
         PRODUCT_NAME: UnlatchEngine
         # ntfs-3g headers are visible to this target only (built by Scripts/build-ntfs3g.sh).
-        HEADER_SEARCH_PATHS: [$(SRCROOT)/Engine/include, $(SRCROOT)/build/ntfs3g/include]
-        OTHER_CFLAGS: [-Wall, -Wextra, -Werror]
+        # -isystem keeps upstream header warnings out of our -Werror build (D-13).
+        HEADER_SEARCH_PATHS: [$(SRCROOT)/Engine/include, $(SRCROOT)/build/ntfs3g/config]
+        GCC_PREPROCESSOR_DEFINITIONS: ["HAVE_CONFIG_H=1", "$(inherited)"]
+        OTHER_CFLAGS: [-Wall, -Wextra, -Werror, -isystem, $(SRCROOT)/build/ntfs3g/include]
         # Merge libntfs-3g.a into libUnlatchEngine.a so consumers link one archive (D-11).
         OTHER_LIBTOOLFLAGS: $(SRCROOT)/build/ntfs3g/lib/libntfs-3g.a
     preBuildScripts:
       - name: Check libntfs-3g
         basedOnDependencyAnalysis: false
         script: |
-          if [ ! -f "$SRCROOT/build/ntfs3g/lib/libntfs-3g.a" ]; then
-            echo "error: build/ntfs3g/lib/libntfs-3g.a missing. Run Scripts/bootstrap.sh or Scripts/build-ntfs3g.sh."
+          if [ ! -f "$SRCROOT/build/ntfs3g/lib/libntfs-3g.a" ] || [ ! -f "$SRCROOT/build/ntfs3g/config/config.h" ]; then
+            echo "error: build/ntfs3g (libntfs-3g.a or config/config.h) missing. Run Scripts/bootstrap.sh or Scripts/build-ntfs3g.sh."
             exit 1
           fi
 

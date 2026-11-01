@@ -66,5 +66,9 @@ if [ -d "$prefix/sbin" ]; then
     rmdir "$prefix/sbin"
 fi
 
+# The engine compiles against the same config.h, so ntfs-3g struct layouts match (D-13).
+mkdir -p "$prefix/config"
+cp "$obj/config.h" "$prefix/config/config.h"
+
 echo "build-ntfs3g: $(lipo -info "$prefix/lib/libntfs-3g.a")"
 echo "build-ntfs3g: tools: $(ls "$prefix/bin" | tr '\n' ' ')"
