@@ -52,6 +52,7 @@ xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -o "$out/set_dirty" Tests/Engine/
 xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -DHAVE_CONFIG_H=1 -Ibuild/ntfs3g/config -isystem build/ntfs3g/include \
     -IEngine/src/fixtures -o "$out/mkfixture" Engine/src/fixtures/mkfixture.c build/ntfs3g/lib/libntfs-3g.a
 (
+    [ -n "${CI:-}" ] && set -x        # the CI runner once hung here; show where
     cd "$out/seeds"
     rm -f ./*.img ./*.seed
     "$root/Scripts/make-image.sh" fresh 2m FRESH > /dev/null
