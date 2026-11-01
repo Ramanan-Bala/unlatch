@@ -15,6 +15,9 @@ typedef struct {
 
 // Opens path read-only or read-write and fills f->io. Returns 0 or errno.
 int file_io_open(file_io_t *f, const char *path, bool writable);
+// Same for a descriptor that is already open (a device the privileged helper opened, D-57).
+// Takes ownership of fd, also on failure.
+int file_io_from_fd(file_io_t *f, int fd, bool writable);
 void file_io_close(file_io_t *f);
 
 #endif // UE_FILE_IO_H

@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
+import Testing
+@testable import UnlatchCore
+
+// MARK: unit tests
+
+@Test func autoMountPolicyDefaultsAndChoices() {
+    let suite = "unlatch.test.\(UUID().uuidString)"
+    defer { UserDefaults().removePersistentDomain(forName: suite) }
+    let policy = AutoMountPolicy(suite: suite)
+    func disk(isInternal: Bool, removable: Bool = false, uuid: String? = "U1") -> DiskInfo {
+        DiskInfo(bsdName: "disk9s1", wholeDisk: "disk9", label: "X", size: 1, volumeUUID: uuid, isInternal: isInternal,
+                 isRemovable: removable, isEjectable: removable, owner: .none, mountPoint: nil)
+    }
+    #expect(policy.shouldAutoMount(disk(isInternal: false)))
+    #expect(!policy.shouldAutoMount(disk(isInternal: true)))
+    #expect(policy.shouldAutoMount(disk(isInternal: true, removable: true)))
+    policy.set(.deny, for: "U1")
+    #expect(!policy.shouldAutoMount(disk(isInternal: false)))
+    policy.set(.allow, for: "U1")
+    #expect(policy.shouldAutoMount(disk(isInternal: true)))
+    policy.set(nil, for: "U1")
+    #expect(policy.choice(for: "U1") == nil)
+}
+
+@Test func statusStoreReadsNewestRecord() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let rec = { (serial: String, bsd: String, when: String, state: String) in
+        """
+        {"bsdName":"\(bsd)","engineABI":1,"label":"L","mounted":true,"readOnly":false,"reason":"",
+         "serial":"\(serial)","state":"\(state)","timestamp":"\(when)","unlatchVersion":"0.0.0"}
+        """
+    }
+    try rec("A", "disk7s1", "2026-11-01T10:00:00Z", "clean").write(to: dir.appendingPathComponent("A.json"), atomically: true, encoding: .utf8)
+    try rec("B", "disk7s1", "2026-11-01T11:00:00Z", "dirty").write(to: dir.appendingPathComponent("B.json"), atomically: true, encoding: .utf8)
+    try "not json".write(to: dir.appendingPathComponent("C.json"), atomically: true, encoding: .utf8)
+    let store = StatusStore(directory: dir)
+    #expect(store.all().count == 2)
+    #expect(store.latest(bsdName: "disk7s1")?.state == .dirty)
+    #expect(store.latest(bsdName: "disk1") == nil)
+}
+
+@Test func mountPointNames() {
+    let d = DiskInfo(bsdName: "disk9s1", wholeDisk: nil, label: "a/b", size: 0, volumeUUID: nil, isInternal: false,
+                     isRemovable: true, isEjectable: true, owner: .none, mountPoint: nil)
+    #expect(MountService.mountPoint(for: d) == "/Volumes/a:b")
+}
+
+// MARK: integration (attached images; needs macFUSE's kext and a built unlatch-fuse)
+
+private let integration = ProcessInfo.processInfo.environment["UNLATCH_INTEGRATION"] == "1"
+
+private func sh(_ args: String...) throws -> String { try run(args) }
+
+private func run(_ args: [String]) throws -> String {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: args[0])
+    p.arguments = Array(args.dropFirst())
+    let out = Pipe()
+    p.standardOutput = out
+    p.standardError = FileHandle.nullDevice
+    try p.run()
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return String(decoding: data, as: UTF8.self)
+}
+
+private let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent()
+
+/// A fresh NTFS image, attached; returns the BSD name of the volume (whole disk, no partition map).
+private func attachFreshImage(_ name: String, mount: Bool) throws -> String {
+    let dir = root.appendingPathComponent("build/core-test")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let img = dir.appendingPathComponent("\(name).img")
+    try? FileManager.default.removeItem(at: img)
+    let p = Process()
+    p.executableURL = root.appendingPathComponent("Scripts/make-image.sh")
+    p.arguments = [name, "64m", name.uppercased()]
+    p.currentDirectoryURL = dir
+    p.standardOutput = FileHandle.nullDevice
+    try p.run()
+    p.waitUntilExit()
+    var args = ["/usr/bin/hdiutil", "attach", "-nobrowse", img.path]
+    if !mount { args.insert("-nomount", at: 2) }
+    let out = try run(args)
+    let dev = try #require(out.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).first)
+    return String(dev.dropFirst(5))
+}
+
+@Test(.enabled(if: integration), .timeLimit(.minutes(2)))
+func listMountWriteUnmountEject() async throws {
+    let service = try MountService(daemon: root.appendingPathComponent("build/DerivedData/Build/Products/Debug/unlatch-fuse"))
+    let bsd = try attachFreshImage("coremount", mount: false)
+    #expect(await service.list().contains { $0.bsdName == bsd && $0.owner == .none })
+    let r = try await service.mount(bsd)
+    #expect(!r.readOnly && r.mountPoint.hasPrefix("/Volumes/"))
+    #expect(try await service.disk(bsd).owner == .unlatch)
+    try "hello".write(toFile: r.mountPoint + "/hello.txt", atomically: false, encoding: .utf8)
+    try await service.unmount(bsd)
+    #expect(try await service.disk(bsd).owner == .none)
+    let again = try await service.mount(bsd, readOnly: true)
+    #expect(try String(contentsOfFile: again.mountPoint + "/hello.txt", encoding: .utf8) == "hello")
+    try await service.eject(bsd)
+    await #expect(throws: MountError.self) { try await service.disk(bsd) }
+}
+
+@Test(.enabled(if: integration), .timeLimit(.minutes(2)))
+func appleMountComesBackAfterAFailure() async throws {
+    let broken = try MountService(daemon: URL(fileURLWithPath: "/usr/bin/false"))
+    let bsd = try attachFreshImage("coreapple", mount: true)
+    #expect(try await broken.disk(bsd).owner == .apple)
+    await #expect(throws: MountError.self) { try await broken.mount(bsd) }
+    #expect(try await broken.disk(bsd).owner == .apple)
+    try await broken.eject(bsd)
+}
+
+@Test(.enabled(if: integration), .timeLimit(.minutes(1)))
+func watcherSeesAnAttachedVolume() async throws {
+    let watcher = try #require(DiskWatcher())
+    let events = watcher.events()
+    let bsd = try attachFreshImage("corewatch", mount: false)
+    var seen = false
+    for await e in events {
+        if case .appeared(let d) = e, d.bsdName == bsd { seen = true; break }
+    }
+    watcher.stop()
+    #expect(seen)
+    _ = try sh("/usr/bin/hdiutil", "detach", bsd)
+}

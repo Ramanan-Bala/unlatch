@@ -26,7 +26,7 @@ Each step updates this list.
 | Read-write suite through a mount (fresh images; xattrs, links, git clone) | `Tests/Fuse/rw-suite.sh --runs 3 [--no-git]` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
-| Test UnlatchCore | `swift test --package-path Shared` |
+| Test UnlatchCore | `swift test --package-path Shared`; with attached images and macFUSE: `UNLATCH_INTEGRATION=1 swift test --package-path Shared` |
 | Build CLI | `swift build --package-path CLI` |
 | Run CLI | `swift run --package-path CLI unlatch --help` |
 | Engine tests (unit, harness, leaks, written-image checks, include boundary; ~2 min, ~18 GB of sparse images, ~8 GB really written) | `Scripts/test-engine.sh` |

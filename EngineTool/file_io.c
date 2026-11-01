@@ -106,12 +106,22 @@ static int fio_flush(void *ctx)
 
 int file_io_open(file_io_t *f, const char *path, bool writable)
 {
+    int fd = open(path, writable ? O_RDWR : O_RDONLY);
+
+    if (fd < 0) {
+        memset(f, 0, sizeof(*f));
+        f->fd = -1;
+        return errno;
+    }
+    return file_io_from_fd(f, fd, writable);
+}
+
+int file_io_from_fd(file_io_t *f, int fd, bool writable)
+{
     struct stat st;
 
     memset(f, 0, sizeof(*f));
-    f->fd = open(path, writable ? O_RDWR : O_RDONLY);
-    if (f->fd < 0)
-        return errno;
+    f->fd = fd;
     if (fstat(f->fd, &st) < 0) {
         int err = errno;
         close(f->fd);

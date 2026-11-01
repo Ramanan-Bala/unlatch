@@ -34,6 +34,8 @@ static void usage(void)
             "  -f            stay in the foreground\n"
             "  -d            FUSE debug output (implies -f)\n"
             "  -r            mount read-only even when the volume could be written\n"
+            "  --fd N        use the already open descriptor N for the device (from the privileged\n"
+            "                helper); the path then only names the volume\n"
             "  --backend B   macFUSE backend: kext (default) or fskit (no kernel extension;\n"
             "                mounts only under /Volumes; large reads fail on macOS 27, D-42)\n"
             "  -o opt,...    extra macFUSE mount options\n");
@@ -125,13 +127,14 @@ int main(int argc, char **argv)
     static const struct option longopts[] = {
         { "backend", required_argument, NULL, 'b' },
         { "read-only", no_argument, NULL, 'R' },
+        { "fd", required_argument, NULL, 'D' },
         { "ready-fd", required_argument, NULL, 'F' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     const char *backend = "kext", *extra = NULL;
     bool foreground = false, debug = false, want_ro = false;
-    int ch, ready_fd = -1;
+    int ch, ready_fd = -1, dev_fd = -1;
 
     while ((ch = getopt_long(argc, argv, "fdro:h", longopts, NULL)) != -1) {
         switch (ch) {
@@ -141,6 +144,7 @@ int main(int argc, char **argv)
         case 'o': extra = optarg; break;
         case 'b': backend = optarg; break;
         case 'F': ready_fd = atoi(optarg); break;
+        case 'D': dev_fd = atoi(optarg); break;
         default: usage(); return ch == 'h' ? 0 : 2;
         }
     }
@@ -154,7 +158,11 @@ int main(int argc, char **argv)
     const char *source = argv[optind];
     // mount_macfuse resolves a relative mount point against /, so make it absolute.
     char mountpoint[PATH_MAX];
-    if (!realpath(argv[optind + 1], mountpoint)) {
+    // /Volumes/<name> need not exist: mount_macfuse creates it there (users cannot), D-58.
+    if (!strncmp(argv[optind + 1], "/Volumes/", 9) && !strchr(argv[optind + 1] + 9, '/') &&
+        access(argv[optind + 1], F_OK) != 0)
+        snprintf(mountpoint, sizeof(mountpoint), "%s", argv[optind + 1]);
+    else if (!realpath(argv[optind + 1], mountpoint)) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", argv[optind + 1], strerror(errno));
         return 1;
     }
@@ -167,7 +175,8 @@ int main(int argc, char **argv)
     int err;
     // /dev/diskN is used as given: its buffer cache makes metadata work 8-12x faster than the
     // raw /dev/rdiskN (sequential writes are 2.4x slower), D-51. /dev/rdiskN is honoured too.
-    if ((err = file_io_open(&f, source, false))) {
+    bool fd_writable = dev_fd >= 0 && (fcntl(dev_fd, F_GETFL) & O_ACCMODE) == O_RDWR;
+    if ((err = dev_fd >= 0 ? file_io_from_fd(&f, dev_fd, fd_writable) : file_io_open(&f, source, false))) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", source, strerror(err));
         return 1;
     }
@@ -195,6 +204,11 @@ int main(int argc, char **argv)
     }
     if (p.state != UE_VOL_CLEAN) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
+    } else if (!want_ro && dev_fd >= 0) {
+        if (fd_writable)
+            fs.read_only = false;
+        else
+            uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s was handed over read-only, read-only", source);
     } else if (!want_ro) {
         file_io_t w;
         if ((err = file_io_open(&w, source, true))) {

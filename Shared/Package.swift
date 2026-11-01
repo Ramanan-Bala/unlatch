@@ -9,7 +9,10 @@ let package = Package(
         .library(name: "UnlatchCore", targets: ["UnlatchCore"]),
     ],
     targets: [
-        .target(name: "UnlatchCore"),
+        .target(
+            name: "UnlatchCore",
+            linkerSettings: [.linkedFramework("DiskArbitration"), .linkedFramework("IOKit")]
+        ),
         .testTarget(name: "UnlatchCoreTests", dependencies: ["UnlatchCore"]),
     ]
 )

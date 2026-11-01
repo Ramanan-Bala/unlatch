@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 11 (M0 GO), 16 early; Windows chkdsk oracle passes (Steps 06, 10, 16; D-55). 07 left: Windows-made golden images |
-| Next step | 12 UnlatchCore: DiskWatcher, StatusStore, MountService |
+| Last completed step | 12 UnlatchCore: DiskWatcher, StatusStore, MountService (2026-11-01). 11 M0 GO; 16 early; Windows oracle passes. 07 left: Windows-made golden images |
+| Next step | 13 CLI `unlatch` (plus the privileged helper, D-57) |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -16,8 +16,8 @@
 |---|---|---|---|
 | Read-write throughput too low | Step 11 gate, Step 15 | NO-GO review | settled at M0: GO like for like (D-52); disk path slow, Step 15 |
 | libntfs-3g custom device quirks | Step 03 | Patch in `Engine/vendor/patches/` | settled: works unpatched, one EROFS workaround (D-14) |
-| Restricted entitlement on the CLI | Step 12 S1 | CLI talks to the app over XPC | open |
-| Apple's NTFS driver wins the mount race | Step 12 S2 | Unmount-and-swap | open |
+| Root needed to open real disks | Step 12 S1 | privileged helper hands over a descriptor (D-57) | design settled; helper in Step 13 |
+| Apple's NTFS driver wins the mount race | Step 12 S2 | Unmount-and-swap | settled: mount-approval dissent works (D-56) |
 | Corruption | Steps 05–07, 10, 15, 17 | Read-only default for that scenario until fixed | open; 1,000 fsx seeds × 2,000 ops pass; Windows chkdsk not yet run (needs a VM) |
 | Stale data exposed through KOIO | Step 15 explicit test | Inhibit KOIO for files with `init_size < size` | open |
 | FSKit API changes in 27.x | every step re-checks the docs | pin the tested 27.x builds in README | open |
@@ -452,6 +452,41 @@ Scripts/chkdsk-vm.sh --fsx 42
 Tests/Fuse/rw-suite.sh --runs 1 && Scripts/chkdsk-vm.sh build/rw-suite/run.img rw-suite
 ```
 
+### Step 12: UnlatchCore: DiskWatcher, StatusStore, MountService — done 2026-11-01
+
+Re-scoped for macFUSE (D-39): there is no `FSClient.mountSingleVolume` and no mount entitlement, so S1 becomes "who opens the device".
+
+**Done:**
+- Spikes: S2 (dissent stops Apple's mount, D-56) and S1 (a privileged fd-passing helper, D-57).
+- `unlatch-fuse --fd N` uses a device opened by someone else (`file_io_from_fd`), and accepts a `/Volumes/<name>` that does not exist yet (D-58).
+- `UnlatchCore`:
+  - `DiskInfo`: DiskArbitration plus the mount table. NTFS is matched by volume kind, or by an `Windows_NTFS`/Basic Data content hint when the kind is missing. The owner is Apple, Unlatch (`fsname unlatch@<bsd>`), another driver, or none.
+  - `DiskWatcher`: an `AsyncStream` of appeared, disappeared and changed events; an optional `claim` dissents mounts; callbacks are unregistered and the context released in `stop()`, which is safe to call from the stream's termination.
+  - `StatusStore`: `all`, `latest(bsdName:)`, `changes()` (a dispatch source on the status directory).
+  - `MountService` (an actor):
+    - `list`, `disk`, `status`;
+    - `mount` unmounts Apple's driver first and gives the volume back with `DADiskMount` if Unlatch fails;
+    - `unmount` (`unmount(2)` for Unlatch, DiskArbitration otherwise; force only on request), `eject` (whole disk);
+    - `runDaemon` spawns `unlatch-fuse --fd 3` with only fds 2 and 3 open.
+  - `AutoMountPolicy`: external, removable or ejectable by default; per-volume allow or deny by volume UUID.
+  - `MountError`: user-facing reasons, including macFUSE missing and helper needed.
+- Tests: unit tests (policy, status store, mount-point names), plus integration tests run with `UNLATCH_INTEGRATION=1` on attached images.
+
+**Verify:**
+```sh
+xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build
+swift test --package-path Shared                              # unit tests; integration ones skipped
+UNLATCH_INTEGRATION=1 swift test --package-path Shared        # 8 of 8: list, mount rw, write, unmount, remount ro, eject;
+                                                              # Apple's mount restored after a forced failure; watcher sees an attach
+```
+
+**Left:** the privileged helper (D-57) is Step 13 work, so real disks still mount only with `sudo unlatch-fuse` (D-53). The auto-mount loop that joins `DiskWatcher` to `MountService` belongs to whichever process runs it: the app (Step 14), or a CLI daemon mode in Step 13.
+
+**Surprises:**
+- `DADiskGetBSDName` points into the `DADisk`; reading it from a temporary whole-disk object gave garbage names and `kDAReturnBadArgument`.
+- A stray copy of the stderr pipe's write end in the spawned daemon made reading it hang.
+- Finishing an `AsyncStream` runs its termination handler synchronously, which re-entered `stop()` and trapped in `queue.sync`.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
@@ -460,7 +495,7 @@ Tests/Fuse/rw-suite.sh --runs 1 && Scripts/chkdsk-vm.sh build/rw-suite/run.img r
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
 - **Step 15:** close the disk-path gap (D-51, D-52): engine-side block cache over `/dev/rdiskN`, coalesced transfers, a multi-threaded session loop; check whether the kext mount's `synchronous` flag costs writes.
 - **Step 16/17:** readdir cookies are index positions; deleting entries while a listing is in progress could shift later entries. `rm -rf` of 1,000-file trees passes because fts reads a directory fully before deleting; test a concurrent writer in Step 17.
-- **Step 12:** when the app launches `unlatch-fuse`, it can use `-f` under launchd or the default `posix_spawn` backgrounding (D-45).
+- **Step 13:** the privileged helper (D-57) and `unlatch install-helper`; until then real disks need `sudo unlatch-fuse` (D-53).
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
 - **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
 - **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
