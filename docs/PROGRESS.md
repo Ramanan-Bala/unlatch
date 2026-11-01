@@ -661,10 +661,21 @@ awk -v v=1.0.0-beta.1 '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' C
 
 **Left (owner, in this order; docs/release.md):** push a signed tag `v1.0.0-beta.1` (the workflow makes a draft pre-release), publish the draft, create and push the tap `Ramanan-Bala/homebrew-unlatch`, enable private vulnerability reporting in the repository settings, recruit testers (docs/beta.md). v1.0.0 follows the beta's exit criteria.
 
+### Leftover: Windows-made golden image (Step 07) — done 2026-11-01
+
+- `Tests/Images/windows-content.img.zst` and `.expect` (D-72): made by Windows 11 in the VM, 601 golden checks now pass across 8 images. A copy written by Unlatch (into the compressed folder too) passes Windows `chkdsk`.
+- `unlatch-engine xattr`, link targets in `stat`; `test-golden.sh` reads tab-separated lines and checks streams and links.
+- Still wanted from Windows: a real Fast Startup image, a dirty one from a killed VM, and a fragmented `$MFT` (Tests/Images/README.md).
+
+```sh
+Scripts/test-golden.sh                                            # 8 images, 601 checks
+WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 Tests/Images/windows/make.sh   # regenerate (new serial and times)
+```
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
-- **Step 07 (VM available now):** Windows-made golden images (`Tests/Images/README.md`).
+- **Step 07:** Windows-made Fast Startup, dirty and fragmented-MFT images are still wanted (`Tests/Images/README.md`).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).

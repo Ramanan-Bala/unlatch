@@ -26,6 +26,7 @@ static void usage(FILE *out)
             "  ls [--stats] <img> [path]   list a directory (type, size, name)\n"
             "  stat <img> <path>    print a file's attributes\n"
             "  cat <img> <path>     write a file's contents to stdout\n"
+            "  xattr <img> <path> [name]   list extended attributes (streams), or print one\n"
             "  tree <img> [path]    list a directory recursively\n"
             "  put <img> <local|-> <path>   copy a local file (or stdin) into the image\n"
             "  get <img> <path> <local|->   copy a file out of the image (or to stdout)\n"
@@ -259,7 +260,46 @@ static int cmd_stat(const char *img, const char *path)
     print_time("mtime:", a.mtime);
     print_time("ctime:", a.ctime);
     print_time("atime:", a.atime);
+    if (a.type == UE_T_LNK) {
+        char target[4096];
+        if (ue_readlink(s.e, a.ino, "/mnt", target, sizeof(target)) == 0)
+            printf("target:     %s\n", target);
+    }
     return session_close(&s, 0);
+}
+
+// xattr <img> <path>: one "name size" line per extended attribute (named stream);
+// xattr <img> <path> <name>: the value to stdout.
+static int cmd_xattr(const char *img, const char *path, const char *name)
+{
+    session_t s;
+    ue_attr_t a;
+    size_t need = 0, len = 0;
+    char *buf = NULL;
+    int err;
+
+    if (session_open(&s, img))
+        return EX_FAIL;
+    if (walk_or_fail(&s, path, &a))
+        return session_close(&s, EX_FAIL);
+    if (name) {
+        if (!(err = ue_xattr_get(s.e, a.ino, name, 0, NULL, 0, &len)) && (buf = malloc(len ? len : 1)) &&
+            !(err = ue_xattr_get(s.e, a.ino, name, 0, buf, len, &len)))
+            fwrite(buf, 1, len, stdout);
+    } else if (!(err = ue_xattr_list(s.e, a.ino, NULL, 0, &need)) && (buf = malloc(need ? need : 1)) &&
+               !(err = ue_xattr_list(s.e, a.ino, buf, need, &need))) {
+        for (size_t i = 0; i < need; i += strlen(buf + i) + 1) {
+            size_t sz = 0;
+            ue_xattr_get(s.e, a.ino, buf + i, 0, NULL, 0, &sz);
+            printf("%s %zu\n", buf + i, sz);
+        }
+    }
+    if (!buf && !err)
+        err = ENOMEM;
+    free(buf);
+    if (err)
+        fprintf(stderr, "unlatch-engine: xattr %s: %s\n", path, strerror(err));
+    return session_close(&s, err ? EX_FAIL : 0);
 }
 
 static int cmd_cat(const char *img, const char *path)
@@ -518,6 +558,8 @@ int main(int argc, char **argv)
         return cmd_ls(argv[2], argc == 4 ? argv[3] : "/", false, true);
     if (argc == 4 && strcmp(argv[1], "stat") == 0)
         return cmd_stat(argv[2], argv[3]);
+    if ((argc == 4 || argc == 5) && strcmp(argv[1], "xattr") == 0)
+        return cmd_xattr(argv[2], argv[3], argc == 5 ? argv[4] : NULL);
     if (argc == 4 && strcmp(argv[1], "cat") == 0)
         return cmd_cat(argv[2], argv[3]);
     if (argc == 5 && strcmp(argv[1], "put") == 0)

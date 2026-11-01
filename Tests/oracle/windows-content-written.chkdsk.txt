@@ -1,0 +1,89 @@
+﻿The type of the file system is NTFS.
+Shadow copying the specified volume is not supported.
+
+Volume label is WINGOLD.
+
+WARNING!  /F parameter not specified.
+Running CHKDSK in read-only mode.
+
+Stage 1: Examining basic file system structure ...
+Progress: 0 of 768 done; Stage:  0%; Total:  3%; ETA:   0:00:04    
+Progress: 768 of 768 done; Stage: 100%; Total: 20%; ETA:   0:00:04 .  
+                                                                                       
+                                                                                       
+  768 file records processed.                                                        
+
+File verification completed.
+ Phase duration (File record verification): 4.74 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 40%; ETA:   0:00:04 .. 
+                                                                                       
+                                                                                       
+  0 large file records processed.                                   
+
+ Phase duration (Orphan file record recovery): 0.06 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 40%; ETA:   0:00:03 ...
+                                                                                       
+                                                                                       
+  0 bad file records processed.                                     
+
+ Phase duration (Bad file record checking): 0.05 milliseconds.
+
+Stage 2: Examining file name linkage ...
+Progress: 4 of 4 done; Stage: 100%; Total: 75%; ETA:   0:00:01    
+                                                                                       
+                                                                                       
+  4 reparse records processed.                                      
+
+Progress: 814 of 814 done; Stage: 100%; Total: 76%; ETA:   0:00:01 .  
+                                                                                       
+                                                                                       
+  814 index entries processed.                                                       
+
+Index verification completed.
+ Phase duration (Index verification): 5.32 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 76%; ETA:   0:00:01 .. 
+                                                                                       
+                                                                                       
+  0 unindexed files scanned.                                        
+
+ Phase duration (Orphan reconnection): 0.11 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 76%; ETA:   0:00:01 ...
+                                                                                       
+                                                                                       
+  0 unindexed files recovered to lost and found.                    
+
+ Phase duration (Orphan recovery to lost and found): 0.06 milliseconds.
+Progress: 4 of 4 done; Stage: 100%; Total: 76%; ETA:   0:00:01    
+                                                                                       
+                                                                                       
+  4 reparse records processed.                                      
+
+ Phase duration (Reparse point and Object ID verification): 0.19 milliseconds.
+
+Stage 3: Examining security descriptors ...
+Security descriptor verification completed.
+ Phase duration (Security descriptor verification): 1.08 milliseconds.
+Progress: 0 of 0 done; Stage: 100%; Total: 99%; ETA:   0:00:00 .  
+                                                                                       
+                                                                                       
+  23 data files processed.                                           
+
+ Phase duration (Data attribute verification): 0.05 milliseconds.
+
+Windows has scanned the file system and found no problems.
+No further action is required.
+
+     64447 KB total disk space.
+      5904 KB in 26 files.
+       216 KB in 25 indexes.
+         0 KB in bad sectors.
+      3235 KB in use by the system.
+      2048 KB occupied by the log file.
+     55092 KB available on disk.
+
+      4096 bytes in each allocation unit.
+     16111 total allocation units on disk.
+     13773 allocation units available on disk.
+Total duration: 11.78 milliseconds (11 ms).
+# image: windows-content-written.img sha256 b8ac936455dff4401091369067d4ab589d7954078d71add4feb6bb431995abbd
+# checked: 2026-11-01T18:07:04Z

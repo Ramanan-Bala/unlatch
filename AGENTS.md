@@ -41,10 +41,10 @@ Each step updates this list.
 | Engine tests without the 4 GiB `cat` and `put`/`get` checks (~40 s) | `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` |
 | Probe an image | `build/DerivedData/Build/Products/Debug/unlatch-engine probe t1.img` (after `xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build`) |
 | Open an image and print it | `unlatch-engine info [--rw] t1.img` |
-| Browse an image | `unlatch-engine ls [--stats] <img> [path]`, `stat <img> <path>`, `cat <img> <path>`, `tree <img> [path]` |
+| Browse an image | `unlatch-engine ls [--stats] <img> [path]`, `stat <img> <path>` (with a link's target), `cat <img> <path>`, `xattr <img> <path> [name]`, `tree <img> [path]` |
 | fsx randomized model test | `unlatch-engine fsx <empty.img> --seed N --ops M [--verbose]`; soak: `Scripts/fsx-soak.sh --seeds 1000`; regressions: `Scripts/fsx-soak.sh --regressions` |
 | Windows chkdsk oracle | `Scripts/chkdsk-vm.sh --fsx <seed>` (needs `WINDOWS_SSH`; see `docs/testing.md`) |
-| Golden images | `Scripts/test-golden.sh`; regenerate with `Tests/Images/make-golden.sh` (changes serials and times) |
+| Golden images | `Scripts/test-golden.sh`; regenerate with `Tests/Images/make-golden.sh` (changes serials and times); the Windows-made one with `Tests/Images/windows/make.sh` (needs `WINDOWS_SSH`) |
 | Fuzz (needs Homebrew LLVM) | `Scripts/fuzz.sh --time 60`; replay saved crashes: `Scripts/fuzz.sh --regress` |
 | Benchmarks (baselines incl. stock ntfs-3g; `--driver` build once) | `Scripts/build-ntfs3g.sh --driver`; `Bench/baselines.sh [--runs N] [apfs exfat ntfs3g unlatch-file unlatch]`; `Bench/compare.py` |
 | CI | `.github/workflows/engine.yml` (`xcode-27` runner); `gh run list --workflow engine` |
