@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
-| Next step | 14 Menu-bar app and onboarding |
+| Last completed step | 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Next step | 15 Speed (disk path, D-51/D-52) |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -520,7 +520,7 @@ $U doctor
 - The macFUSE kext's bundle ID carries a macOS-major suffix (`.25`).
 - The installed macFUSE is still 5.4.0, although Homebrew lists 5.5.0.
 
-### Step 14: Menu-bar app and onboarding — IN PROGRESS (2026-11-01)
+### Step 14: Menu-bar app and onboarding — done 2026-11-01, except the owner's UI review
 
 **Done so far:**
 - `App/Sources`: `AppModel` (volumes, the auto-mount loop via `DiskWatcher(claim:)`, notifications), `MenuView` (a row per volume with a state badge and actions: mount read-write or read-only, unmount, eject, show in Finder, Always/Never auto-mount), `OnboardingView` and `Checks`, `SettingsView` (auto-mount scope, notifications, log export).
@@ -528,7 +528,15 @@ $U doctor
 - The app bundles `unlatch-fuse`, the helper and the CLI in `Contents/Helpers`. Not `Contents/MacOS`: on a case-insensitive disk the CLI `unlatch` overwrote the app's own `Unlatch`. The FSKit module is no longer embedded. There is an Xcode `unlatch-cli` target.
 - `App/Resources/selftest.img`: a 2 MiB NTFS volume, label UNLATCHTEST, with a marker file, excluded from auto-mount. The onboarding self-test mounts it read-only, reads the marker and ejects it. Verified from the log.
 
-**Left:** check auto-mount by attaching an image (claim, mount, notification); the dirty-image badge; eject from the menu; a VoiceOver pass and copy review (needs the owner to look at the UI); PROGRESS and DECISIONS entries (Contents/Helpers, launch behaviour); remove the stale empty `/Volumes/UnlatchTest` folder from the FSKit tests (`sudo rmdir`).
+**Verified:**
+- With the app running, `hdiutil attach` of a clean NTFS image: Apple's mount is refused ("no mountable file systems"), and the app mounts it read-write at `/Volumes/AUTOTEST`.
+- A dirty image mounts read-only at `/Volumes/CONTENT` with its reason.
+- The owner used the app on the real Seagate: a 30 GB copy from the Mac onto it in under 5 minutes.
+
+**Left:**
+- The owner's look at the menu, onboarding and Settings: eject from the menu, badges, wording, VoiceOver.
+- `chkdsk /scan` of the Seagate on Windows after its first real write.
+- Removing the stale `/Volumes/UnlatchTest` from the FSKit tests (`sudo rmdir`).
 
 ## Carry-overs
 
