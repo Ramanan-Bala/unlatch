@@ -6,6 +6,7 @@
 // engine holds an item from ue_lookup until ue_release; FUSE counts lookups and forgets them,
 // so the adapter keeps the count and releases at zero.
 #include "ops.h"
+#include "log.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <errno.h>
@@ -228,6 +229,39 @@ static void uf_init(void *userdata, struct fuse_conn_info *conn)
     (void)userdata;
     fuse_darwin_set_feature_flag(conn, FUSE_DARWIN_CAP_CASE_INSENSITIVE);
     fuse_darwin_set_feature_flag(conn, FUSE_DARWIN_CAP_RENAME_EXT);   // RENAME_EXCL/SWAP reach uf_rename
+}
+
+// Unmount: the kernel waits for the reply to DESTROY, so closing the volume here (writing
+// back the page cache, deleting ghosts, flushing the device) finishes before umount returns
+// and before the disk can be ejected (D-62).
+static void uf_destroy(void *userdata)
+{
+    uf_close_engine(userdata);
+}
+
+void uf_close_engine(uf_fs_t *fs)
+{
+    int err;
+
+    if (!fs->engine)
+        return;
+    ue_cache_stats_t cs;
+    ue_get_cache_stats(fs->engine, &cs);
+    if (cs.page_size)
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT,
+               "cache: %llu hits, %llu misses, %llu evictions, %llu write-backs (%llu ms), "
+               "%llu direct reads, %llu direct writes, %llu MiB read, %llu MiB written",
+               (unsigned long long)cs.hits, (unsigned long long)cs.misses, (unsigned long long)cs.evictions,
+               (unsigned long long)cs.writebacks, (unsigned long long)(cs.writeback_us / 1000),
+               (unsigned long long)cs.direct_reads, (unsigned long long)cs.direct_writes,
+               (unsigned long long)(cs.read_bytes >> 20), (unsigned long long)(cs.write_bytes >> 20));
+    if (ue_has_failed(fs->engine))
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s failed during use; nothing more was written", fs->mountpoint);
+    if ((err = ue_close(fs->engine)))
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "closing %s: %s; the volume may need Windows chkdsk", fs->mountpoint,
+               strerror(err));
+    fs->engine = NULL;
+    fs->close_err = err;
 }
 
 // MARK: read side
@@ -764,6 +798,7 @@ static void uf_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name)
 
 const struct fuse_lowlevel_ops uf_ops = {
     .init = uf_init,
+    .destroy = uf_destroy,
     .lookup = uf_lookup,
     .forget = uf_forget,
     .forget_multi = uf_forget_multi,

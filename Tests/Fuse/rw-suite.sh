@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Read-write suite through a real mount (plan Step 10).
 #
-#   Tests/Fuse/rw-suite.sh [--runs N] [--backend kext|fskit] [--no-git]
+#   Tests/Fuse/rw-suite.sh [--runs N] [--backend kext|fskit] [--no-git] [--disk]
+#
+# --disk attaches each image as a disk and mounts /dev/diskN (the daemon opens /dev/rdiskN
+# with its page cache, D-62), the way real drives are used.
 #
 # Each run: a fresh image, mounted read-write; cp -R, rsync, ditto and a big file, each
 # checked by SHA-256 against the source; mv, case-only rename, rm -r, truncate, touch -t,
@@ -15,13 +18,14 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 products="$root/build/DerivedData/Build/Products/Debug"
 fuse="$products/unlatch-fuse" engine="$products/unlatch-engine"
 ntfsfix="$root/build/ntfs3g/bin/ntfsfix"
-runs=1 backend=kext git=1
+runs=1 backend=kext git=1 disk=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --runs) runs="$2"; shift 2 ;;
         --backend) backend="$2"; shift 2 ;;
         --no-git) git=0; shift ;;
-        *) echo "usage: $0 [--runs N] [--backend kext|fskit] [--no-git]" >&2; exit 64 ;;
+        --disk) disk=1; shift ;;
+        *) echo "usage: $0 [--runs N] [--backend kext|fskit] [--no-git] [--disk]" >&2; exit 64 ;;
     esac
 done
 
@@ -32,7 +36,9 @@ if [ "$backend" = fskit ]; then mnt=/Volumes/UnlatchRW; else mnt="$work/mnt"; mk
 
 say() { printf '  %-44s' "$1"; }
 ok() { echo ok; }
-die() { echo "FAIL: $*" >&2; mount | grep -q " on $mnt " && umount "$mnt"; exit 1; }
+dev=""
+detach() { [ -z "$dev" ] || hdiutil detach -quiet "$dev" 2>/dev/null || true; dev=""; }
+die() { echo "FAIL: $*" >&2; mount | grep -q " on $mnt " && umount "$mnt"; sleep 0.5; detach; exit 1; }
 
 # SHA-256 of every file under a tree, by relative path, without AppleDouble files.
 hashes() { (cd "$1" && find . -type f ! -name '._*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256); }
@@ -41,7 +47,7 @@ expect_same() {
     diff <(hashes "$1") <(hashes "$2") > "$work/diff.txt" || { head -20 "$work/diff.txt" >&2; die "$3 differs"; }
 }
 
-mount_rw() { "$fuse" --backend "$backend" "$@" "$img" "$mnt" 2>/dev/null || die "mount $*"; }
+mount_rw() { "$fuse" --backend "$backend" "$@" "$vol" "$mnt" 2>/dev/null || die "mount $*"; }
 
 head -c $((300 << 20)) /dev/urandom > "$work/big.bin"
 src_hashes="$work/src.sha"
@@ -51,6 +57,8 @@ for run in $(seq 1 "$runs"); do
     echo "rw-suite: run $run of $runs ($backend backend)"
     rm -f "$work/run.img"
     img=$(cd "$work" && "$root/Scripts/make-image.sh" run 2g RWSUITE | tail -1)
+    vol="$img"
+    if [ "$disk" = 1 ]; then dev=$("$root/Scripts/attach-image.sh" "$img"); vol="/dev/$dev"; fi
     mount_rw
     mount | grep " on $mnt " | grep -q read-only && die "mounted read-only"
 
@@ -109,8 +117,8 @@ for run in $(seq 1 "$runs"); do
     say "unmount, probe CLEAN, ntfsfix -n"
     cp_snapshot="$work/cp.sha"; (cd "$mnt/cp" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) > "$cp_snapshot"
     umount "$mnt"
-    "$engine" probe "$img" | grep -q '^state: *clean' || die "probe after unmount: $("$engine" probe "$img" | head -1)"
-    "$ntfsfix" -n "$img" > "$work/ntfsfix.txt" 2>&1 || { cat "$work/ntfsfix.txt" >&2; die "ntfsfix -n"; }
+    "$engine" probe "$vol" | grep -q '^state: *clean' || die "probe after unmount: $("$engine" probe "$vol" | head -1)"
+    "$ntfsfix" -n "$vol" > "$work/ntfsfix.txt" 2>&1 || { cat "$work/ntfsfix.txt" >&2; die "ntfsfix -n"; }
     ok
 
     say "read-only remount, hashes again"
@@ -122,5 +130,6 @@ for run in $(seq 1 "$runs"); do
     [ "$(cat "$mnt/t.txt")" = abc ] || die "t.txt after remount"
     [ ! -e "$mnt/big.bin" ] || die "unlinked file came back"
     umount "$mnt"; ok
+    [ -z "$dev" ] || { sleep 0.5; detach; }
 done
 echo "rw-suite: $runs run(s) passed"

@@ -96,7 +96,8 @@ public actor MountService {
             info.owner = .none
         }
         do {
-            let fd = try opener.open(info.devicePath, writable: !readOnly)
+            // The raw node (/dev/rdiskN): unlatch-fuse caches in front of it itself (D-62).
+            let fd = try opener.open(Self.rawPath(info.devicePath), writable: !readOnly)
             defer { close(fd) }
             let point = Self.mountPoint(for: info)
             try runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly)
@@ -113,6 +114,11 @@ public actor MountService {
     }
 
     /// /Volumes/<label>, or /Volumes/<label> <bsd> when the name is taken.
+    /// `/dev/diskN` → `/dev/rdiskN`; other paths unchanged.
+    static func rawPath(_ path: String) -> String {
+        path.hasPrefix("/dev/disk") ? "/dev/r" + path.dropFirst(5) : path
+    }
+
     static func mountPoint(for info: DiskInfo) -> String {
         let base = (info.label.isEmpty ? "NTFS" : info.label).replacingOccurrences(of: "/", with: ":")
         let first = "/Volumes/\(base)"

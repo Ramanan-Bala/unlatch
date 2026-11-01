@@ -537,17 +537,21 @@ typedef struct {
     char path[2048];
 } wvol_t;
 
+// The write tests run twice: without and then with the page cache (Step 15, D-62).
+static uint32_t wflags;
+static const char *wtag = "";
+
 static int wopen(wvol_t *w, const char *base, const char *name)
 {
     int err;
 
-    snprintf(w->path, sizeof(w->path), "%s/w-%s.img", dir, name);
+    snprintf(w->path, sizeof(w->path), "%s/w-%s%s.img", dir, wtag, name);
     unlink(w->path);
     if (copyfile(img(base), w->path, NULL, COPYFILE_CLONE | COPYFILE_DATA) < 0)
         return errno;
     if ((err = file_io_open(&w->f, w->path, true)))
         return err;
-    if ((err = ue_open(&w->f.io, 0, &w->e, NULL))) {
+    if ((err = ue_open(&w->f.io, wflags, &w->e, NULL))) {
         file_io_close(&w->f);
         return err;
     }
@@ -563,7 +567,7 @@ static int wreopen(wvol_t *w, bool rw)
         return err;
     if ((err = file_io_open(&w->f, w->path, rw)))
         return err;
-    return ue_open(&w->f.io, rw ? 0 : UE_OPEN_RDONLY, &w->e, NULL);
+    return ue_open(&w->f.io, (rw ? 0 : UE_OPEN_RDONLY) | wflags, &w->e, NULL);
 }
 
 // Closes and re-probes: every write test must leave the volume CLEAN.
@@ -996,6 +1000,168 @@ static int write_loop(const char *base, int n)
     return 0;
 }
 
+// ---- Page cache (Step 15, D-62): a model test against an in-memory device. The engine's
+// cache functions are internal; their prototypes are repeated here.
+typedef struct ue_bcache ue_bcache_t;
+int bc_new(const ue_io_t *io, size_t bytes, ue_bcache_t **out);
+void bc_free(ue_bcache_t *bc);
+int bc_read(ue_bcache_t *bc, void *buf, size_t len, uint64_t off);
+int bc_write(ue_bcache_t *bc, const void *buf, size_t len, uint64_t off);
+int bc_writeback(ue_bcache_t *bc);
+size_t bc_dirty(const ue_bcache_t *bc);
+void bc_set_cold(ue_bcache_t *bc, bool cold);
+void bc_get_stats(const ue_bcache_t *bc, ue_cache_stats_t *out);
+
+typedef struct {
+    uint8_t *mem;
+    uint64_t size;
+    uint32_t bs;
+    uint64_t ops;
+    bool misaligned;                  // a transfer was not block-aligned
+} memdev_t;
+
+static int mem_pread(void *ctx, void *buf, size_t len, uint64_t off)
+{
+    memdev_t *d = ctx;
+    if (off % d->bs || len % d->bs)
+        d->misaligned = true;
+    if (off + len > d->size)
+        return EIO;
+    memcpy(buf, d->mem + off, len);
+    d->ops++;
+    return 0;
+}
+
+static int mem_pwrite(void *ctx, const void *buf, size_t len, uint64_t off)
+{
+    memdev_t *d = ctx;
+    if (off % d->bs || len % d->bs)
+        d->misaligned = true;
+    if (off + len > d->size)
+        return EIO;
+    memcpy(d->mem + off, buf, len);
+    d->ops++;
+    return 0;
+}
+
+static void test_cache_model(void)
+{
+    // 8 MiB less three sectors: the last 4 KiB page is short. A cache of 64 pages forces
+    // evictions and write-backs from inside reads and writes.
+    memdev_t d = { .size = (8u << 20) - 1536, .bs = 512 };
+    ue_io_t io = { .ctx = &d, .pread = mem_pread, .pwrite = mem_pwrite, .size_bytes = d.size,
+                   .block_size = 512, .writable = true };
+    uint8_t *shadow = malloc(d.size), *buf = malloc(1u << 20);
+    ue_bcache_t *bc = NULL;
+    ue_cache_stats_t st;
+    uint64_t rng = 0x5eed;
+
+    d.mem = malloc(d.size);
+    CHECK(shadow && buf && d.mem, "malloc");
+    for (uint64_t i = 0; i < d.size; i++)
+        shadow[i] = d.mem[i] = (uint8_t)(i * 7 + (i >> 9));
+    CHECK(bc_new(&io, 64 * 4096, &bc) == 0, "bc_new");
+    for (int op = 0; op < 20000; op++) {
+        rng = rng * 6364136223846793005ull + 1442695040888963407ull;
+        uint64_t r = rng >> 11;
+        // Mostly sector-aligned metadata-sized transfers, some large (direct), some at the end.
+        size_t len = (r % 4 == 0) ? (size_t)((r >> 3) % 2048 + 1) * 512 : (size_t)((r >> 3) % 8 + 1) * 512;
+        uint64_t off = ((r >> 20) % (d.size / 512)) * 512;
+        if ((r >> 40) % 16 == 0)
+            off = d.size - len < d.size ? d.size - len : 0;
+        if (off + len > d.size)
+            len = (size_t)(d.size - off);
+        int kind = (int)((r >> 50) % 10);
+        bc_set_cold(bc, (r >> 60) % 3 == 0);     // file data enters cold (evicted first)
+        if (kind < 4) {
+            for (size_t k = 0; k < len; k++)
+                buf[k] = (uint8_t)(rng >> (k % 56)) ^ (uint8_t)k;
+            CHECK(bc_write(bc, buf, len, off) == 0, "write");
+            memcpy(shadow + off, buf, len);
+        } else if (kind < 9) {
+            CHECK(bc_read(bc, buf, len, off) == 0, "read");
+            CHECK(memcmp(buf, shadow + off, len) == 0, "op %d: read of %zu at %llu differs", op, len,
+                  (unsigned long long)off);
+        } else {
+            CHECK(bc_writeback(bc) == 0 && bc_dirty(bc) == 0, "writeback");
+            CHECK(memcmp(d.mem, shadow, d.size) == 0, "op %d: device differs after write-back", op);
+        }
+    }
+    CHECK(bc_writeback(bc) == 0, "final writeback");
+    CHECK(memcmp(d.mem, shadow, d.size) == 0, "device differs at the end");
+    CHECK(!d.misaligned, "a device transfer was not sector-aligned");
+    bc_get_stats(bc, &st);
+    CHECK(st.hits > 0 && st.misses > 0 && st.evictions > 0 && st.direct_reads > 0 && st.direct_writes > 0,
+          "not every path ran: hits %llu misses %llu evictions %llu direct %llu/%llu",
+          (unsigned long long)st.hits, (unsigned long long)st.misses, (unsigned long long)st.evictions,
+          (unsigned long long)st.direct_reads, (unsigned long long)st.direct_writes);
+
+    // Coalescing: 256 scattered-then-adjacent 1 KiB writes become one transfer.
+    CHECK(bc_writeback(bc) == 0, "writeback");
+    for (int i = 255; i >= 0; i--)
+        CHECK(bc_write(bc, buf, 1024, (uint64_t)i * 1024) == 0, "small write");
+    uint64_t before = d.ops;
+    CHECK(bc_writeback(bc) == 0, "coalesced writeback");
+    CHECK(d.ops - before == 1, "256 KiB of adjacent dirty pages took %llu transfers",
+          (unsigned long long)(d.ops - before));
+    bc_free(bc);
+    free(d.mem);
+    free(shadow);
+    free(buf);
+}
+
+// Engine level: dirty metadata stays in the cache until written back, and the volume is
+// complete on the device after ue_writeback alone.
+static void test_cache_engine(void)
+{
+    wvol_t w;
+    ue_attr_t a;
+    ue_cache_stats_t st;
+    ue_probe_t p;
+    uint32_t saved = wflags;
+
+    wflags = UE_OPEN_CACHE;
+    int err = wopen(&w, "clean", "cache-engine");
+    wflags = saved;
+    CHECK(err == 0, "open: %s", strerror(err));
+    ue_ino_t root = root_of(w.e);
+    for (int i = 0; i < 200; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "f%03d", i);
+        WCHECK(ue_create(w.e, root, name, UE_T_REG, 0644, &a) == 0, "create %s", name);
+        WCHECK(write_gen(w.e, a.ino, 0, 3000 + (uint64_t)i * 100, (uint64_t)i) == 0, "write %s", name);
+        ue_release(w.e, a.ino);
+    }
+    ue_get_cache_stats(w.e, &st);
+    WCHECK(st.page_size == 4096 && st.dirty_pages > 0, "nothing dirty in the cache (%llu)",
+           (unsigned long long)st.dirty_pages);
+    WCHECK(ue_writeback(w.e, 60000) == 0, "young writeback");
+    ue_get_cache_stats(w.e, &st);
+    WCHECK(st.dirty_pages > 0, "written back before its age");
+    WCHECK(ue_writeback(w.e, 0) == 0, "writeback");
+    ue_get_cache_stats(w.e, &st);
+    WCHECK(st.dirty_pages == 0, "dirty after writeback");
+    // A second, uncached reader of the same image sees every file now.
+    file_io_t f2;
+    ue_engine_t *e2;
+    WCHECK(file_io_open(&f2, w.path, false) == 0, "open copy");
+    WCHECK(ue_open(&f2.io, UE_OPEN_RDONLY, &e2, NULL) == 0, "open second engine");
+    for (int i = 0; i < 200; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "f%03d", i);
+        err = ue_lookup(e2, root_of(e2), name, &a);
+        if (!err)
+            err = check_gen(e2, a.ino, 0, 3000 + (uint64_t)i * 100, (uint64_t)i);
+        if (err)
+            break;
+    }
+    ue_close(e2);
+    file_io_close(&f2);
+    WCHECK(err == 0, "second reader: %s", strerror(err));
+    CHECK(wclose(&w) == 0, "close");
+    CHECK(probe_file(w.path, &p) == 0 && p.state == UE_VOL_CLEAN, "probe");
+}
+
 #define RUN(t)                                     \
     do {                                           \
         int before = failures;                     \
@@ -1201,7 +1367,10 @@ int main(int argc, char **argv)
     }
     if (argc == 3 && strcmp(argv[1], "writeloop") == 0) {
         snprintf(dir, sizeof(dir), "%s", argv[2]);
-        int err = write_loop("clean", 30);
+        int err = write_loop("clean", 15);
+        wflags = UE_OPEN_CACHE;
+        if (!err)
+            err = write_loop("clean", 15);
         if (err)
             fprintf(stderr, "writeloop: %s\n", strerror(err));
         return err ? 1 : 0;
@@ -1247,19 +1416,28 @@ int main(int argc, char **argv)
     }
     file_io_close(&rd_file);
 
-    RUN(test_write_roundtrip);
-    RUN(test_create_rules);
-    RUN(test_readonly_engine);
-    RUN(test_remove);
-    RUN(test_rename_matrix);
-    RUN(test_setattr);
-    RUN(test_verifier);
-    RUN(test_enospc);
-    RUN(test_xattr);
-    RUN(test_links);
-    RUN(test_windows_links);
-    RUN(test_damaged_entry);
-    RUN(test_device_failure);
+    RUN(test_cache_model);
+    RUN(test_cache_engine);
+    for (int pass = 0; pass < 2; pass++) {
+        // Second pass: the same write tests with the page cache on (D-62).
+        wflags = pass ? UE_OPEN_CACHE : 0;
+        wtag = pass ? "c-" : "";
+        if (pass)
+            printf("-- write tests again, with UE_OPEN_CACHE\n");
+        RUN(test_write_roundtrip);
+        RUN(test_create_rules);
+        RUN(test_readonly_engine);
+        RUN(test_remove);
+        RUN(test_rename_matrix);
+        RUN(test_setattr);
+        RUN(test_verifier);
+        RUN(test_enospc);
+        RUN(test_xattr);
+        RUN(test_links);
+        RUN(test_windows_links);
+        RUN(test_damaged_entry);
+        RUN(test_device_failure);
+    }
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

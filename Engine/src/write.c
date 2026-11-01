@@ -108,7 +108,9 @@ static int real_links(ntfs_inode *ni)
     return ue_fill_attr(ni, &a) ? 1 : (int)a.nlink;
 }
 
-// Sets FILE_ATTR_HIDDEN|SYSTEM on an inode, so a ghost name stays out of sight on Windows.
+// Sets FILE_ATTR_HIDDEN on an inode, so a ghost name stays out of sight on Windows. Not
+// SYSTEM: libntfs-3g's readdir reads the data of every SYSTEM entry to sniff Interix types,
+// and an rm -r of thousands of files leaves thousands of ghosts in the root (D-63).
 static int mark_ghost(ue_engine_t *e, ue_ino_t ino)
 {
     ntfs_inode *ni;
@@ -116,7 +118,7 @@ static int mark_ghost(ue_engine_t *e, ue_ino_t ino)
 
     if (err)
         return err;
-    ni->flags |= FILE_ATTR_HIDDEN | FILE_ATTR_SYSTEM;
+    ni->flags |= FILE_ATTR_HIDDEN;
     NInoSetDirty(ni);
     NInoFileNameSetDirty(ni);
     return ue_iput(ni);
@@ -288,6 +290,7 @@ int ue_write(ue_engine_t *e, ue_ino_t ino, uint64_t off, const void *buf, size_t
         ue_iput(ni);
         return err;
     }
+    bc_set_cold(e->dev_ctx->cache, true);
     while (total < len) {
         s64 n = ntfs_attr_pwrite(na, (s64)(off + total), (s64)(len - total), (const char *)buf + total);
         if (n <= 0) {
@@ -296,6 +299,7 @@ int ue_write(ue_engine_t *e, ue_ino_t ino, uint64_t off, const void *buf, size_t
         }
         total += (size_t)n;
     }
+    bc_set_cold(e->dev_ctx->cache, false);
     ntfs_attr_close(na);
     if (total) {
         ntfs_inode_update_times(ni, NTFS_UPDATE_MCTIME);

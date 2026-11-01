@@ -122,8 +122,10 @@ static void serve(int s)
         reply(s, -1, EPERM, "not an NTFS volume");
         return;
     }
+    // The raw node: unlatch-fuse keeps its own page cache in front of it (D-62), and mixing
+    // the buffered and raw nodes of one disk would leave stale blocks in the buffer cache.
     char path[64];
-    snprintf(path, sizeof(path), "/dev/%s", bsd);
+    snprintf(path, sizeof(path), "/dev/r%s", bsd);
     int fd = open(path, strcmp(mode, "rw") ? O_RDONLY : O_RDWR);
     if (fd < 0) {
         int err = errno;

@@ -50,21 +50,21 @@ static void set_state(ue_probe_t *out, ue_vol_state_t state, const char *fmt, ..
 }
 
 // Mounts through the bridge. On failure returns NULL with errno set and frees everything.
-static ntfs_volume *mount_volume(const ue_io_t *io, ntfs_mount_flags flags, ue_dev_t **ctx_out)
+static ntfs_volume *mount_volume(const ue_io_t *io, ntfs_mount_flags flags, bool cached, ue_dev_t **ctx_out)
 {
     struct ntfs_device *dev;
     ntfs_volume *vol;
     ue_dev_t *ctx;
     int eo;
 
-    dev = ue_device_new(io, &ctx);
+    dev = ue_device_new(io, cached, &ctx);
     if (!dev)
         return NULL;
     vol = ntfs_device_mount(dev, flags);
     if (!vol) {
         eo = errno ? errno : EIO;
         ntfs_device_free(dev);     // ntfs_device_mount already closed it
-        free(ctx);
+        ue_device_free_ctx(ctx);
         errno = eo;
         return NULL;
     }
@@ -76,7 +76,7 @@ static int unmount_volume(ntfs_volume *vol, ue_dev_t *ctx)
 {
     int err = ntfs_umount(vol, FALSE) ? (errno ? errno : EIO) : 0;  // frees vol and the device
 
-    free(ctx);
+    ue_device_free_ctx(ctx);
     return err;
 }
 
@@ -155,7 +155,7 @@ int ue_probe(const ue_io_t *io, ue_probe_t *out)
     out->serial = sle64_to_cpu(bs.volume_serial_number);
 
     // Read-only mount: libntfs-3g skips its hiberfile and journal checks, so run them here.
-    vol = mount_volume(io, NTFS_MNT_RDONLY, &ctx);
+    vol = mount_volume(io, NTFS_MNT_RDONLY, false, &ctx);
     if (!vol) {
         err = errno;
         if (err == ENOMEM)
@@ -213,7 +213,7 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
 
     // Read-write without NTFS_MNT_MAY_RDONLY: hibernation and unclean journals fail the
     // open instead of degrading, so ue_probe stays the one place that decides.
-    vol = mount_volume(io, readonly ? NTFS_MNT_RDONLY : 0, &ctx);
+    vol = mount_volume(io, readonly ? NTFS_MNT_RDONLY : 0, (flags & UE_OPEN_CACHE) != 0, &ctx);
     if (!vol)
         return errno;
     // ntfs_volume_startup retries read-only on EROFS even without MAY_RDONLY (D-14).
@@ -272,6 +272,23 @@ int ue_close(ue_engine_t *e)
         err = uerr;
     free(e);
     return err;
+}
+
+int ue_writeback(ue_engine_t *e, uint32_t min_age_ms)
+{
+    if (!e)
+        return EINVAL;
+    if (e->dev_ctx->failed)
+        return EIO;
+    if (!e->dev_ctx->cache || bc_dirty_age_ms(e->dev_ctx->cache) < min_age_ms ||
+        bc_dirty(e->dev_ctx->cache) == 0)
+        return 0;
+    return ue_device_writeback(e->dev_ctx);
+}
+
+void ue_get_cache_stats(const ue_engine_t *e, ue_cache_stats_t *out)
+{
+    bc_get_stats(e ? e->dev_ctx->cache : NULL, out);
 }
 
 bool ue_is_readonly(const ue_engine_t *e)

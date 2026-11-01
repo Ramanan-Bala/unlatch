@@ -255,6 +255,7 @@ int ue_read(ue_engine_t *e, ue_ino_t ino, uint64_t off, void *buf, size_t len, s
     if (off < (uint64_t)na->data_size) {
         if (len > (uint64_t)na->data_size - off)
             len = (size_t)((uint64_t)na->data_size - off);
+        bc_set_cold(e->dev_ctx->cache, true);
         while (total < len) {
             // ntfs_attr_pread zero-fills past initialized_size and through sparse holes.
             s64 n = ntfs_attr_pread(na, (s64)(off + total), (s64)(len - total), (char *)buf + total);
@@ -266,6 +267,7 @@ int ue_read(ue_engine_t *e, ue_ino_t ino, uint64_t off, void *buf, size_t len, s
                 break;
             total += (size_t)n;
         }
+        bc_set_cold(e->dev_ctx->cache, false);
     }
     ntfs_attr_close(na);
     ue_iput(ni);

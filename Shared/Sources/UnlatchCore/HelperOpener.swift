@@ -12,7 +12,8 @@ public struct HelperOpener: DeviceOpener {
     public init() {}
 
     public func open(_ path: String, writable: Bool) throws -> Int32 {
-        let bsd = path.hasPrefix("/dev/") ? String(path.dropFirst(5)) : path
+        var bsd = path.hasPrefix("/dev/") ? String(path.dropFirst(5)) : path
+        if bsd.hasPrefix("rdisk") { bsd.removeFirst() }      // the helper opens the raw node itself
         let s = socket(AF_UNIX, SOCK_STREAM, 0)
         guard s >= 0 else { throw MountError.needsHelper(path) }
         defer { close(s) }

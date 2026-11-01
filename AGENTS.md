@@ -20,10 +20,10 @@ Each step updates this list.
 | Check tools, build libntfs-3g if missing, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
 | Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
-| Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
+| Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--no-cache] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
 | Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
-| Read-write suite through a mount (fresh images; xattrs, links, git clone) | `Tests/Fuse/rw-suite.sh --runs 3 [--no-git]` |
+| Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk) | `Tests/Fuse/rw-suite.sh --runs 3 [--no-git] [--disk]` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
 | Test UnlatchCore | `swift test --package-path Shared`; with attached images and macFUSE: `UNLATCH_INTEGRATION=1 swift test --package-path Shared` |

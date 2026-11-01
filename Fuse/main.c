@@ -14,6 +14,8 @@
 #include <getopt.h>
 #include <libgen.h>
 #include <limits.h>
+#include <pthread.h>
+#include <time.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +40,89 @@ static void usage(void)
             "                helper); the path then only names the volume\n"
             "  --backend B   macFUSE backend: kext (default) or fskit (no kernel extension;\n"
             "                mounts only under /Volumes; large reads fail on macOS 27, D-42)\n"
-            "  -o opt,...    extra macFUSE mount options\n");
+            "  -o opt,...    extra macFUSE mount options\n"
+            "  --no-cache    no engine page cache (for comparisons)\n");
+}
+
+// Dirty cached pages older than this are written back, so a crash or unplug loses at most
+// about this much metadata; the kernel's own buffer cache allows 30 s (D-62).
+#define WRITEBACK_MS 1000
+
+// The session loop is fuse_session_loop's, plus a lock: requests are processed one at a time
+// on this thread while holding fs->lock, and a timer thread takes the same lock to write back
+// dirty cached pages that are WRITEBACK_MS old. Engine calls stay serialized. (Polling the
+// session fd instead made rm -r 15x slower: macFUSE 5 does not signal every request on it.)
+typedef struct {
+    uf_fs_t *fs;
+    pthread_mutex_t *lock;
+    pthread_cond_t cond;
+    bool stop;
+} flusher_t;
+
+static void *flusher(void *arg)
+{
+    flusher_t *f = arg;
+
+    pthread_mutex_lock(f->lock);
+    while (!f->stop) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += (WRITEBACK_MS / 4) * 1000000L;
+        ts.tv_sec += ts.tv_nsec / 1000000000L;
+        ts.tv_nsec %= 1000000000L;
+        pthread_cond_timedwait(&f->cond, f->lock, &ts);
+        uf_fs_t *fs = f->fs;
+        if (!f->stop && fs->engine && !fs->read_only && ue_writeback(fs->engine, WRITEBACK_MS) == EIO &&
+            !fs->failed_logged) {
+            uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "writing cached metadata back failed; nothing more is written");
+            fs->failed_logged = true;
+        }
+    }
+    pthread_mutex_unlock(f->lock);
+    return NULL;
+}
+
+static int session_loop(struct fuse_session *se, uf_fs_t *fs)
+{
+    pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    flusher_t f = { .fs = fs, .lock = &lock, .cond = PTHREAD_COND_INITIALIZER };
+    struct fuse_buf buf = { .mem = NULL };
+    pthread_t thread = NULL;
+    bool have_thread = !fs->read_only && pthread_create(&thread, NULL, flusher, &f) == 0;
+    int res = 0;
+
+    while (!fuse_session_exited(se)) {
+        res = fuse_session_receive_buf(se, &buf);
+        if (res == -EINTR)
+            continue;
+        if (res <= 0)
+            break;
+        pthread_mutex_lock(&lock);
+        fuse_session_process_buf(se, &buf);
+        pthread_mutex_unlock(&lock);
+    }
+    if (have_thread) {
+        pthread_mutex_lock(&lock);
+        f.stop = true;
+        pthread_cond_signal(&f.cond);
+        pthread_mutex_unlock(&lock);
+        pthread_join(thread, NULL);
+    }
+    free(buf.mem);
+    if (res > 0)
+        res = 0;
+    fuse_session_reset(se);
+    return res < 0 ? -1 : 0;
+}
+
+// /dev/diskN -> /dev/rdiskN: the engine's page cache does what the buffer cache did, without
+// splitting large transfers (D-62). Other paths are used as given.
+static void raw_path(const char *in, char *out, size_t cap)
+{
+    if (!strncmp(in, "/dev/disk", 9))
+        snprintf(out, cap, "/dev/r%s", in + 5);
+    else
+        snprintf(out, cap, "%s", in);
 }
 
 static void record_status(const char *bsd_name, const ue_probe_t *p, bool read_only, bool mounted)
@@ -129,11 +213,12 @@ int main(int argc, char **argv)
         { "read-only", no_argument, NULL, 'R' },
         { "fd", required_argument, NULL, 'D' },
         { "ready-fd", required_argument, NULL, 'F' },
+        { "no-cache", no_argument, NULL, 'C' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     const char *backend = "kext", *extra = NULL;
-    bool foreground = false, debug = false, want_ro = false;
+    bool foreground = false, debug = false, want_ro = false, cache = true;
     int ch, ready_fd = -1, dev_fd = -1;
 
     while ((ch = getopt_long(argc, argv, "fdro:h", longopts, NULL)) != -1) {
@@ -145,6 +230,7 @@ int main(int argc, char **argv)
         case 'b': backend = optarg; break;
         case 'F': ready_fd = atoi(optarg); break;
         case 'D': dev_fd = atoi(optarg); break;
+        case 'C': cache = false; break;
         default: usage(); return ch == 'h' ? 0 : 2;
         }
     }
@@ -155,7 +241,9 @@ int main(int argc, char **argv)
     if (!foreground)
         return run_in_background(argc, argv, argv[optind + 1]);
     uf_log_init();
-    const char *source = argv[optind];
+    char source_raw[PATH_MAX];
+    raw_path(argv[optind], source_raw, sizeof(source_raw));
+    const char *source = source_raw;
     // mount_macfuse resolves a relative mount point against /, so make it absolute.
     char mountpoint[PATH_MAX];
     // /Volumes/<name> need not exist: mount_macfuse creates it there (users cannot), D-58.
@@ -167,14 +255,13 @@ int main(int argc, char **argv)
         return 1;
     }
     char source_copy[1024];
-    snprintf(source_copy, sizeof(source_copy), "%s", source);
+    snprintf(source_copy, sizeof(source_copy), "%s", argv[optind]);
     const char *bsd_name = basename(source_copy);
 
     file_io_t f;
     ue_probe_t p;
     int err;
-    // /dev/diskN is used as given: its buffer cache makes metadata work 8-12x faster than the
-    // raw /dev/rdiskN (sequential writes are 2.4x slower), D-51. /dev/rdiskN is honoured too.
+    // /dev/diskN is opened as /dev/rdiskN, with the engine's page cache in front (D-62).
     bool fd_writable = dev_fd >= 0 && (fcntl(dev_fd, F_GETFL) & O_ACCMODE) == O_RDWR;
     if ((err = dev_fd >= 0 ? file_io_from_fd(&f, dev_fd, fd_writable) : file_io_open(&f, source, false))) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", source, strerror(err));
@@ -223,11 +310,12 @@ int main(int argc, char **argv)
     }
     ue_probe_t info;
     ue_attr_t root;
-    err = ue_open(&f.io, fs.read_only ? UE_OPEN_RDONLY : 0, &fs.engine, &info);
+    uint32_t cflag = cache ? UE_OPEN_CACHE : 0;
+    err = ue_open(&f.io, (fs.read_only ? UE_OPEN_RDONLY : 0) | cflag, &fs.engine, &info);
     if (err == EROFS && !fs.read_only) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s is write-protected, read-only", source);
         fs.read_only = true;
-        err = ue_open(&f.io, UE_OPEN_RDONLY, &fs.engine, &info);
+        err = ue_open(&f.io, UE_OPEN_RDONLY | cflag, &fs.engine, &info);
     }
     if (err) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "open %s: %s", source, strerror(err));
@@ -275,7 +363,7 @@ int main(int argc, char **argv)
         }
         uf_log_set_stderr(0);
     }
-    rc = fuse_session_loop(se) == 0 ? 0 : 1;
+    rc = session_loop(se, &fs) == 0 ? 0 : 1;
     fuse_session_unmount(se);
     uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "unmounted %s", mountpoint);
 signals:
@@ -283,13 +371,9 @@ signals:
 destroy:
     fuse_session_destroy(se);
 close:
-    if (ue_has_failed(fs.engine))
-        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s failed during use; nothing more was written", source);
-    if ((err = ue_close(fs.engine))) {
-        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "closing %s: %s; the volume may need Windows chkdsk", source,
-               strerror(err));
+    uf_close_engine(&fs);             // normally already done on DESTROY
+    if (fs.close_err)
         rc = 1;
-    }
     free(fs.rbuf);
     free(fs.nodes);
     record_status(bsd_name, &p, fs.read_only, false);

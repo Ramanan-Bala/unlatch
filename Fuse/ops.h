@@ -26,7 +26,12 @@ typedef struct {
     char *rbuf;                       // read buffer, reused (the loop is single-threaded)
     size_t rbuf_cap;
     size_t cap, count;
+    bool failed_logged;               // a failed write-back was logged once
+    int close_err;                    // from ue_close, once closed
 } uf_fs_t;
+
+// Closes the engine once (on FUSE DESTROY, or after the loop if that never came) and logs.
+void uf_close_engine(uf_fs_t *fs);
 
 extern const struct fuse_lowlevel_ops uf_ops;
 

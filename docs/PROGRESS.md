@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
-| Next step | 15 Speed (disk path, D-51/D-52) |
+| Last completed step | 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Next step | 17 Robustness |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -538,17 +538,47 @@ $U doctor
 - `chkdsk /scan` of the Seagate on Windows after its first real write.
 - Removing the stale `/Volumes/UnlatchTest` from the FSKit tests (`sudo rmdir`).
 
+### Step 15: Speed on the disk path (re-scoped, D-62) — done 2026-11-01
+
+Re-scoped: there is no kernel-offloaded I/O through macFUSE, so the step became I/O-size, caching and threading work on the disk path (D-62, D-64).
+
+**Done:**
+- Engine page cache (`Engine/src/bcache.c`, `UE_OPEN_CACHE`): 4 KiB pages, 32 MiB, read-ahead, coalesced write-back, direct transfers of 64 KiB and more, cold file data, clean-first eviction. Seam: `ue_writeback`, `ue_get_cache_stats`. A failed write-back is a device failure (D-46).
+- `unlatch-fuse`: opens `/dev/rdiskN` for `/dev/diskN`; a write-back timer thread (pages 1 s old) under the request lock; the volume closes in FUSE `destroy`, so `umount` returns after everything is on the disk; cache statistics logged at unmount; `--no-cache`.
+- Helper and `MountService` hand over the raw node.
+- Ghosts are HIDDEN only (D-63); that was the cause of a 10× small-file regression with the cache.
+- Tests: `test_cache_model` (20,000 random ops against an in-memory device with a 64-page cache and a short last page; cold mode; coalescing), `test_cache_engine`, and every write test runs a second time with the cache on. `Tests/Fuse/rw-suite.sh --disk` runs the suite on an attached disk.
+
+**Verify:**
+```sh
+xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh          # test_cache_model, test_cache_engine, "write tests again, with UE_OPEN_CACHE"
+Scripts/fsx-soak.sh --regressions
+Tests/Fuse/rw-suite.sh --runs 3                    # image files
+Tests/Fuse/rw-suite.sh --runs 2 --disk             # attached disks: rdisk + cache
+UNLATCH_INTEGRATION=1 swift test --package-path Shared; swift test --package-path CLI
+Bench/baselines.sh --runs 3 unlatch                # numbers in docs/M0-gate.md
+```
+
+**Left:**
+- The full benchmark rerun (all setups), deferred to the end at the owner's request.
+- Windows chkdsk of a suite image written through the cache (needs the VM; asked for with Step 17).
+- The installed helper on the owner's Mac still opens the buffered node until `sudo unlatch install-helper` is run again; `unlatch-fuse` works with either.
+
+**Surprises:**
+- The first cache version halved small-file speed. Tracing the misses showed a cyclic scan of 14,000 pages: ghosts flagged SYSTEM, re-read by libntfs-3g's readdir (D-63).
+- Polling the macFUSE session fd delays requests (D-64).
+- Without closing in `destroy`, `umount` returned while dirty pages were still being written; a probe right after it raced the daemon.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07 (VM available now):** Windows-made golden images (`Tests/Images/README.md`).
 - **Step 17:** native Windows symlinks for on-volume targets (D-55).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
-- **Step 15:** close the disk-path gap (D-51, D-52): engine-side block cache over `/dev/rdiskN`, coalesced transfers, a multi-threaded session loop; check whether the kext mount's `synchronous` flag costs writes.
 - **Step 16/17:** readdir cookies are index positions; deleting entries while a listing is in progress could shift later entries. `rm -rf` of 1,000-file trees passes because fts reads a directory fully before deleting; test a concurrent writer in Step 17.
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
-- **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
 - **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
 - **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.

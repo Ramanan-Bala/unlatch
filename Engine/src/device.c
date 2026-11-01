@@ -33,13 +33,36 @@ static int dev_open(struct ntfs_device *dev, int flags)
     return 0;
 }
 
+int ue_device_writeback(ue_dev_t *c)
+{
+    int err;
+
+    if (c->failed)
+        return EIO;
+    if ((err = bc_writeback(c->cache))) {
+        c->failed = true;             // what reached the disk is unknown: stop all I/O (D-46)
+        return err;
+    }
+    return 0;
+}
+
 static int dev_close(struct ntfs_device *dev)
 {
+    ue_dev_t *c = CTX(dev);
+    int err = 0;
+
     if (!NDevOpen(dev)) {
         errno = EBADF;
         return -1;
     }
+    // Nothing cached may be lost at close; after a failure nothing more is written.
+    if (!NDevReadOnly(dev) && bc_dirty(c->cache))
+        err = ue_device_writeback(c);
     NDevClearOpen(dev);
+    if (err) {
+        errno = err;
+        return -1;
+    }
     return 0;
 }
 
@@ -80,7 +103,8 @@ static s64 dev_pread(struct ntfs_device *dev, void *buf, s64 count, s64 offset)
         return 0;
     if ((uint64_t)count > c->io.size_bytes - (uint64_t)offset)
         count = (s64)(c->io.size_bytes - (uint64_t)offset);
-    err = c->io.pread(c->io.ctx, buf, (size_t)count, (uint64_t)offset);
+    err = c->cache ? bc_read(c->cache, buf, (size_t)count, (uint64_t)offset)
+                   : c->io.pread(c->io.ctx, buf, (size_t)count, (uint64_t)offset);
     if (err) {
         if (err == ENXIO || err == ENODEV)
             c->failed = true;         // the device is gone (surprise removal)
@@ -116,9 +140,10 @@ static s64 dev_pwrite(struct ntfs_device *dev, const void *buf, s64 count, s64 o
     if ((uint64_t)count > c->io.size_bytes - (uint64_t)offset)
         count = (s64)(c->io.size_bytes - (uint64_t)offset);
     NDevSetDirty(dev);
-    err = c->io.pwrite(c->io.ctx, buf, (size_t)count, (uint64_t)offset);
+    err = c->cache ? bc_write(c->cache, buf, (size_t)count, (uint64_t)offset)
+                   : c->io.pwrite(c->io.ctx, buf, (size_t)count, (uint64_t)offset);
     if (err) {
-        // Never retry a write: what reached the disk is unknown, so stop all I/O (Step 10).
+        // A cached write fails only when writing back to make room failed. Never retry a write: what reached the disk is unknown, so stop all I/O (Step 10).
         c->failed = true;
         errno = err;
         return -1;
@@ -155,6 +180,10 @@ static int dev_sync(struct ntfs_device *dev)
     }
     if (NDevReadOnly(dev) || !NDevDirty(dev))
         return 0;
+    if ((err = ue_device_writeback(c))) {
+        errno = err;
+        return -1;
+    }
     if (c->io.flush) {
         err = c->io.flush(c->io.ctx);
         if (err) {
@@ -211,22 +240,36 @@ static struct ntfs_device_operations ue_device_ops = {
     .ioctl = dev_ioctl,
 };
 
-struct ntfs_device *ue_device_new(const ue_io_t *io, ue_dev_t **ctx_out)
+struct ntfs_device *ue_device_new(const ue_io_t *io, bool cached, ue_dev_t **ctx_out)
 {
     struct ntfs_device *dev;
     ue_dev_t *c;
+    int err;
 
     c = calloc(1, sizeof(*c));
     if (!c)
         return NULL;
     c->io = *io;
+    if (cached && (err = bc_new(io, UE_CACHE_BYTES, &c->cache))) {
+        free(c);
+        errno = err;
+        return NULL;
+    }
     dev = ntfs_device_alloc("unlatch", 0, &ue_device_ops, c);
     if (!dev) {
         int eo = errno;
-        free(c);
+        ue_device_free_ctx(c);
         errno = eo;
         return NULL;
     }
     *ctx_out = c;
     return dev;
+}
+
+void ue_device_free_ctx(ue_dev_t *c)
+{
+    if (c) {
+        bc_free(c->cache);
+        free(c);
+    }
 }

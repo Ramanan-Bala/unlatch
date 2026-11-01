@@ -13,15 +13,35 @@
 
 #include "unlatch_engine.h"
 
+// Page cache (bcache.c, D-62). Not thread-safe, like the rest of the engine.
+typedef struct ue_bcache ue_bcache_t;
+#define UE_CACHE_BYTES (32u << 20)
+int bc_new(const ue_io_t *io, size_t bytes, ue_bcache_t **out);
+void bc_free(ue_bcache_t *bc);
+int bc_read(ue_bcache_t *bc, void *buf, size_t len, uint64_t off);
+int bc_write(ue_bcache_t *bc, const void *buf, size_t len, uint64_t off);
+int bc_writeback(ue_bcache_t *bc);    // all dirty pages
+// File data (ue_read/ue_write) is cached cold: new pages are evicted first, so a stream of
+// small files does not push metadata out.
+void bc_set_cold(ue_bcache_t *bc, bool cold);
+size_t bc_dirty(const ue_bcache_t *bc);
+uint64_t bc_dirty_age_ms(const ue_bcache_t *bc);
+void bc_get_stats(const ue_bcache_t *bc, ue_cache_stats_t *out);
+
 // Device bridge: one per mounted volume, owned by the engine (or the probe).
 typedef struct ue_dev {
     ue_io_t io;
     uint64_t pos;                     // seek position for read/write
     bool failed;                      // a write failed or the device went away: all I/O -> EIO
+    ue_bcache_t *cache;               // NULL without UE_OPEN_CACHE
 } ue_dev_t;
 
-// Allocates an ntfs_device backed by io. On success *ctx_out must outlive the device.
-struct ntfs_device *ue_device_new(const ue_io_t *io, ue_dev_t **ctx_out);
+// Allocates an ntfs_device backed by io, with a page cache if `cached`. On success *ctx_out
+// must outlive the device; ue_device_free_ctx releases it.
+struct ntfs_device *ue_device_new(const ue_io_t *io, bool cached, ue_dev_t **ctx_out);
+void ue_device_free_ctx(ue_dev_t *ctx);
+// Writes the cache back; a failure marks the device failed. 0 or errno.
+int ue_device_writeback(ue_dev_t *ctx);
 
 // Held-inode table (held.c), keyed by MFT record number.
 typedef struct {

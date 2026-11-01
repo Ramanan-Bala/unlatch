@@ -51,7 +51,8 @@ typedef struct {
     struct timespec birth, mtime, ctime, atime;
 } ue_attr_t;
 
-enum { UE_OPEN_RDONLY = 1 };
+enum { UE_OPEN_RDONLY = 1,
+       UE_OPEN_CACHE = 2 /* write-back page cache in front of the device (Step 15, D-62) */ };
 enum { UE_SET_SIZE = 1, UE_SET_MTIME = 2, UE_SET_ATIME = 4, UE_SET_BIRTH = 8, UE_SET_CTIME = 16, UE_SET_FLAGS = 32, UE_SET_MODE = 64 };
 enum { UE_RENAME_EXCL = 1 };
 
@@ -131,7 +132,24 @@ int  ue_xattr_remove(ue_engine_t *e, ue_ino_t ino, const char *name);
 int  ue_readlink(ue_engine_t *e, ue_ino_t ino, const char *mount_point, char *buf, size_t size);
 int  ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *target, ue_attr_t *out);
 int  ue_link(ue_engine_t *e, ue_ino_t ino, ue_ino_t newdir, const char *newname, ue_attr_t *out);
-// later: ue_blockmap / ue_complete_io (Step 15)
+// Page cache (Step 15, D-62), with UE_OPEN_CACHE. libntfs-3g's small metadata transfers
+// (MFT records, index blocks, bitmaps) are kept in 4 KiB pages and written back sorted and
+// coalesced; transfers of 64 KiB and more go straight to the device. Dirty pages reach the
+// device on ue_writeback, ue_sync (which then flushes the device), ue_close, or when the
+// cache is full. A failed write-back is a device failure (ue_has_failed).
+// ue_writeback writes dirty pages back if the oldest has been dirty for at least min_age_ms
+// (0: now); it does not flush the device's own cache.
+typedef struct {
+    uint64_t hits, misses, evictions;
+    uint64_t writebacks;              // write-back transfers (each may cover many pages)
+    uint64_t direct_reads, direct_writes;
+    uint64_t read_bytes, write_bytes; // device traffic through the cache layer
+    uint64_t dirty_pages;
+    uint64_t writeback_us;            // time spent writing back
+    uint32_t page_size;               // 0: no cache
+} ue_cache_stats_t;
+int  ue_writeback(ue_engine_t *e, uint32_t min_age_ms);
+void ue_get_cache_stats(const ue_engine_t *e, ue_cache_stats_t *out);
 
 #ifdef __cplusplus
 }

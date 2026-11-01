@@ -37,3 +37,19 @@ The gate is judged like for like, because that compares what Unlatch controls: t
 - **Disposable external SSD:** the plan's run on a real drive over a real port needs a drive from the owner. Use `Bench/run.sh <mount> <label> --device rdiskN` on it.
 - **Larger-than-RAM file:** the `mkfile` test is skipped, since the images are 4 GiB on an 8 GiB Mac.
 - **FSKit backend:** not benchmarked; its large reads fail (D-42).
+
+## Step 15: disk path before and after the page cache (D-62)
+
+`unlatch` setup only (the attached 4 GiB disk), median of 3, same Mac. "Before" is commit 14e5f67 (buffered `/dev/diskN`, D-51). "First cache" is the cache over `/dev/rdiskN` before the D-63 fix and the eviction change.
+
+| Test | Before | First cache | Change |
+|---|---:|---:|---:|
+| Sequential write | 448 MB/s (2.40 s) | 2,744 MB/s (0.39 s) | 6.1× |
+| Sequential read, cold | 294 MB/s (3.66 s) | 1,788 MB/s (0.60 s) | 6.1× |
+| Sequential read, warm | 13,100 MB/s | 13,880 MB/s | same (page cache) |
+| Small files (30,000) | 1,113 files/s (27.0 s) | 452 files/s (66.4 s) | regression, fixed below |
+| Metadata (10,000 × 3) | 496 ops/s (60.5 s) | 182 ops/s (164.6 s) | regression, fixed below |
+
+The first cache made small files and metadata slower. The cause was ghosts (D-25): `rm -r` of thousands of files left thousands of ghost names in the root, flagged SYSTEM, and libntfs-3g's readdir reads the data of every SYSTEM entry, so each listing of the root re-read all of them (268,000 cache misses in one run). Ghosts are now HIDDEN only (D-63), file data enters the cache cold, and eviction prefers clean pages. With those, a 10,000-file run of the same workload on the disk path has 15 misses in total, and the metadata test runs at about 2,400 ops/s (3,000 files × 3 ops in 3.7 s), against 496 before.
+
+The full rerun of `Bench/baselines.sh` (all setups, median of 5) is left for the end of the release work, at the owner's request.
