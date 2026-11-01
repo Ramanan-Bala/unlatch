@@ -17,13 +17,19 @@ Each step updates this list.
 
 | What | Command |
 |---|---|
-| Check tools, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
+| Check tools, build libntfs-3g if missing, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
+| Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
 | Test UnlatchCore | `swift test --package-path Shared` |
 | Build CLI | `swift build --package-path CLI` |
 | Run CLI | `swift run --package-path CLI unlatch --help` |
+| Make a test NTFS image (prints its path) | `Scripts/make-image.sh t1 512m T1` |
+| Inspect an image | `build/ntfs3g/bin/ntfsinfo -m t1.img`, `build/ntfs3g/bin/ntfsls -s t1.img` |
+| Attach an image as a block device, unmounted (prints `diskN`) | `Scripts/attach-image.sh t1.img`; detach with `hdiutil detach diskN` |
+
+ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster ntfscmp ntfscp ntfsfix ntfsinfo ntfslabel ntfsls ntfsresize ntfsundelete`. Put images under `build/` (ignored) or anywhere else outside the repo; `*.img` is ignored everywhere.
 
 `Unlatch.xcodeproj` is generated from `project.yml` and is not committed. After changing `project.yml`, run `Scripts/bootstrap.sh` again.
 
@@ -32,7 +38,8 @@ Builds are ad-hoc signed (`CODE_SIGN_IDENTITY = -`). The entitlements files in `
 ## Layout
 
 ```
-Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c, vendor/ntfs-3g (Step 02)
+Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c,
+             vendor/ntfs-3g (pinned in vendor/VERSION), vendor/patches/
 EngineTool/  unlatch-engine host harness (works on image files)
 Extension/   Swift FSKit module
 Shared/      Swift package UnlatchCore
@@ -47,7 +54,8 @@ Scripts/     build and release scripts
 
 - **Swift:** Swift 6 language mode with strict concurrency (`SWIFT_STRICT_CONCURRENCY = complete` in Xcode; `swift-tools-version: 6.0` in packages).
 - **C:** C11, compiled with `-Wall -Wextra -Werror` in `Engine/` and `EngineTool/`.
-- **Engine boundary:** no ntfs-3g headers outside `Engine/src`. Everything else includes only `Engine/include/unlatch_engine.h` (prefix `ue_`).
+- **Engine boundary:** no ntfs-3g headers outside `Engine/src`. Everything else includes only `Engine/include/unlatch_engine.h` (prefix `ue_`). Only the `UnlatchEngine` target has `build/ntfs3g/include` on its header search path.
+- **Vendored code:** never edit `Engine/vendor/ntfs-3g/`. Fixes go in `Engine/vendor/patches/`. To bump the version, replace the tree from the release tarball and update `Engine/vendor/VERSION`.
 - **Errors:** engine functions return 0 or a POSIX `errno` value.
 - **Architecture:** arm64 only, macOS 27+.
 - **License header:** new source files start with `SPDX-License-Identifier: GPL-3.0-or-later`.

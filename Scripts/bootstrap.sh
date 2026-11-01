@@ -15,6 +15,11 @@ command -v xcodegen >/dev/null || fail "XcodeGen not found. Install with: brew i
 command -v git-lfs >/dev/null || fail "Git LFS not found. Install with: brew install git-lfs"
 
 git lfs install --local >/dev/null
+
+if [ ! -f build/ntfs3g/lib/libntfs-3g.a ]; then
+    Scripts/build-ntfs3g.sh
+fi
+
 xcodegen generate
 
 echo "bootstrap: OK ($(xcodebuild -version | head -1), XcodeGen $(xcodegen --version | awk '{print $2}'), $(git lfs version | awk '{print $1}'))"

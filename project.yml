@@ -74,8 +74,19 @@ targets:
     settings:
       base:
         PRODUCT_NAME: UnlatchEngine
-        HEADER_SEARCH_PATHS: $(SRCROOT)/Engine/include
+        # ntfs-3g headers are visible to this target only (built by Scripts/build-ntfs3g.sh).
+        HEADER_SEARCH_PATHS: [$(SRCROOT)/Engine/include, $(SRCROOT)/build/ntfs3g/include]
         OTHER_CFLAGS: [-Wall, -Wextra, -Werror]
+        # Merge libntfs-3g.a into libUnlatchEngine.a so consumers link one archive (D-11).
+        OTHER_LIBTOOLFLAGS: $(SRCROOT)/build/ntfs3g/lib/libntfs-3g.a
+    preBuildScripts:
+      - name: Check libntfs-3g
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ ! -f "$SRCROOT/build/ntfs3g/lib/libntfs-3g.a" ]; then
+            echo "error: build/ntfs3g/lib/libntfs-3g.a missing. Run Scripts/bootstrap.sh or Scripts/build-ntfs3g.sh."
+            exit 1
+          fi
 
   unlatch-engine:
     type: tool

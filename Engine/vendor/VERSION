@@ -1,0 +1,8 @@
+# Vendored libntfs-3g + ntfsprogs. Engine/vendor/ntfs-3g is the release tarball extracted
+# with --strip-components 1; local changes go in Engine/vendor/patches/ only.
+name=ntfs-3g
+tag=2026.9.28
+url=https://www.tuxera.com/opensource/ntfs-3g_ntfsprogs-2026.9.28.tgz
+sha256=350d9415c59f7c3fa74e23985ad2d56423c6a168337368f672e2e362d8f295c8
+upstream=https://github.com/tuxera/ntfs-3g/releases/tag/2026.9.28
+license=GPL-2.0-or-later (COPYING), LGPL-2.0-or-later for some files (COPYING.LIB)

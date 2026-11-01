@@ -5,8 +5,9 @@
 | Field | Value |
 |---|---|
 | Current phase | 0 Foundations |
-| Last completed step | 01 Repository scaffold (2026-11-01) |
-| Next step | 02 Vendor and build libntfs-3g plus ntfsprogs |
+| Last completed step | 02 Vendor and build libntfs-3g plus ntfsprogs (2026-11-01) |
+| Next step | 03 Engine core (device bridge, probe, open/close) and host harness |
+| libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
 ### Risk register
@@ -45,15 +46,51 @@ swift run --package-path CLI unlatch --help
 ```
 All pass from a clean checkout (also `xcodebuild -scheme unlatch-engine build`).
 
-**Left:** create the public GitHub repo `Ramanan-Bala/unlatch` and push (task 7). The session was not permitted to create a public repo, so the owner has to run `gh repo create Ramanan-Bala/unlatch --public --source . --remote origin --push`.
+**Left:** nothing. The owner created the public repo `Ramanan-Bala/unlatch` and pushed it (task 7), because the session was not allowed to create a public repo.
 
 **Surprises:**
 - XcodeGen rewrites an entitlements file from `project.yml` whenever the target has an `entitlements:` key, so files with no `properties` come out empty.
 - With App Group or FSKit entitlements applied, ad-hoc builds fail: "requires a provisioning profile". The entitlements are kept unapplied for now (D-06).
 - `xcodebuild` prints a "CoreSimulator is out of date" warning on this machine. It is harmless for macOS builds.
 
+### Step 02: Vendor and build libntfs-3g plus ntfsprogs — done 2026-11-01
+
+**Done:**
+- Pinned ntfs-3g **2026.9.28**, the latest stable release (D-09). The release tarball's SHA-256 matches the published value. It is extracted into `Engine/vendor/ntfs-3g/` (`COPYING` GPL-2.0, `COPYING.LIB`), with the pin in `Engine/vendor/VERSION`.
+- `Scripts/build-ntfs3g.sh` builds out of tree into `build/ntfs3g/{lib,include,bin}`: arm64, macOS 27, no FUSE, no mount helper, no crypto, no plugins, no nfconv, static only (D-10, D-12). It applies `Engine/vendor/patches/*.patch` (none needed) and runs `autoreconf` only if `configure` is missing.
+- `Scripts/make-image.sh <name> <size> [label]` (mkfile -n + mkntfs -F -Q -L, prints the path) and `Scripts/attach-image.sh <img>` (prints `diskN`).
+- `UnlatchEngine` now has a private header path to `build/ntfs3g/include`, and `libntfs-3g.a` is merged into `libUnlatchEngine.a` (D-11). A pre-build check fails with a clear message if the library is missing. `Scripts/bootstrap.sh` builds it when missing.
+
+**Verify:**
+```sh
+rm -rf build && Scripts/bootstrap.sh            # builds libntfs-3g from scratch (~20 s)
+lipo -info build/ntfs3g/lib/libntfs-3g.a        # arm64
+mkdir -p build/images && cd build/images
+../../Scripts/make-image.sh t1 512m T1          # prints .../t1.img
+../ntfs3g/bin/ntfsinfo -m t1.img                # Volume Name: T1, Version 3.1
+../ntfs3g/bin/ntfsls -s -l t1.img               # root: $MFT, $LogFile, ... (plain ntfsls prints nothing: root is empty)
+cd ../.. && xcodebuild -scheme Unlatch build
+nm -g build/DerivedData/Build/Products/Debug/libUnlatchEngine.a | grep ' T _ntfs_device_mount'   # with -derivedDataPath build/DerivedData
+ls Engine/vendor/ntfs-3g/COPYING*
+```
+I also tested write and read-back with `ntfscp`/`ntfscat`, and an `attach-image.sh` then `hdiutil detach` cycle on `t1.img`. diskutil reports the attached disk as NTFS, not mounted. I verified `build-ntfs3g.sh` on a fresh `git clone` of the step commit.
+
+**Left:** nothing in scope.
+
+**Surprises:**
+- `tuxera.com` answers with a 301 redirect to `www.tuxera.com` and stalls when you follow it. Download from `https://www.tuxera.com/...` directly.
+- On non-Linux hosts, configure's `install-exec-hook` moves `libntfs-3g.so*` to `/lib` unless you pass `--exec-prefix`. That flag fixes it without a patch.
+- No macOS patches were needed. Upstream compiles with a few warnings: unused variables, packed-member addresses, and "Trimming not supported" in `ioctl.c`.
+- `hdiutil attach -nomount` and `hdiutil detach` now print deprecation warnings that recommend `diskutil image attach --noMount` and `diskutil eject`. They still work.
+- macOS identifies the attached image as NTFS (`File System Personality: NTFS`). With `-nomount`, Apple's driver does not mount it.
+
 ## Carry-overs
 
 - **Step 08:** set a development team and reference `Extension/Resources/UnlatchFSModule.entitlements` and `App/Resources/Unlatch.entitlements` from `project.yml` (D-06). The extension cannot load without `com.apple.developer.fskit.fsmodule`. Keep an ad-hoc build path for CI (Step 07), for example an xcconfig override.
 - **Step 08:** `Extension/Sources/UnlatchFSModule.swift` is a placeholder with no `@main`; the appex builds but is not a working extension.
+- **Step 03:** installed ntfs-3g headers depend on feature macros (`HAVE_STDINT_H`, etc.) that normally come from `config.h`. Engine sources may need `-DHAVE_CONFIG_H` with `build/ntfs3g-obj/config.h` on the path, or explicit defines. Check this when the first `#include <ntfs-3g/volume.h>` goes in.
+- **Step 03:** the ntfs-3g build sets no `-DDEBUG` and no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging.
+- **Step 07 (CI):** cache `build/ntfs3g`, keyed on `Engine/vendor/VERSION` plus `Engine/vendor/patches/*` plus `Scripts/build-ntfs3g.sh`.
+- **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
+- **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.
 - **Step 18:** `ENABLE_HARDENED_RUNTIME` is already on; Developer ID signing and notarization are not set up.
