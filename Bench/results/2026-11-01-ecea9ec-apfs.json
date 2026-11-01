@@ -1,0 +1,23 @@
+{
+  "label": "apfs",
+  "commit": "ecea9ec",
+  "date": "2026-11-01T11:54:01Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "/dev/disk7s1 on /Volumes/BAPFS (apfs, local, nodev, nosuid, journaled, noowners, mounted by ramanan)",
+  "runs": 5, "mib": 1024, "small_files": 30000, "metadata_files": 10000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 0.396384,
+    "seq_read_cold": 0.450210,
+    "seq_read_warm": 0.077465,
+    "small_files": 9.102341,
+    "metadata": 1.183858,
+    "raw_read": 0.471716
+  },
+  "mb_per_s": {
+    "seq_write": 2708.8, "seq_read_cold": 2385.0, "seq_read_warm": 13861.0, "raw_read": 2276.2
+  },
+  "small_files_per_s": 3296,
+  "metadata_ops_per_s": 25341
+}

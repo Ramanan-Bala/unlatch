@@ -4,9 +4,9 @@
 
 | Field | Value |
 |---|---|
-| Current phase | 2 Mounting (macFUSE, D-39) |
-| Last completed step | 16 xattrs, links, flags (2026-11-01, brought forward; Windows check left). 10 write path. 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
-| Next step | 11 Benchmark harness and M0 gate |
+| Current phase | 3 Mount management |
+| Last completed step | 11 benchmarks and M0 gate: **GO** (2026-11-01). 16 done early; 10 write path. 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Next step | 12 UnlatchCore: DiskWatcher, StatusStore, MountService |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -14,7 +14,7 @@
 
 | Risk | Where it is settled | Fallback | State |
 |---|---|---|---|
-| FSKit read-write throughput too low | Step 11 gate, Step 15 KOIO | Bring KOIO forward; NO-GO review | open |
+| Read-write throughput too low | Step 11 gate, Step 15 | NO-GO review | settled at M0: GO like for like (D-52); disk path slow, Step 15 |
 | libntfs-3g custom device quirks | Step 03 | Patch in `Engine/vendor/patches/` | settled: works unpatched, one EROFS workaround (D-14) |
 | Restricted entitlement on the CLI | Step 12 S1 | CLI talks to the app over XPC | open |
 | Apple's NTFS driver wins the mount race | Step 12 S2 | Unmount-and-swap | open |
@@ -404,12 +404,37 @@ Tagged copy: `FileManager.copyItem` of a file tagged Red and Work onto the mount
 - `ue_xattr_list` first skipped every small xattr: `lowest_vcn` overlaps the value header of resident attributes.
 - Showing read-only as `uchg` broke git, because git deletes its own 0444 pack files.
 
+### Step 11: Benchmark harness and M0 gate — done 2026-11-01: **GO**
+
+**Done:**
+- \`Bench/io.c\` (timed primitives), \`Bench/run.sh\` (median of N, JSON into \`Bench/results/\`, \`--remount\` for cold reads, \`--device\` for raw reads), \`Bench/baselines.sh\` (APFS, exFAT, stock ntfs-3g, Unlatch on the image file, Unlatch on the disk, each on a 4 GiB image), \`Bench/compare.py\` (markdown table), \`Bench/README.md\`.
+- \`Scripts/build-ntfs3g.sh --driver\`: stock ntfs-3g and lowntfs-3g against macFUSE's libfuse 2, a baseline only. The sanitizer condition is fixed (it applied to any variant).
+- \`unlatch-fuse\` back to the buffered \`/dev/diskN\` (D-51).
+- \`docs/M0-gate.md\`: numbers, thresholds and verdict (D-52).
+
+**Verify:**
+\`\`\`sh
+Scripts/build-ntfs3g.sh --driver
+Bench/baselines.sh            # ~25 min on this 8 GiB M2; or name setups: Bench/baselines.sh --runs 3 unlatch
+Bench/compare.py
+\`\`\`
+
+**Left:** the disposable external SSD run (owner's drive), and the larger-than-RAM \`mkfile\` test.
+
+**Surprises:**
+- Stock ntfs-3g refuses block devices for an unprivileged user with an external libfuse.
+- An attached image is locked against other openers.
+- An APFS image attaches as a physical store plus a separate volume device.
+- \`diskutil unmount\` has no \`-quiet\`.
+- macOS bash 3.2 has no associative arrays.
+- An earlier run went slowly because \`rm -rf\` of 30,000 files per run sits outside the timed part and the Mac was swapping; it was not a hang.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Owner (blocks Step 07 "Done when"):** Windows-made golden images, once the Windows VM exists (`Tests/Images/README.md`).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
-- **Step 11:** the kext mount shows `synchronous`; check whether that comes from macFUSE defaults and what it costs for writes.
+- **Step 15:** close the disk-path gap (D-51, D-52): engine-side block cache over `/dev/rdiskN`, coalesced transfers, a multi-threaded session loop; check whether the kext mount's `synchronous` flag costs writes.
 - **Step 16/17:** readdir cookies are index positions; deleting entries while a listing is in progress could shift later entries. `rm -rf` of 1,000-file trees passes because fts reads a directory fully before deleting; test a concurrent writer in Step 17.
 - **Step 12:** when the app launches `unlatch-fuse`, it can use `-f` under launchd or the default `posix_spawn` backgrounding (D-45).
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).

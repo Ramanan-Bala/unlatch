@@ -165,13 +165,8 @@ int main(int argc, char **argv)
     file_io_t f;
     ue_probe_t p;
     int err;
-    // /dev/diskN goes through the buffer cache; the raw node is 3x faster for the engine's
-    // block-aligned transfers (file_io bounces anything unaligned).
-    char raw[PATH_MAX];
-    if (strncmp(source, "/dev/disk", 9) == 0) {
-        snprintf(raw, sizeof(raw), "/dev/r%s", source + 5);
-        source = raw;
-    }
+    // /dev/diskN is used as given: its buffer cache makes metadata work 8-12x faster than the
+    // raw /dev/rdiskN (sequential writes are 2.4x slower), D-51. /dev/rdiskN is honoured too.
     if ((err = file_io_open(&f, source, false))) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", source, strerror(err));
         return 1;

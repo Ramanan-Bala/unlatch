@@ -1,0 +1,22 @@
+{
+  "label": "ntfs3g",
+  "commit": "ecea9ec",
+  "date": "2026-11-01T12:04:32Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "/Users/ramanan/Projects/Unlatch/build/bench/ntfs3g.img on /Users/ramanan/Projects/Unlatch/build/bench/m (macfuse, nodev, nosuid, synchronous, mounted by ramanan)",
+  "runs": 5, "mib": 1024, "small_files": 30000, "metadata_files": 10000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 1.152074,
+    "seq_read_cold": 0.378952,
+    "seq_read_warm": 0.572814,
+    "small_files": 13.067739,
+    "metadata": 14.166729
+  },
+  "mb_per_s": {
+    "seq_write": 932.0, "seq_read_cold": 2833.5, "seq_read_warm": 1874.5
+  },
+  "small_files_per_s": 2296,
+  "metadata_ops_per_s": 2118
+}

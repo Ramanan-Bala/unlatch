@@ -38,6 +38,7 @@ Each step updates this list.
 | Windows chkdsk oracle | `Scripts/chkdsk-vm.sh --fsx <seed>` (needs `WINDOWS_SSH`; see `docs/testing.md`) |
 | Golden images | `Scripts/test-golden.sh`; regenerate with `Tests/Images/make-golden.sh` (changes serials and times) |
 | Fuzz (needs Homebrew LLVM) | `Scripts/fuzz.sh --time 60`; replay saved crashes: `Scripts/fuzz.sh --regress` |
+| Benchmarks (baselines incl. stock ntfs-3g; `--driver` build once) | `Scripts/build-ntfs3g.sh --driver`; `Bench/baselines.sh [--runs N] [apfs exfat ntfs3g unlatch-file unlatch]`; `Bench/compare.py` |
 | CI | `.github/workflows/engine.yml` (`xcode-27` runner); `gh run list --workflow engine` |
 | Change an image | `unlatch-engine put <img> <local\|-> <path>`, `get <img> <path> <local\|->`, `mkdir`, `mv <img> <from> <to>`, `rm [-d]`, `truncate <img> <path> <size>`, `touch` |
 | Build a fixture image | `build/test-engine/mkfixture <img> < script` (see the header of `Engine/src/fixtures/mkfixture.c`) |

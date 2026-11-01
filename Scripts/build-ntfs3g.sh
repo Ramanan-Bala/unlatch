@@ -6,6 +6,8 @@
 #   Scripts/build-ntfs3g.sh          product build
 #   Scripts/build-ntfs3g.sh --fuzz   ASan + UBSan + fuzzer coverage build into build/ntfs3g-fuzz,
 #                                    with Homebrew LLVM (Apple clang has no libFuzzer runtime)
+#   Scripts/build-ntfs3g.sh --driver stock ntfs-3g and lowntfs-3g FUSE drivers against macFUSE's
+#                                    libfuse 2 into build/ntfs3g-driver: a benchmark baseline only
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,6 +15,7 @@ src="$root/Engine/vendor/ntfs-3g"
 patches="$root/Engine/vendor/patches"
 variant=""
 [ "${1:-}" = --fuzz ] && variant="-fuzz"
+[ "${1:-}" = --driver ] && variant="-driver"
 work="$root/build/ntfs3g$variant-src"
 obj="$root/build/ntfs3g$variant-obj"
 prefix="$root/build/ntfs3g$variant"
@@ -38,7 +41,7 @@ if [ ! -x "$work/configure" ]; then
 fi
 
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-if [ -n "$variant" ]; then
+if [ "$variant" = -fuzz ]; then
     llvm=""
     for p in "${LLVM_PREFIX:-}" "$(brew --prefix llvm 2>/dev/null)" "$(brew --prefix llvm@20 2>/dev/null)"; do
         [ -n "$p" ] && [ -x "$p/bin/clang" ] && { llvm="$p/bin/clang"; break; }
@@ -59,13 +62,19 @@ else
     make_flags=()
 fi
 
+driver=(--disable-ntfs-3g)
+if [ "$variant" = -driver ]; then
+    driver=(--enable-ntfs-3g --with-fuse=external)
+    export PKG_CONFIG_PATH="${MACFUSE_PREFIX:-/usr/local}/lib/pkgconfig"
+fi
+
 # --exec-prefix stops configure from installing into /bin, /sbin and /lib.
 cd "$obj"
 "$work/configure" \
     --prefix="$prefix" \
     --exec-prefix="$prefix" \
     --host=aarch64-apple-darwin \
-    --disable-ntfs-3g \
+    "${driver[@]}" \
     --disable-mount-helper \
     --enable-ntfsprogs \
     --disable-crypto \
