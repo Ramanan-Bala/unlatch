@@ -4,9 +4,9 @@
 
 | Field | Value |
 |---|---|
-| Current phase | 3 Mount management |
-| Last completed step | 19 updates and uninstall. 18 packaging (unsigned DMG, Homebrew files). 17 robustness (owner-hardware items open). 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
-| Next step | 20 Beta and release |
+| Current phase | 5 Ship (beta prepared) |
+| Last completed step | 20 release prepared (1.0.0-beta.1, unpublished). 19 updates and uninstall. 18 packaging (unsigned DMG, Homebrew files). 17 robustness (owner-hardware items open). 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Next step | leftovers: Windows-made golden images, FSKit cleanup, CI; then the owner's beta |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -643,6 +643,23 @@ U=CLI/.build/debug/unlatch; $U mount <a>; $U mount <b>; $U unmount --all   # bot
 
 **Left:**
 - The owner's click-through of the menu item and of "Uninstall Unlatch…" (it removes the helper installed on this Mac, so it was not run here). An update from vN to vN+1 can only be tried once two releases exist.
+
+### Step 20: Beta and release preparation (re-scoped, D-71) — prepared 2026-11-01; publishing is the owner's
+
+**Done:**
+- README rewritten for users (requirements, install, use, what works, limitations, building, roadmap after 1.0, licenses).
+- `docs/read-only.md` (every read-only reason and its fix; the app's notifications link to it), `docs/troubleshooting.md`, `SECURITY.md`, `docs/beta.md` (testers, disks, tasks, triage, 1.0 exit criteria), `.github/ISSUE_TEMPLATE/`, CONTRIBUTING's pre-PR checks.
+- `CHANGELOG.md` with the `1.0.0-beta.1` section; version set to `1.0.0-beta.1` everywhere (`Scripts/set-version.sh`).
+- Trial `Scripts/release.sh` at the new version: DMG, tarball, checksums, tap files.
+
+**Verify:**
+```sh
+Scripts/set-version.sh --check                       # 1.0.0-beta.1
+Scripts/release.sh --allow-dirty && ls build/release/1.0.0-beta.1
+awk -v v=1.0.0-beta.1 '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md   # the release notes
+```
+
+**Left (owner, in this order; docs/release.md):** push a signed tag `v1.0.0-beta.1` (the workflow makes a draft pre-release), publish the draft, create and push the tap `Ramanan-Bala/homebrew-unlatch`, enable private vulnerability reporting in the repository settings, recruit testers (docs/beta.md). v1.0.0 follows the beta's exit criteria.
 
 ## Carry-overs
 

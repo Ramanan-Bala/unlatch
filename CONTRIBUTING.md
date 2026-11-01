@@ -20,3 +20,14 @@ This adds a line like `Signed-off-by: Your Name <you@example.com>` using your Gi
 - Update [`docs/PROGRESS.md`](docs/PROGRESS.md), and [`docs/DECISIONS.md`](docs/DECISIONS.md) when you decide something other steps depend on.
 - Follow the conventions in [`AGENTS.md`](AGENTS.md).
 - Never test against a drive that holds real data. Use image files and disposable disks.
+
+## Before you open a pull request
+
+Run the checks for what you changed (AGENTS.md has every command):
+
+- Engine or daemon: `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh`, `Scripts/fsx-soak.sh --regressions`, `Tests/Fuse/rw-suite.sh --runs 3` (and `--disk`), and `Scripts/fuzz.sh --time 60` when parsing code changed.
+- Swift: `swift test --package-path Shared` (`UNLATCH_INTEGRATION=1` with macFUSE), `swift test --package-path CLI`.
+- Anything that changes what is written to disk: a Windows `chkdsk` of a written image if you can (`Scripts/chkdsk-vm.sh`, docs/testing.md).
+- Add a line to `CHANGELOG.md` under `[Unreleased]`.
+
+Bug reports: use the issue template; security problems go to private reporting (SECURITY.md).

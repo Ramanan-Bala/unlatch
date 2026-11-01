@@ -4,7 +4,7 @@ import os
 
 /// Fixed identifiers shared by the app, extension and CLI.
 public enum Unlatch {
-    public static let version = "0.0.0"
+    public static let version = "1.0.0-beta.1"
     public static let bundlePrefix = "io.github.ramanan-bala"
     public static let appGroup = "group.\(bundlePrefix).Unlatch"
     public static let logSubsystem = "\(bundlePrefix).unlatch"
