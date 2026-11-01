@@ -1,0 +1,41 @@
+From: Unlatch <noreply@github.com>
+Subject: [PATCH] ntfs_readdir: fix index bitmap bit offset when resuming
+
+When ntfs_readdir() resumes at a *pos inside the index allocation, it reads
+the index bitmap starting at byte (bmp_pos >> 3) but tests bits from 0, not
+from bmp_pos & 7. Every in-use test after that is shifted by up to seven
+blocks: used blocks can be skipped (missing entries) and blocks past the end
+of $INDEX_ALLOCATION can be read (EIO "Failed to read index block").
+A walk from *pos = 0 is aligned, so only resumed walks are affected.
+
+Also stop at the end of $INDEX_ALLOCATION rather than the end of the bitmap,
+whose last byte can describe blocks that do not exist.
+
+Found by Unlatch's paged readdir test (Step 04) on a 10,000-entry directory.
+---
+--- a/libntfs-3g/dir.c	2026-11-01 13:21:38
++++ b/libntfs-3g/dir.c	2026-11-01 13:21:38
+@@ -1313,7 +1313,12 @@
+ 		goto err_out;
+ 	}
+ 
+-	bmp_buf_pos = 0;
++	/*
++	 * The buffer starts at byte (bmp_pos >> 3), so the first bit to test is
++	 * bmp_pos & 7, not 0. Starting at 0 misaligns every test when resuming
++	 * from a *pos in the middle of a bitmap byte (Unlatch patch 0001).
++	 */
++	bmp_buf_pos = bmp_pos & 7;
+ 	/* If the index block is not in use find the next one that is. */
+ 	while (!(bmp[bmp_buf_pos >> 3] & (1 << (bmp_buf_pos & 7)))) {
+ find_next_index_buffer:
+@@ -1323,6 +1328,9 @@
+ 		if (bmp_pos >> 3 >= bmp_na->data_size)
+ 			goto EOD;
+ 		ia_pos = bmp_pos << index_block_size_bits;
++		/* Bits past the last index block are not blocks (patch 0001). */
++		if (ia_pos >= i_size)
++			goto EOD;
+ 		if (bmp_buf_pos >> 3 < bmp_buf_size)
+ 			continue;
+ 		/* Read next chunk from the index bitmap. */

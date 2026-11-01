@@ -69,6 +69,7 @@ targets:
     platform: macOS
     sources:
       - path: Engine/src
+        excludes: ["fixtures/**"]      # test tooling, built by Scripts/test-engine.sh
       - path: Engine/include
         buildPhase: none
     settings:

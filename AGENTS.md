@@ -25,9 +25,12 @@ Each step updates this list.
 | Test UnlatchCore | `swift test --package-path Shared` |
 | Build CLI | `swift build --package-path CLI` |
 | Run CLI | `swift run --package-path CLI unlatch --help` |
-| Engine tests (unit, harness, leaks, include boundary) | `Scripts/test-engine.sh` |
+| Engine tests (unit, harness, leaks, include boundary; ~1 min, 13 GB of sparse images) | `Scripts/test-engine.sh` |
+| Engine tests without the 4 GiB `cat` check | `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` |
 | Probe an image | `build/DerivedData/Build/Products/Debug/unlatch-engine probe t1.img` (after `xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build`) |
 | Open an image and print it | `unlatch-engine info [--rw] t1.img` |
+| Browse an image | `unlatch-engine ls [--stats] <img> [path]`, `stat <img> <path>`, `cat <img> <path>`, `tree <img> [path]` |
+| Build a fixture image | `build/test-engine/mkfixture <img> < script` (see the header of `Engine/src/fixtures/mkfixture.c`) |
 | Make a test NTFS image (prints its path) | `Scripts/make-image.sh t1 512m T1` |
 | Inspect an image | `build/ntfs3g/bin/ntfsinfo -m t1.img`, `build/ntfs3g/bin/ntfsls -s t1.img` |
 | Attach an image as a block device, unmounted (prints `diskN`) | `Scripts/attach-image.sh t1.img`; detach with `hdiutil detach diskN` |
@@ -43,7 +46,8 @@ Builds are ad-hoc signed (`CODE_SIGN_IDENTITY = -`). The entitlements files in `
 ```
 Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c,
              vendor/ntfs-3g (pinned in vendor/VERSION), vendor/patches/
-EngineTool/  unlatch-engine host harness (works on image files); file_io.c is the file-backed ue_io_t
+EngineTool/  unlatch-engine host harness (works on image files); file_io.c is the file-backed
+             ue_io_t, walk.c the host-side path walk
 Extension/   Swift FSKit module
 Shared/      Swift package UnlatchCore
 CLI/         Swift package, the `unlatch` executable

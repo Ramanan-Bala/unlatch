@@ -2,6 +2,7 @@
 // Engine tests (Step 03). Run through Scripts/test-engine.sh, which prepares the images.
 //   test_engine <image-dir>        run all tests
 //   test_engine leakloop <img>     open/close 100 times (run under `leaks --atExit`)
+//   test_engine readloop <img>     open, walk, read, readdir, close 50 times (same)
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -10,7 +11,9 @@
 #include <unistd.h>
 
 #include "file_io.h"
+#include "gen.h"
 #include "unlatch_engine.h"
+#include "walk.h"
 
 static int failures;
 static char dir[1024];
@@ -184,6 +187,344 @@ static void test_open_close_repeat(void)
           ue_vol_state_name(p.state), p.reason);
 }
 
+
+// ---- Read path (Step 04), on the "read" fixture built by Scripts/test-engine.sh ----
+
+static ue_engine_t *rd;               // read fixture, open read-only for all read tests
+static file_io_t rd_file;
+
+static int read_all(ue_ino_t ino, uint64_t off, void *buf, size_t len, size_t *got)
+{
+    size_t total = 0, done;
+    int err;
+
+    while (total < len) {
+        if ((err = ue_read(rd, ino, off + total, (char *)buf + total, len - total, &done)))
+            return err;
+        if (done == 0)
+            break;
+        total += done;
+    }
+    *got = total;
+    return 0;
+}
+
+static bool matches_gen(const unsigned char *buf, size_t len, uint64_t seed, uint64_t off)
+{
+    unsigned char exp[4096];
+
+    for (size_t i = 0; i < len; i += sizeof(exp)) {
+        size_t n = len - i < sizeof(exp) ? len - i : sizeof(exp);
+        gen_fill(seed, off + i, exp, n);
+        if (memcmp(buf + i, exp, n))
+            return false;
+    }
+    return true;
+}
+
+static bool all_zero(const unsigned char *buf, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        if (buf[i])
+            return false;
+    return true;
+}
+
+static void test_lookup_nested(void)
+{
+    static unsigned char buf[100000 + 10];
+    ue_attr_t a, d;
+    size_t got;
+    int err;
+
+    CHECK(ue_walk(rd, "/dir1/dir2", &d) == 0 && d.type == UE_T_DIR, "dir2");
+    err = ue_walk(rd, "/dir1/dir2/deep.bin", &a);
+    CHECK(err == 0, "walk: %s", strerror(err));
+    CHECK(a.type == UE_T_REG && a.size == 100000 && a.init_size == 100000, "size %llu",
+          (unsigned long long)a.size);
+    CHECK(a.nlink == 1 && a.mode == 0644, "nlink %u mode %o", a.nlink, a.mode);
+    CHECK(a.mtime.tv_sec > 1700000000, "mtime %ld", (long)a.mtime.tv_sec);
+    err = read_all(a.ino, 0, buf, sizeof(buf), &got);
+    CHECK(err == 0 && got == 100000, "read %zu: %s", got, strerror(err));
+    CHECK(matches_gen(buf, got, 7, 0), "content mismatch");
+    err = read_all(a.ino, 99990, buf, 100, &got);
+    CHECK(err == 0 && got == 10 && matches_gen(buf, 10, 7, 99990), "tail read %zu", got);
+}
+
+typedef struct {
+    char names[64][64];
+    int n;
+} names_t;
+
+static bool collect_names(void *ctx, const char *name, const ue_attr_t *a, uint64_t next)
+{
+    names_t *l = ctx;
+
+    (void)a;
+    (void)next;
+    if (l->n < 64)
+        snprintf(l->names[l->n++], sizeof(l->names[0]), "%s", name);
+    return true;
+}
+
+static bool has_name(const names_t *l, const char *name)
+{
+    for (int i = 0; i < l->n; i++)
+        if (!strcmp(l->names[i], name))
+            return true;
+    return false;
+}
+
+static void test_case_and_root(void)
+{
+    ue_attr_t a, b, root;
+    names_t l = { .n = 0 };
+    uint64_t v;
+    int err;
+
+    CHECK(ue_walk(rd, "/ReadMe.TXT", &a) == 0, "exact case");
+    CHECK(ue_walk(rd, "/readme.txt", &b) == 0 && b.ino == a.ino, "lower case");
+    CHECK(ue_walk(rd, "/README.TXT", &b) == 0 && b.ino == a.ino, "upper case");
+    CHECK(ue_getattr(rd, UE_ROOT_INO, &root) == 0 && root.type == UE_T_DIR, "root");
+    CHECK((root.ino >> 48) != 0, "root ino has no sequence number");
+    err = ue_readdir(rd, root.ino, 0, collect_names, &l, &v);
+    CHECK(err == 0, "readdir: %s", strerror(err));
+    CHECK(l.n == 7, "root has %d entries", l.n);
+    CHECK(has_name(&l, "ReadMe.TXT"), "readdir lost the case of ReadMe.TXT");
+    CHECK(!has_name(&l, "readme.txt"), "readdir lowercased a name");
+    CHECK(!has_name(&l, "$MFT") && !has_name(&l, "$Extend") && !has_name(&l, "."), "metafiles shown");
+    CHECK(ue_lookup(rd, root.ino, "$MFT", &a) == ENOENT, "$MFT visible to lookup");
+    CHECK(ue_lookup(rd, root.ino, "$Extend", &a) == ENOENT, "$Extend visible to lookup");
+}
+
+static void test_unicode(void)
+{
+    unsigned char buf[16];
+    ue_attr_t a;
+    size_t got;
+
+    CHECK(ue_walk(rd, "/caf\xC3\xA9.txt", &a) == 0, "NFC lookup");
+    CHECK(ue_walk(rd, "/CAF\xC3\x89.TXT", &a) == 0, "case-insensitive non-ASCII lookup");
+    CHECK(read_all(a.ino, 0, buf, sizeof(buf), &got) == 0 && got == 12 && matches_gen(buf, 12, 2, 0),
+          "content");
+    // The engine does not normalize: NFD input is the host's job (seam contract).
+    CHECK(ue_walk(rd, "/cafe\xCC\x81.txt", &a) == ENOENT, "NFD lookup should miss");
+}
+
+typedef struct {
+    unsigned char *seen;              // 10000 flags
+    unsigned count, dups, bad;
+    unsigned limit;                   // accept this many per call, then refuse (0: all)
+    unsigned taken;
+    uint64_t last_cookie;
+} bigdir_t;
+
+static bool bigdir_entry(void *ctx, const char *name, const ue_attr_t *a, uint64_t next)
+{
+    bigdir_t *b = ctx;
+    unsigned i;
+
+    if (b->limit && b->taken == b->limit)
+        return false;                 // refuse: the host resumes after last_cookie
+    b->taken++;
+    b->last_cookie = next;
+    if (sscanf(name, "f%5u", &i) != 1 || i >= 10000 || a->type != UE_T_REG || a->size != 0) {
+        b->bad++;
+        return true;
+    }
+    if (b->seen[i])
+        b->dups++;
+    b->seen[i] = 1;
+    b->count++;
+    return true;
+}
+
+static void test_big_dir(void)
+{
+    unsigned char seen[10000];
+    bigdir_t b = { seen, 0, 0, 0, 0, 0, 0 };
+    ue_stats_t s0, s1;
+    ue_attr_t d;
+    uint64_t v, v2;
+    int err, calls = 0;
+
+    CHECK(ue_walk(rd, "/big", &d) == 0, "walk /big");
+    memset(seen, 0, sizeof(seen));
+    ue_get_stats(rd, &s0);
+    err = ue_readdir(rd, d.ino, 0, bigdir_entry, &b, &v);
+    ue_get_stats(rd, &s1);
+    CHECK(err == 0, "readdir: %s", strerror(err));
+    CHECK(b.count == 10000 && b.dups == 0 && b.bad == 0, "count %u dups %u bad %u", b.count, b.dups, b.bad);
+    // Each child's MFT record is opened exactly once for its attributes.
+    CHECK(s1.inode_opens - s0.inode_opens == 10000, "inode opens %llu",
+          (unsigned long long)(s1.inode_opens - s0.inode_opens));
+    CHECK(s1.cached_inodes == s0.cached_inodes, "readdir left %llu inodes cached",
+          (unsigned long long)(s1.cached_inodes - s0.cached_inodes));
+
+    // Paged: take 97 per call, refuse the 98th, resume from the last cookie taken.
+    memset(seen, 0, sizeof(seen));
+    b = (bigdir_t){ seen, 0, 0, 0, 97, 0, 0 };
+    for (;;) {
+        unsigned before = b.count;
+        b.taken = 0;
+        err = ue_readdir(rd, d.ino, b.last_cookie, bigdir_entry, &b, &v2);
+        CHECK(err == 0, "paged readdir call %d: %s", calls, strerror(err));
+        CHECK(v2 == v, "verifier changed");
+        calls++;
+        if (b.count == before || calls > 200)
+            break;
+    }
+    CHECK(b.count == 10000 && b.dups == 0 && b.bad == 0, "paged: count %u dups %u bad %u calls %d",
+          b.count, b.dups, b.bad, calls);
+}
+
+static void test_sparse(void)
+{
+    enum { CHUNK = 8 << 20 };
+    const uint64_t size = 3ull << 30, data_off = 2ull << 30, data_len = 1 << 20;
+    unsigned char *buf = malloc(CHUNK);
+    ue_attr_t a;
+    uint64_t off;
+    size_t got;
+    int err = 0;
+
+    CHECK(buf, "malloc");
+    if (ue_walk(rd, "/sparse.bin", &a)) {
+        free(buf);
+        CHECK(0, "walk");
+    }
+    CHECK(a.size == size && (a.flags & UE_F_SPARSE) && a.alloc_size < (64u << 20),
+          "size %llu alloc %llu flags %x", (unsigned long long)a.size,
+          (unsigned long long)a.alloc_size, a.flags);
+    // Read the whole 3 GiB and check every byte: zeros except the 1 MiB written at 2 GiB.
+    for (off = 0; off < size && !err; off += got) {
+        err = read_all(a.ino, off, buf, CHUNK, &got);
+        if (err || got == 0)
+            break;
+        for (uint64_t p = 0; p < got; p += 4096) {
+            uint64_t at = off + p, n = got - p < 4096 ? got - p : 4096;
+            bool in_data = at >= data_off && at < data_off + data_len;
+            if (in_data ? !matches_gen(buf + p, n, 3, at) : !all_zero(buf + p, n)) {
+                err = -1;
+                break;
+            }
+        }
+    }
+    free(buf);
+    CHECK(err == 0, "content mismatch near %llu (%d)", (unsigned long long)off, err);
+    CHECK(off == size, "read %llu of %llu", (unsigned long long)off, (unsigned long long)size);
+}
+
+static void test_uninit(void)
+{
+    static unsigned char buf[1 << 20];
+    ue_attr_t a;
+    size_t got;
+
+    CHECK(ue_walk(rd, "/uninit.bin", &a) == 0, "walk");
+    CHECK(a.size == (1 << 20) && a.init_size == 4096, "size %llu init %llu",
+          (unsigned long long)a.size, (unsigned long long)a.init_size);
+    CHECK(read_all(a.ino, 0, buf, sizeof(buf), &got) == 0 && got == sizeof(buf), "read %zu", got);
+    CHECK(matches_gen(buf, 4096, 4, 0), "initialized part");
+    CHECK(all_zero(buf + 4096, sizeof(buf) - 4096), "past init_size is not zero");
+}
+
+static void test_resident_and_flags(void)
+{
+    unsigned char buf[200];
+    ue_attr_t a;
+    size_t got;
+
+    CHECK(ue_walk(rd, "/small.txt", &a) == 0, "walk");
+    CHECK(a.size == 100 && (a.flags & UE_F_RESIDENT) && (a.flags & UE_F_HIDDEN), "size %llu flags %x",
+          (unsigned long long)a.size, a.flags);
+    CHECK(read_all(a.ino, 0, buf, sizeof(buf), &got) == 0 && got == 100 && matches_gen(buf, 100, 5, 0),
+          "content (%zu)", got);
+    CHECK(ue_walk(rd, "/dir1", &a) == 0 && !(a.flags & UE_F_RESIDENT), "dir flags %x", a.flags);
+}
+
+static void test_read_errors(void)
+{
+    unsigned char buf[16];
+    ue_attr_t a, d, f;
+    size_t done = 99;
+
+    CHECK(ue_walk(rd, "/dir1", &d) == 0, "walk dir1");
+    CHECK(ue_read(rd, d.ino, 0, buf, sizeof(buf), &done) == EISDIR, "read dir");
+    CHECK(ue_walk(rd, "/ReadMe.TXT", &f) == 0, "walk file");
+    CHECK(ue_lookup(rd, f.ino, "x", &a) == ENOTDIR, "lookup in file");
+    CHECK(ue_readdir(rd, f.ino, 0, collect_names, NULL, NULL) == ENOTDIR, "readdir of file");
+    CHECK(ue_lookup(rd, d.ino, "missing", &a) == ENOENT, "missing");
+    CHECK(ue_lookup(rd, d.ino, "a/b", &a) == EINVAL, "slash in name");
+    CHECK(ue_lookup(rd, d.ino, "..", &a) == EINVAL, "dot-dot");
+    CHECK(ue_lookup(rd, d.ino, "", &a) == EINVAL, "empty name");
+    CHECK(ue_read(rd, f.ino, 5000, buf, sizeof(buf), &done) == 0 && done == 0, "read at EOF");
+    CHECK(ue_read(rd, f.ino, 1ull << 40, buf, sizeof(buf), &done) == 0 && done == 0, "read past EOF");
+    CHECK(ue_getattr(rd, f.ino ^ (1ull << 48), &a) == ESTALE, "wrong sequence number");
+}
+
+static void test_release(void)
+{
+    ue_stats_t s0, s1, s2;
+    ue_attr_t a, b;
+
+    ue_get_stats(rd, &s0);
+    CHECK(ue_walk(rd, "/dir1/dir2/deep.bin", &a) == 0, "walk");
+    ue_get_stats(rd, &s1);
+    CHECK(s1.cached_inodes >= s0.cached_inodes, "cache shrank");
+    ue_release(rd, a.ino);
+    ue_get_stats(rd, &s2);
+    CHECK(s2.cached_inodes == s1.cached_inodes - 1, "release did not drop the entry");
+    CHECK(ue_getattr(rd, a.ino, &b) == 0 && b.size == a.size, "getattr after release");
+    ue_release(rd, a.ino);
+    ue_release(rd, a.ino);            // releasing twice is harmless
+    ue_release(rd, UE_ROOT_INO);      // the root is never released
+    CHECK(ue_getattr(rd, UE_ROOT_INO, &b) == 0, "root after release");
+}
+
+static void test_statfs(void)
+{
+    uint64_t total, free_bytes;
+    uint32_t cluster;
+    ue_probe_t p;
+
+    CHECK(probe_file(img("read"), &p) == 0, "probe");
+    CHECK(ue_statfs(rd, &total, &free_bytes, &cluster) == 0, "statfs");
+    CHECK(total == p.total_bytes && free_bytes == p.free_bytes && cluster == p.cluster_size,
+          "statfs %llu/%llu vs probe %llu/%llu", (unsigned long long)total,
+          (unsigned long long)free_bytes, (unsigned long long)p.total_bytes,
+          (unsigned long long)p.free_bytes);
+}
+
+static int read_loop(const char *path, int n)
+{
+    for (int i = 0; i < n; i++) {
+        file_io_t f;
+        ue_engine_t *e;
+        ue_attr_t a;
+        names_t l = { .n = 0 };
+        unsigned char buf[4096];
+        size_t done;
+        int err = file_io_open(&f, path, false);
+
+        if (err)
+            return err;
+        if (!(err = ue_open(&f.io, UE_OPEN_RDONLY, &e, NULL))) {
+            if (!(err = ue_walk(e, "/dir1/dir2/deep.bin", &a)))
+                err = ue_read(e, a.ino, 0, buf, sizeof(buf), &done);
+            if (!err && !(err = ue_walk(e, "/", &a)))
+                err = ue_readdir(e, a.ino, 0, collect_names, &l, NULL);
+            int cerr = ue_close(e);
+            if (!err)
+                err = cerr;
+        }
+        file_io_close(&f);
+        if (err)
+            return err;
+    }
+    return 0;
+}
+
 #define RUN(t)                                     \
     do {                                           \
         int before = failures;                     \
@@ -193,6 +534,12 @@ static void test_open_close_repeat(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "readloop") == 0) {
+        int err = read_loop(argv[2], 50);
+        if (err)
+            fprintf(stderr, "readloop: %s\n", strerror(err));
+        return err ? 1 : 0;
+    }
     if (argc == 3 && strcmp(argv[1], "leakloop") == 0) {
         int err = open_close_loop(argv[2], true, 100);
         if (err)
@@ -213,6 +560,26 @@ int main(int argc, char **argv)
     RUN(test_rw_open_on_ro_io);
     RUN(test_bad_args);
     RUN(test_open_close_repeat);
+
+    if (file_io_open(&rd_file, img("read"), false) || ue_open(&rd_file.io, UE_OPEN_RDONLY, &rd, NULL)) {
+        printf("FAIL cannot open the read fixture\n");
+        return 1;
+    }
+    RUN(test_lookup_nested);
+    RUN(test_case_and_root);
+    RUN(test_unicode);
+    RUN(test_big_dir);
+    RUN(test_sparse);
+    RUN(test_uninit);
+    RUN(test_resident_and_flags);
+    RUN(test_read_errors);
+    RUN(test_release);
+    RUN(test_statfs);
+    if (ue_close(rd)) {
+        printf("FAIL close of the read fixture\n");
+        failures++;
+    }
+    file_io_close(&rd_file);
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

@@ -4,4 +4,6 @@
 
 Name patches `NNNN-short-description.patch` and say why each exists in its header.
 
-None are needed for 2026.9.28 (Step 02).
+| Patch | Why | Step |
+|---|---|---|
+| `0001-ntfs_readdir-fix-bitmap-offset-on-resume.patch` | Resuming `ntfs_readdir` in the middle of a directory tested the wrong index-bitmap bits: it skipped entries or failed with EIO (D-21). | 04 |

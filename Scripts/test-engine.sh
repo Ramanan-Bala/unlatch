@@ -21,10 +21,14 @@ if ! xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build 
     echo "test-engine: engine build failed (log: $out/xcodebuild.log)" >&2
     exit 1
 fi
-cflags=(-std=c11 -Wall -Wextra -Werror -g -arch arm64 -mmacosx-version-min=27.0 -IEngine/include -IEngineTool)
-clang "${cflags[@]}" -o "$out/test_engine" Tests/Engine/test_engine.c EngineTool/file_io.c \
+cflags=(-std=c11 -Wall -Wextra -Werror -g -arch arm64 -mmacosx-version-min=27.0 -IEngine/include -IEngineTool
+        -IEngine/src/fixtures)
+clang "${cflags[@]}" -o "$out/test_engine" Tests/Engine/test_engine.c EngineTool/file_io.c EngineTool/walk.c \
     "$products/libUnlatchEngine.a"
 clang "${cflags[@]}" -o "$out/set_dirty" Tests/Engine/set_dirty.c
+# Fixture builder: test tooling that uses libntfs-3g directly (D-20).
+clang "${cflags[@]}" -DHAVE_CONFIG_H=1 -Ibuild/ntfs3g/config -isystem build/ntfs3g/include \
+    -o "$out/mkfixture" Engine/src/fixtures/mkfixture.c build/ntfs3g/lib/libntfs-3g.a
 
 echo "== prepare images"
 cd "$out"
@@ -40,6 +44,24 @@ cp -c clean.img hiber.img
 "$bin/ntfscp" -q hiber.img hiberfil.sys hiberfil.sys
 cp -c clean.img rw.img
 cp -c clean.img leak.img
+"$root/Scripts/make-image.sh" read 8g READ >/dev/null
+"$out/mkfixture" read.img <<'FIXTURE'
+mkdir /dir1
+mkdir /dir1/dir2
+file /dir1/dir2/deep.bin 100000 7
+file /ReadMe.TXT 5000 1
+file /café.txt 12 2
+file /small.txt 100 5
+flags /small.txt hidden
+sparse /sparse.bin 3221225472 2147483648 1048576 3
+uninit /uninit.bin 1048576 4096 4
+mkdir /big
+many /big 10000
+FIXTURE
+if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
+    "$root/Scripts/make-image.sh" big 5g BIG >/dev/null
+    echo "file /4g.bin 4294967296 9" | "$out/mkfixture" big.img
+fi
 
 echo "== unit tests"
 "$out/test_engine" "$out"
@@ -54,6 +76,23 @@ grep -q '^total_bytes: *[1-9]' probe.txt
 "$products/unlatch-engine" probe zeroboot.img | grep -q '^state: *not_ntfs$'
 "$products/unlatch-engine" info --rw clean.img | grep -q '^mode: *read-write$'
 echo "ok   harness probe/info"
+eng="$products/unlatch-engine"
+"$eng" ls read.img / | grep -q ' ReadMe.TXT$'
+"$eng" stat read.img /readme.txt | grep -q '^size: *5000$'
+"$eng" cat read.img /dir1/dir2/deep.bin | cmp - <("$out/mkfixture" gen 100000 7)
+"$eng" tree read.img /dir1 | grep -q '^  deep.bin$'
+"$eng" ls --stats read.img /big 2> stats.txt > /dev/null
+grep -q '^entries: 10000 inode_opens: 10000$' stats.txt
+echo "ok   harness ls/stat/cat/tree; /big: $(cat stats.txt)"
+if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
+    want="$("$out/mkfixture" gen 4294967296 9 | shasum -a 256 | cut -d' ' -f1)"
+    start=$SECONDS
+    got="$("$eng" cat big.img /4g.bin | shasum -a 256 | cut -d' ' -f1)"
+    [ "$got" = "$want" ] || { echo "FAIL cat 4 GiB: $got != $want" >&2; exit 1; }
+    echo "ok   cat of a 4 GiB file matches shasum ($((SECONDS - start)) s)"
+else
+    echo "skip cat of a 4 GiB file (UNLATCH_SKIP_BIG=1)"
+fi
 
 echo "== leaks (100 read-write open/close)"
 if leaks --atExit -- "$out/test_engine" leakloop leak.img > leaks.txt 2>&1; then
@@ -61,6 +100,15 @@ if leaks --atExit -- "$out/test_engine" leakloop leak.img > leaks.txt 2>&1; then
     echo "ok   no leaks"
 else
     cat leaks.txt >&2
+    echo "FAIL leaks" >&2
+    exit 1
+fi
+echo "== leaks (50 open, walk, read, readdir, close)"
+if leaks --atExit -- "$out/test_engine" readloop read.img > leaks-read.txt 2>&1; then
+    grep -E "leaks for" leaks-read.txt | head -1
+    echo "ok   no leaks"
+else
+    cat leaks-read.txt >&2
     echo "FAIL leaks" >&2
     exit 1
 fi

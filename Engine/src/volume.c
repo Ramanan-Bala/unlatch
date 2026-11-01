@@ -237,6 +237,12 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
     e->vol = vol;
     e->dev_ctx = ctx;
     e->readonly = readonly;
+    if ((err = ue_icache_init(&e->icache)) || (err = ue_cache_root(e))) {
+        ue_icache_close_all(&e->icache);
+        unmount_volume(vol, ctx);
+        free(e);
+        return err;
+    }
 
     if (probe_out) {
         memset(probe_out, 0, sizeof(*probe_out));
@@ -258,7 +264,10 @@ int ue_close(ue_engine_t *e)
         return EINVAL;
     // libntfs-3g never sets VOLUME_IS_DIRTY on mount, so there is nothing to clear here;
     // __ntfs_volume_release syncs dirty system inodes and calls the device sync.
-    err = unmount_volume(e->vol, e->dev_ctx);
+    err = ue_icache_close_all(&e->icache);
+    int uerr = unmount_volume(e->vol, e->dev_ctx);
+    if (!err)
+        err = uerr;
     free(e);
     return err;
 }

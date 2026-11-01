@@ -5,9 +5,9 @@
 | Field | Value |
 |---|---|
 | Current phase | 1 Engine on host |
-| Last completed step | 03 Engine core: device bridge, probe, open/close, host harness (2026-11-01) |
-| Next step | 04 Engine read path |
-| libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) |
+| Last completed step | 04 Engine read path (2026-11-01) |
+| Next step | 05 Engine write path |
+| libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patch 0001 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
 ### Risk register
@@ -126,6 +126,45 @@ xcodebuild -scheme Unlatch build             # still green
 - A failed `ntfs_device_mount` releases the volume and closes the device but does not free it; `ntfs_umount` frees both. `mount_volume` and `unmount_volume` in `volume.c` encode this.
 - The Xcode project has to be regenerated (`Scripts/bootstrap.sh`) after adding a source file. `test-engine.sh` only generates the project when it's missing.
 
+### Step 04: Engine read path — done 2026-11-01
+
+**Done:**
+- `Engine/src/icache.c`: open-inode cache (open addressing, backward-shift delete) keyed by MFT record (D-18).
+- `Engine/src/read.c`:
+  - `ue_lookup`: case-insensitive; hides metafiles; rejects `/`, `.`, `..` and empty names.
+  - `ue_getattr`: from `$STANDARD_INFORMATION` plus unnamed `$DATA`. Times via `ntfs2timespec`, DOS flags mapped to `UE_F_*`, `nlink` without 8.3 names, `UE_F_RESIDENT`, `init_size` (D-23).
+  - `ue_readdir`: batches of 128 names from `ntfs_readdir`, then attributes read outside the walk. Case-preserved (D-19), skips `.`, `..`, DOS names and metafiles; stable cookies; verifier.
+  - `ue_read`: `ntfs_attr_pread`, zeros past `init_size` and through holes.
+  - `ue_statfs`, `ue_release`, `ue_get_stats`.
+- Harness: `ls [--stats]`, `stat`, `cat`, `tree`. `EngineTool/walk.c` does the path walk on top of `ue_lookup`.
+- Fixtures: `Engine/src/fixtures/mkfixture.c` plus `gen.h` (D-20).
+- Tests: 10 new read tests:
+  - nested dirs, and a 100 KB file checked against the generator
+  - mixed-case lookups; readdir keeps case and hides metafiles
+  - NFC Unicode name, including a case-insensitive lookup on É
+  - 10k-entry directory: full listing and paging (97 per call, refusing the 98th), with no duplicates or losses
+  - 3 GiB sparse file: every byte checked
+  - `init_size < size`: zeros past `init_size`
+  - resident file with the hidden flag
+  - error codes; release; statfs
+- Harness checks: the 10k listing does 10,000 inode opens (one per MFT record), and `cat` of a 4 GiB file matches `shasum`. Second leak loop: open, walk, read, readdir, close.
+- Patch 0001 fixes a libntfs-3g `ntfs_readdir` resume bug (D-21).
+
+**Verify:**
+```sh
+Scripts/test-engine.sh     # 18 unit tests ok; "/big: entries: 10000 inode_opens: 10000";
+                           # "cat of a 4 GiB file matches shasum"; 0 leaks twice; PASSED
+```
+
+**Left:** nothing in scope. Symlinks and junctions show as files or dirs with `UE_F_REPARSE` (Step 16).
+
+**Surprises:**
+- **Upstream bug:** `ntfs_readdir` resumed at a mid-byte bitmap position tests misaligned bits. Every resumed walk near the end of a large directory failed with "Failed to read index block" (EIO), and fragmented directories could skip entries silently. Patched (0001).
+- **Case:** in ignore-case mode libntfs-3g lowercases every name `ntfs_readdir` returns (D-19).
+- **Pause rule:** a stopped `ntfs_readdir` leaves `*pos` on the entry it refused, and resuming at `pos+1` skips exactly that entry. That makes "position plus 1" a correct next-cookie.
+- **Fixtures:** `ntfs_attr_truncate` creates sparse holes, so `uninit.bin` is also flagged sparse, and a 3 GiB file costs 1 MiB.
+- **Timing:** 4 GiB `cat` through the engine takes about 15 s, roughly 270 MB/s, on a debug build plus `shasum`.
+
 ## Carry-overs
 
 - **Step 08:** set a development team and reference `Extension/Resources/UnlatchFSModule.entitlements` and `App/Resources/Unlatch.entitlements` from `project.yml` (D-06). The extension cannot load without `com.apple.developer.fskit.fsmodule`. Keep an ad-hoc build path for CI (Step 07), for example an xcconfig override.
@@ -133,6 +172,8 @@ xcodebuild -scheme Unlatch build             # still green
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07:** add fixtures for UNCLEAN_LOG and Fast Startup (`$LogFile` restart page 2.0), from Windows-made images. The probe code paths exist but are untested.
 - **Step 07 (CI):** run `Scripts/test-engine.sh`. It needs `leaks`, which comes with Xcode command-line tools.
+- **Upstream:** send patch 0001 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
+- **Step 05:** before writes, re-check D-18's "one inode per record" when ntfs-3g opens inodes internally (`ntfs_create`, `ntfs_delete` and `ntfs_link` take inode pointers; pass the cached ones). The readdir verifier relies on libntfs-3g updating the directory's `last_data_change_time` on create, delete and rename; test that.
 - **Step 08:** route libntfs-3g logging (`ntfs_log_set_handler`) to OSLog category `engine` (D-16).
 - **Step 07 (CI):** cache `build/ntfs3g`, keyed on `Engine/vendor/VERSION` plus `Engine/vendor/patches/*` plus `Scripts/build-ntfs3g.sh`.
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
