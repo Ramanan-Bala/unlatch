@@ -28,6 +28,20 @@ struct SettingsView: View {
                 Button("Export logs…") { exportLogs() }
                 if let exportResult { Text(exportResult).font(.caption).foregroundStyle(.secondary) }
             }
+            Section("Updates") {
+                Toggle("Check for new versions once a day", isOn: Binding(get: { model.checkForUpdates },
+                                                                       set: { model.checkForUpdates = $0 }))
+                HStack {
+                    Button("Check Now") { Task { await model.checkNow() } }
+                    if let u = model.update {
+                        Text("Unlatch \(u.version) is available.").font(.caption)
+                    } else if model.lastUpdateCheck != nil {
+                        Text("Unlatch \(Unlatch.version) is the newest version.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Asks github.com for the list of releases; nothing about this Mac is sent. Updating is Homebrew's (brew upgrade --cask unlatch) or a new download.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("About") {
                 Text("Unlatch \(Unlatch.version). Free software under the GPL, version 3 or later; it includes libntfs-3g. macFUSE is installed separately.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -37,6 +51,7 @@ struct SettingsView: View {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
                 }
+                Button("Uninstall Unlatch…", role: .destructive) { Task { await model.uninstall() } }
             }
         }
         .formStyle(.grouped)

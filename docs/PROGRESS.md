@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 18 packaging (unsigned DMG, Homebrew files). 17 robustness (owner-hardware items open). 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
-| Next step | 19 Updates and uninstall |
+| Last completed step | 19 updates and uninstall. 18 packaging (unsigned DMG, Homebrew files). 17 robustness (owner-hardware items open). 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Next step | 20 Beta and release |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -625,6 +625,24 @@ Formula: built and installed from a `file://` tarball in a throwaway local tap; 
 **Surprises:**
 - With the hardened runtime, an ad-hoc binary cannot load another team's library; Debug builds hid this because their helpers are re-signed without the runtime flag.
 - `[ … ] && …` as the last command of a loop body stops a `set -e` script.
+
+### Step 19: Updates and uninstall (re-scoped, D-70) — done 2026-11-01, except the owner's click-through
+
+**Done:**
+- `UnlatchCore.UpdateChecker` and `Version` (semantic-version order, pre-releases only for pre-release users); tests `versionOrder`, `updateOffer`.
+- App (`App/Sources/Lifecycle.swift`): daily update check (Settings > Updates, "Check Now"); menu item "Unlatch X is available…", which offers to unmount first, then gives the Homebrew command or opens the release page; "Uninstall Unlatch…" (unmount, helper removal with the admin password, login item, status files, defaults, app to the Trash); `AppModel.stop()`.
+- CLI `unmount --all`, used by the cask's uninstall step (so `brew upgrade` and `brew uninstall` unmount first).
+- `docs/updating.md`, `docs/uninstall.md`.
+
+**Verify:**
+```sh
+swift test --package-path Shared                         # versionOrder, updateOffer
+xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build
+U=CLI/.build/debug/unlatch; $U mount <a>; $U mount <b>; $U unmount --all   # both unmounted, exit 0
+```
+
+**Left:**
+- The owner's click-through of the menu item and of "Uninstall Unlatch…" (it removes the helper installed on this Mac, so it was not run here). An update from vN to vN+1 can only be tried once two releases exist.
 
 ## Carry-overs
 

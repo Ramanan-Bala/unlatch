@@ -21,6 +21,11 @@ final class AppModel {
         didSet { policy.enabled = autoMount }
     }
 
+    // Step 19 (Lifecycle.swift): the newest release when it is newer than this one.
+    var update: UpdateChecker.Release?
+    var lastUpdateCheck: Date?
+    var updateTask: Task<Void, Never>?
+
     private let service: MountService?
     private let statusStore = StatusStore()
     private var watcher: DiskWatcher?
@@ -50,6 +55,16 @@ final class AppModel {
             for await _ in changes { await self?.refresh() }
         })
         Task { await refresh() }
+        startUpdateChecks()
+    }
+
+    /// Stops the auto-mount loop (and with it the claim on new NTFS disks) and the update checks.
+    func stop() {
+        tasks.forEach { $0.cancel() }
+        tasks = []
+        updateTask?.cancel()
+        watcher?.stop()
+        watcher = nil
     }
 
     func refresh() async {

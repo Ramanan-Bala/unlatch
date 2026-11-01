@@ -31,6 +31,12 @@ struct MenuView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
             }
+            if let u = model.update {
+                Button("Unlatch \(u.version) is available…") { Task { await model.installUpdate() } }
+                    .buttonStyle(.link)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
             if !checks.allPassed {
                 Button("Finish setting up Unlatch…") { open("onboarding") }
                     .buttonStyle(.link)
