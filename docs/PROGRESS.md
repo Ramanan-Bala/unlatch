@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 11 benchmarks and M0 gate: **GO** (2026-11-01). 16 done early; 10 write path. 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Last completed step | 11 (M0 GO), 16 early; Windows chkdsk oracle passes (Steps 06, 10, 16; D-55). 07 left: Windows-made golden images |
 | Next step | 12 UnlatchCore: DiskWatcher, StatusStore, MountService |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
@@ -201,7 +201,7 @@ Scripts/test-engine.sh   # 26 unit tests ok; "4 GiB put (10 s) and get (16 s) ro
 - **Case-only rename:** needs a temp name, because `$I30` is case-insensitive.
 - **Timing (debug build):** writes run at about 400 MB/s from stdin.
 
-### Step 06: Randomized model test (fsx) and Windows oracle — fsx done 2026-11-01; oracle BLOCKED
+### Step 06: Randomized model test (fsx) and Windows oracle — done 2026-11-01 (oracle run in a Windows 11 VM)
 
 **Done:**
 - `unlatch-engine fsx <img> --seed N --ops M [--verbose]` (`EngineTool/fsx.c`), D-29:
@@ -350,7 +350,7 @@ $F $img build/m && ls -laO build/m && qlmanage -t -s 128 -o /tmp build/m/visible
 - macFUSE's kext sizes reads from `st_blksize`, not `iosize` or `f_iosize`.
 - The NTFS root is hidden+system.
 
-### Step 10: Write path through FUSE — done 2026-11-01, except the git check (needs Step 16) and Windows chkdsk (needs the VM)
+### Step 10: Write path through FUSE — done 2026-11-01 (git check since Step 16; Windows chkdsk passed)
 
 **Done:**
 - Engine: failed state (D-46). A failed device write, or ENXIO/ENODEV on a read, makes every later call return EIO (`ue_iget`, `ue_sync`, the device ops); `ue_close` deletes no ghosts and reports EIO; `ue_has_failed` in the seam. Test `test_device_failure`: the device turns read-only under a mounted engine.
@@ -379,7 +379,7 @@ zstd -d Tests/Images/dirty-ntfs3g.img.zst -o build/d.img && $F build/d.img build
 - libntfs-3g's readdir is in index-block order, not collation order.
 - macOS 27 tags every new file with `com.apple.provenance`.
 
-### Step 16: Xattrs, Finder metadata, links, flags — done 2026-11-01 (brought forward after Step 10, D-47), except the Windows check
+### Step 16: Xattrs, Finder metadata, links, flags — done 2026-11-01 (brought forward after Step 10, D-47); Windows check done, symlink finding D-55
 
 **Done:**
 - Engine xattrs (D-48): `ue_xattr_list/get/set/remove` over named streams, CREATE/REPLACE flags, positioned resource-fork writes, `:` ↔ U+F03A, 64 MiB cap. Daemon: `setxattr`/`getxattr`/`listxattr`/`removexattr` with macFUSE's position argument. macOS no longer writes `._` files.
@@ -435,17 +435,33 @@ Bench/compare.py
 - The volume probed clean, but a directory listed as empty: one index entry points to MFT record 352642, which reads as zeros. The listing failed as a whole; it now skips that entry (D-54).
 - Not yet known: whether that record is stale on the disk (Windows `chkdsk` would tell) or a misread of a far, fragmented `$MFT` record. The owner can check, read-only: `sudo build/ntfs3g/bin/ntfsinfo -i 352642 /dev/diskNs1`.
 
+### Windows VM checks — 2026-11-01
+
+UTM VM (Windows 11 24H2, Arm), SSH through a port forward (`WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222`).
+
+- **Step 06:** `Scripts/chkdsk-vm.sh --fsx <seed>` for seeds 1, 2, 3, 4, 7, 42 and 100 (2,000 ops each): "Windows has scanned the file system and found no problems". Reports are in `Tests/oracle/`.
+- **Step 10:** `Scripts/chkdsk-vm.sh build/rw-suite/run.img rw-suite` after a suite run: passed.
+- **Step 16:** `Tests/oracle/windows-check.ps1` on the same volume:
+  - file data, the `com.example.note` stream, a Finder-tag stream (U+F03A name) and `com.apple.provenance` are all visible;
+  - the hard link shows 2 links, the hidden flag maps to Hidden, and all 378 git-clone files are present;
+  - the WSL symlink is a reparse point that Windows programs do not follow (D-55).
+
+```sh
+export WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222
+Scripts/chkdsk-vm.sh --fsx 42
+Tests/Fuse/rw-suite.sh --runs 1 && Scripts/chkdsk-vm.sh build/rw-suite/run.img rw-suite
+```
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
-- **Owner (blocks Step 07 "Done when"):** Windows-made golden images, once the Windows VM exists (`Tests/Images/README.md`).
+- **Step 07 (VM available now):** Windows-made golden images (`Tests/Images/README.md`).
+- **Step 17:** native Windows symlinks for on-volume targets (D-55).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
 - **Step 15:** close the disk-path gap (D-51, D-52): engine-side block cache over `/dev/rdiskN`, coalesced transfers, a multi-threaded session loop; check whether the kext mount's `synchronous` flag costs writes.
 - **Step 16/17:** readdir cookies are index positions; deleting entries while a listing is in progress could shift later entries. `rm -rf` of 1,000-file trees passes because fts reads a directory fully before deleting; test a concurrent writer in Step 17.
 - **Step 12:** when the app launches `unlatch-fuse`, it can use `-f` under launchd or the default `posix_spawn` backgrounding (D-45).
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
-- **Owner (blocks Step 06 "Done when"):** run the Windows chkdsk oracle once a Windows VM exists (see Step 06 "Left").
-- **Step 06 oracle:** names created by libntfs-3g are in the POSIX namespace. Confirm Windows `chkdsk` accepts fsx-made images with such names, plus ghost and rename-temp leftovers.
 - **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
 - **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.

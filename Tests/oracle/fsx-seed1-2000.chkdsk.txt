@@ -1,0 +1,89 @@
+﻿The type of the file system is NTFS.
+Insufficient storage available to create either the shadow copy storage file or other shadow copy data.
+
+Volume label is FSX.
+
+WARNING!  /F parameter not specified.
+Running CHKDSK in read-only mode.
+
+Stage 1: Examining basic file system structure ...
+Progress: 0 of 166 done; Stage:  0%; Total:  5%; ETA:   0:00:02    
+Progress: 166 of 166 done; Stage: 100%; Total: 11%; ETA:   0:00:02 .  
+                                                                                       
+                                                                                       
+  166 file records processed.                                                        
+
+File verification completed.
+ Phase duration (File record verification): 2.63 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 31%; ETA:   0:00:02 .. 
+                                                                                       
+                                                                                       
+  0 large file records processed.                                   
+
+ Phase duration (Orphan file record recovery): 0.05 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 31%; ETA:   0:00:02 ...
+                                                                                       
+                                                                                       
+  0 bad file records processed.                                     
+
+ Phase duration (Bad file record checking): 0.06 milliseconds.
+
+Stage 2: Examining file name linkage ...
+Progress: 278 of 278 done; Stage: 100%; Total: 67%; ETA:   0:00:01    
+                                                                                       
+                                                                                       
+  278 index entries processed.                                                       
+
+Index verification completed.
+ Phase duration (Index verification): 5.16 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 67%; ETA:   0:00:01 .  
+                                                                                       
+                                                                                       
+  0 unindexed files scanned.                                        
+
+ Phase duration (Orphan reconnection): 0.09 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 67%; ETA:   0:00:01 .. 
+                                                                                       
+                                                                                       
+  0 unindexed files recovered to lost and found.                    
+
+ Phase duration (Orphan recovery to lost and found): 0.05 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 67%; ETA:   0:00:01 ...
+                                                                                       
+                                                                                       
+  0 reparse records processed.                                      
+
+Progress: 0 of 0 done; Stage: 99%; Total: 68%; ETA:   0:00:01    
+                                                                                       
+                                                                                       
+  0 reparse records processed.                                      
+
+ Phase duration (Reparse point and Object ID verification): 0.15 milliseconds.
+
+Stage 3: Examining security descriptors ...
+Security descriptor verification completed.
+ Phase duration (Security descriptor verification): 0.49 milliseconds.
+Progress: 0 of 0 done; Stage: 100%; Total: 99%; ETA:   0:00:00 .  
+                                                                                       
+                                                                                       
+  56 data files processed.                                           
+
+ Phase duration (Data attribute verification): 0.06 milliseconds.
+
+Windows has scanned the file system and found no problems.
+No further action is required.
+
+    524287 KB total disk space.
+     11504 KB in 46 files.
+        64 KB in 58 indexes.
+         0 KB in bad sectors.
+      3227 KB in use by the system.
+      2620 KB occupied by the log file.
+    509492 KB available on disk.
+
+      4096 bytes in each allocation unit.
+    131071 total allocation units on disk.
+    127373 allocation units available on disk.
+Total duration: 8.86 milliseconds (8 ms).
+# image: fsx-seed1-2000.img sha256 e5b0abd457de6b7bf16d7a94e4d55ddfa69e102d814b40797179763edae2cd3e
+# checked: 2026-11-01T13:39:33Z

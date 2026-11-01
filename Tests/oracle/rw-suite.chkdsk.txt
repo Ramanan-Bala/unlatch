@@ -1,0 +1,89 @@
+﻿The type of the file system is NTFS.
+Insufficient storage available to create either the shadow copy storage file or other shadow copy data.
+
+Volume label is RWSUITE.
+
+WARNING!  /F parameter not specified.
+Running CHKDSK in read-only mode.
+
+Stage 1: Examining basic file system structure ...
+Progress: 0 of 1171 done; Stage:  0%; Total:  2%; ETA:   0:00:05    
+Progress: 1171 of 1171 done; Stage: 100%; Total: 23%; ETA:   0:00:04 .  
+                                                                                       
+                                                                                       
+  1171 file records processed.                                                        
+
+File verification completed.
+ Phase duration (File record verification): 13.84 milliseconds.
+Progress: 3 of 3 done; Stage: 100%; Total: 37%; ETA:   0:00:04 .. 
+                                                                                       
+                                                                                       
+  3 large file records processed.                                   
+
+ Phase duration (Orphan file record recovery): 0.08 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 37%; ETA:   0:00:04 ...
+                                                                                       
+                                                                                       
+  0 bad file records processed.                                     
+
+ Phase duration (Bad file record checking): 0.09 milliseconds.
+
+Stage 2: Examining file name linkage ...
+Progress: 2 of 2 done; Stage: 100%; Total: 71%; ETA:   0:00:01    
+                                                                                       
+                                                                                       
+  2 reparse records processed.                                      
+
+Progress: 1357 of 1357 done; Stage: 100%; Total: 85%; ETA:   0:00:01 .  
+                                                                                       
+                                                                                       
+  1357 index entries processed.                                                       
+
+Index verification completed.
+ Phase duration (Index verification): 24.98 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 85%; ETA:   0:00:01 .. 
+                                                                                       
+                                                                                       
+  0 unindexed files scanned.                                        
+
+ Phase duration (Orphan reconnection): 0.14 milliseconds.
+Progress: 0 of 0 done; Stage: 99%; Total: 85%; ETA:   0:00:01 ...
+                                                                                       
+                                                                                       
+  0 unindexed files recovered to lost and found.                    
+
+ Phase duration (Orphan recovery to lost and found): 0.06 milliseconds.
+Progress: 2 of 2 done; Stage: 100%; Total: 85%; ETA:   0:00:01    
+                                                                                       
+                                                                                       
+  2 reparse records processed.                                      
+
+ Phase duration (Reparse point and Object ID verification): 0.19 milliseconds.
+
+Stage 3: Examining security descriptors ...
+Security descriptor verification completed.
+ Phase duration (Security descriptor verification): 0.65 milliseconds.
+Progress: 0 of 0 done; Stage: 100%; Total: 99%; ETA:   0:00:00 .  
+                                                                                       
+                                                                                       
+  93 data files processed.                                           
+
+ Phase duration (Data attribute verification): 0.06 milliseconds.
+
+Windows has scanned the file system and found no problems.
+No further action is required.
+
+   2097151 KB total disk space.
+     20632 KB in 875 files.
+       272 KB in 95 indexes.
+         0 KB in bad sectors.
+     12163 KB in use by the system.
+     10484 KB occupied by the log file.
+   2064084 KB available on disk.
+
+      4096 bytes in each allocation unit.
+    524287 total allocation units on disk.
+    516021 allocation units available on disk.
+Total duration: 40.18 milliseconds (40 ms).
+# image: rw-suite.img sha256 c619f43eb26ec2fc458b0cd93848514e8c1bc1ae3594df6acef5054a79d5b493
+# checked: 2026-11-01T13:41:44Z

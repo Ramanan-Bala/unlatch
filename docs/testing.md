@@ -43,13 +43,15 @@ Scripts/chkdsk-vm.sh build/test-engine/w-rename.img
    New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
    ```
 4. Use an administrator account for SSH (`Mount-DiskImage` needs one). Add your public key to `C:\ProgramData\ssh\administrators_authorized_keys`.
-5. Find the VM's IP address (`ipconfig` in Windows; UTM's shared network is usually 192.168.64.x). Then:
+5. Find the VM's address. With UTM's "Emulated VLAN" network the VM is `10.0.2.15` and not reachable from the Mac: add a port forward (VM settings → Network → Port Forward: TCP, guest port 22, host 127.0.0.1:2222) and set `WINDOWS_SSH_PORT=2222`. With "Shared Network" it is usually `192.168.64.x` on port 22. Then:
    ```sh
    export WINDOWS_SSH=you@192.168.64.5
    Scripts/chkdsk-vm.sh --fsx 42
    ```
 
 Without `WINDOWS_SSH`, the script builds the VHD and prints the PowerShell steps to run by hand.
+
+Windows-side readability (Steps 10 and 16): copy `Tests/oracle/windows-check.ps1` and a suite image's VHD into the VM and run it. It mounts the VHD read-write (a throwaway copy): Windows refuses to mount a volume read-only while its `$LogFile` is in the blank state libntfs-3g leaves, though `chkdsk` reads it fine.
 
 ## FSKit (Steps 08+)
 

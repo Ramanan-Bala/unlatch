@@ -7,7 +7,8 @@
 #   Scripts/chkdsk-vm.sh --fsx <seed> [ops]    make a fresh image with fsx first, then check it
 #
 # With WINDOWS_SSH=user@host (a Windows VM with OpenSSH Server, see docs/testing.md) the
-# check runs automatically. Without it, the script prints the manual steps.
+# check runs automatically; WINDOWS_SSH_PORT sets the port (UTM port forward: 2222).
+# Without it, the script prints the manual steps.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -48,6 +49,9 @@ MANUAL
     exit 2
 fi
 
+port="${WINDOWS_SSH_PORT:-22}"
+ssh() { command ssh -o BatchMode=yes -p "$port" "$@"; }
+scp() { command scp -o BatchMode=yes -P "$port" "$@"; }
 ssh "$WINDOWS_SSH" 'powershell -NoProfile -Command "New-Item -ItemType Directory -Force C:\unlatch | Out-Null"'
 scp -q "$vhd" "$WINDOWS_SSH:C:/unlatch/$name.vhd"
 ssh "$WINDOWS_SSH" "powershell -NoProfile -Command \"\$ErrorActionPreference='Stop'; \
