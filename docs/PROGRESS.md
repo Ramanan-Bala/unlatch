@@ -407,27 +407,27 @@ Tagged copy: `FileManager.copyItem` of a file tagged Red and Work onto the mount
 ### Step 11: Benchmark harness and M0 gate — done 2026-11-01: **GO**
 
 **Done:**
-- \`Bench/io.c\` (timed primitives), \`Bench/run.sh\` (median of N, JSON into \`Bench/results/\`, \`--remount\` for cold reads, \`--device\` for raw reads), \`Bench/baselines.sh\` (APFS, exFAT, stock ntfs-3g, Unlatch on the image file, Unlatch on the disk, each on a 4 GiB image), \`Bench/compare.py\` (markdown table), \`Bench/README.md\`.
-- \`Scripts/build-ntfs3g.sh --driver\`: stock ntfs-3g and lowntfs-3g against macFUSE's libfuse 2, a baseline only. The sanitizer condition is fixed (it applied to any variant).
-- \`unlatch-fuse\` back to the buffered \`/dev/diskN\` (D-51).
-- \`docs/M0-gate.md\`: numbers, thresholds and verdict (D-52).
+- `Bench/io.c` (timed primitives), `Bench/run.sh` (median of N, JSON into `Bench/results/`, `--remount` for cold reads, `--device` for raw reads), `Bench/baselines.sh` (APFS, exFAT, stock ntfs-3g, Unlatch on the image file, Unlatch on the disk, each on a 4 GiB image), `Bench/compare.py` (markdown table), `Bench/README.md`.
+- `Scripts/build-ntfs3g.sh --driver`: stock ntfs-3g and lowntfs-3g against macFUSE's libfuse 2, a baseline only. The sanitizer condition is fixed (it applied to any variant).
+- `unlatch-fuse` back to the buffered `/dev/diskN` (D-51).
+- `docs/M0-gate.md`: numbers, thresholds and verdict (D-52).
 
 **Verify:**
-\`\`\`sh
+```sh
 Scripts/build-ntfs3g.sh --driver
 Bench/baselines.sh            # ~25 min on this 8 GiB M2; or name setups: Bench/baselines.sh --runs 3 unlatch
 Bench/compare.py
-\`\`\`
+```
 
-**Left:** the disposable external SSD run (owner's drive), and the larger-than-RAM \`mkfile\` test.
+**Left:** the disposable external SSD run (owner's drive), and the larger-than-RAM `mkfile` test.
 
 **Surprises:**
 - Stock ntfs-3g refuses block devices for an unprivileged user with an external libfuse.
 - An attached image is locked against other openers.
 - An APFS image attaches as a physical store plus a separate volume device.
-- \`diskutil unmount\` has no \`-quiet\`.
+- `diskutil unmount` has no `-quiet`.
 - macOS bash 3.2 has no associative arrays.
-- An earlier run went slowly because \`rm -rf\` of 30,000 files per run sits outside the timed part and the Mac was swapping; it was not a hang.
+- An earlier run went slowly because `rm -rf` of 30,000 files per run sits outside the timed part and the Mac was swapping; it was not a hang.
 
 ## Carry-overs
 
