@@ -59,6 +59,21 @@ uninit /uninit.bin 1048576 4096 4
 mkdir /big
 many /big 10000
 FIXTURE
+# Windows reparse points as Windows writes them (Step 16): symlinks and a junction.
+"$root/Scripts/make-image.sh" reparse 32m REPARSE >/dev/null
+"$out/mkfixture" reparse.img <<'FIXTURE'
+mkdir /Users
+mkdir /Users/Public
+file /Users/Public/hello.txt 100 1
+file /rel.lnk 0 1
+reparse /rel.lnk symlink-rel Users\Public\hello.txt
+file /abs.lnk 0 1
+reparse /abs.lnk symlink-abs C:\Users\Public\hello.txt
+mkdir /Docs
+reparse /Docs junction C:\Users\Public
+file /other.lnk 0 1
+reparse /other.lnk symlink-abs D:\elsewhere\x.txt
+FIXTURE
 if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
     "$root/Scripts/make-image.sh" big 5g BIG >/dev/null
     echo "file /4g.bin 4294967296 9" | "$out/mkfixture" big.img

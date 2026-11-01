@@ -2,27 +2,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Read-write suite through a real mount (plan Step 10).
 #
-#   Tests/Fuse/rw-suite.sh [--runs N] [--backend kext|fskit] [--git]
+#   Tests/Fuse/rw-suite.sh [--runs N] [--backend kext|fskit] [--no-git]
 #
 # Each run: a fresh image, mounted read-write; cp -R, rsync, ditto and a big file, each
 # checked by SHA-256 against the source; mv, case-only rename, rm -r, truncate, touch -t,
-# chflags; with --git, a git clone with fsck (needs native xattrs, Step 16: otherwise macOS
-# writes ._ files into .git/refs and fsck rejects them); unmount; the harness probes CLEAN and ntfsfix -n passes;
-# then a read-only remount and every hash checked again. AppleDouble `._` files that macOS
-# writes for extended attributes are expected until Step 16 and are left out of the hashes.
+# chflags hidden and uchg; xattrs (no ._ files), ln -s and ln; a git clone with fsck; unmount; the harness probes CLEAN and ntfsfix -n passes;
+# then a read-only remount and every hash, xattr and link checked again. No `._` AppleDouble
+# file may appear anywhere (xattrs are native since Step 16).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 products="$root/build/DerivedData/Build/Products/Debug"
 fuse="$products/unlatch-fuse" engine="$products/unlatch-engine"
 ntfsfix="$root/build/ntfs3g/bin/ntfsfix"
-runs=1 backend=kext git=0
+runs=1 backend=kext git=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --runs) runs="$2"; shift 2 ;;
         --backend) backend="$2"; shift 2 ;;
-        --git) git=1; shift ;;
-        *) echo "usage: $0 [--runs N] [--backend kext|fskit] [--git]" >&2; exit 64 ;;
+        --no-git) git=0; shift ;;
+        *) echo "usage: $0 [--runs N] [--backend kext|fskit] [--no-git]" >&2; exit 64 ;;
     esac
 done
 
@@ -68,9 +67,7 @@ for run in $(seq 1 "$runs"); do
     mv "$mnt/moved/readme" "$mnt/moved/README"
     expect_same "$src" "$mnt/moved" "moved tree"; ok
 
-    # rm -rf, not rm -r: libntfs-3g lists directories in index-block order, so rm can reach
-    # "x" before "._x", and macOS deletes "._x" along with "x" (D-47; gone with Step 16).
-    say "rm -rf a tree";          rm -rf "$mnt/rsync"; [ ! -e "$mnt/rsync" ] || die "rm -rf"; ok
+    say "rm -r a tree";           rm -r "$mnt/rsync"; [ ! -e "$mnt/rsync" ] || die "rm -r"; ok
     say "truncate grow and shrink"
     printf 'abcdef' > "$mnt/t.txt"
     truncate -s 1000000 "$mnt/t.txt"; [ "$(stat -f %z "$mnt/t.txt")" = 1000000 ] || die "grow"
@@ -80,6 +77,21 @@ for run in $(seq 1 "$runs"); do
     touch -t 200102030405.06 "$mnt/t.txt"
     [ "$(stat -f %Sm -t %Y%m%d%H%M%S "$mnt/t.txt")" = 20010203040506 ] || die "touch -t"
     chflags hidden "$mnt/t.txt"; ls -lO "$mnt/t.txt" | grep -q hidden || die "chflags"; ok
+    say "chflags uchg -> Windows read-only"
+    printf 'locked' > "$mnt/locked.txt"; chflags uchg "$mnt/locked.txt"
+    [ "$(stat -f %Sp "$mnt/locked.txt")" = "-r--r--r--" ] || die "uchg did not set read-only"
+    chmod u+w "$mnt/locked.txt"; printf '!' >> "$mnt/locked.txt" || die "chmod u+w"
+    chmod a-w "$mnt/locked.txt"; rm "$mnt/locked.txt" || die "rm of a read-only file"; ok
+    say "xattrs, no ._ files"
+    xattr -w com.example.note "a note" "$mnt/t.txt"
+    xattr -w com.apple.metadata:_kMDItemUserTags tagdata "$mnt/t.txt"
+    [ "$(xattr -p com.example.note "$mnt/t.txt")" = "a note" ] || die "xattr value"
+    cp -p "$src/README" "$mnt/readme-p" || die "cp -p"
+    ok
+    say "ln -s, ln"
+    ln -s t.txt "$mnt/sym"; ln -s ../t.txt "$mnt/cp/up"; ln "$mnt/t.txt" "$mnt/hard"
+    [ "$(cat "$mnt/sym")" = abc ] && [ "$(cat "$mnt/cp/up")" = abc ] || die "symlink targets"
+    [ "$(stat -f %l "$mnt/t.txt")" = 2 ] || die "nlink"; ok
     say "unlink while open"
     exec 3< "$mnt/big.bin"; rm "$mnt/big.bin"
     [ "$(shasum -a 256 <&3)" = "$(shasum -a 256 < "$work/big.bin")" ] || die "read after unlink"; exec 3<&-; ok
@@ -87,13 +99,15 @@ for run in $(seq 1 "$runs"); do
     if [ "$git" = 1 ]; then
     say "git clone, fsck"
     GIT_LFS_SKIP_SMUDGE=1 git clone -q --no-local "$root" "$mnt/clone" 2>/dev/null || die "git clone"
-    git -C "$mnt/clone" fsck --no-progress -q 2>/dev/null || die "git fsck"
+    git -C "$mnt/clone" fsck --no-progress --strict > "$work/fsck.txt" 2>&1 || { cat "$work/fsck.txt" >&2; die "git fsck"; }
     [ -z "$(GIT_LFS_SKIP_SMUDGE=1 git -C "$mnt/clone" status --porcelain | grep -v '^.. Tests/Images/' || true)" ] || die "git status not clean"
     ok
     fi
 
+    say "no ._ files anywhere"
+    [ -z "$(find "$mnt" -name '._*' | head -1)" ] || die "AppleDouble files: $(find "$mnt" -name '._*' | head -3)"; ok
     say "unmount, probe CLEAN, ntfsfix -n"
-    cp_snapshot="$work/cp.sha"; hashes "$mnt/cp" > "$cp_snapshot"
+    cp_snapshot="$work/cp.sha"; (cd "$mnt/cp" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) > "$cp_snapshot"
     umount "$mnt"
     "$engine" probe "$img" | grep -q '^state: *clean' || die "probe after unmount: $("$engine" probe "$img" | head -1)"
     "$ntfsfix" -n "$img" > "$work/ntfsfix.txt" 2>&1 || { cat "$work/ntfsfix.txt" >&2; die "ntfsfix -n"; }
@@ -101,7 +115,9 @@ for run in $(seq 1 "$runs"); do
 
     say "read-only remount, hashes again"
     mount_rw -r
-    diff "$cp_snapshot" <(hashes "$mnt/cp") > /dev/null || die "cp tree after remount"
+    diff "$cp_snapshot" <(cd "$mnt/cp" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) > /dev/null || die "cp tree after remount"
+    [ "$(xattr -p com.example.note "$mnt/t.txt")" = "a note" ] || die "xattr after remount"
+    [ "$(readlink "$mnt/sym")" = t.txt ] && [ "$(stat -f %l "$mnt/hard")" = 2 ] || die "links after remount"
     expect_same "$src" "$mnt/moved" "moved tree after remount"
     [ "$(cat "$mnt/t.txt")" = abc ] || die "t.txt after remount"
     [ ! -e "$mnt/big.bin" ] || die "unlinked file came back"

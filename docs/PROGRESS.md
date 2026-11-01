@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 2 Mounting (macFUSE, D-39) |
-| Last completed step | 10 write path through FUSE (2026-11-01; git clone and Windows chkdsk left, see entry). 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
-| Next step | 16 (xattr part, brought forward, D-47), then 11 |
+| Last completed step | 16 xattrs, links, flags (2026-11-01, brought forward; Windows check left). 10 write path. 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Next step | 11 Benchmark harness and M0 gate |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -295,9 +295,9 @@ A free Personal Team cannot sign an FSKit module (D-38), and the owner chose not
 xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build
 F=build/DerivedData/Build/Products/Debug/unlatch-fuse
 zstd -d Tests/Images/content-ntfs3g.img.zst -o build/c.img; mkdir -p build/m
-$F build/c.img build/m && Tests/Fuse/check-readonly.sh build/c.img build/m && umount build/m
+$F -r build/c.img build/m && Tests/Fuse/check-readonly.sh build/c.img build/m && umount build/m
 #   "10 directories, 308 files compared, 0 failures" (listings, sizes, hashes incl. 256 MiB sparse, df, EROFS)
-disk=$(Scripts/attach-image.sh build/c.img); $F /dev/$disk build/m && Tests/Fuse/check-readonly.sh build/c.img build/m; umount build/m; hdiutil detach $disk
+disk=$(Scripts/attach-image.sh build/c.img); $F -r /dev/$disk build/m && Tests/Fuse/check-readonly.sh build/c.img build/m; umount build/m; hdiutil detach $disk
 #   same result through the block device, no sudo
 zstd -d Tests/Images/logfile-faststartup-synthetic.img.zst -o build/fs.img; $F build/fs.img build/m
 cat ~/Library/Application\ Support/Unlatch/status/54DDA118567EC0ED.json   # "state" : "hibernated", "readOnly" : true, "mounted" : true
@@ -326,7 +326,7 @@ swift test --package-path Shared                                          # deco
 **Verify:**
 ```sh
 F=build/DerivedData/Build/Products/Debug/unlatch-fuse
-$F build/c.img build/m && Tests/Fuse/check-readonly.sh build/c.img build/m; umount build/m    # 308 files, 0 failures
+$F -r build/c.img build/m && Tests/Fuse/check-readonly.sh build/c.img build/m; umount build/m    # 308 files, 0 failures
 log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'          # mounted / unmounted lines
 # Finder fixture: hidden.txt hidden, the rest visible, root not hidden (Finder confirmed by the owner)
 img=$(Scripts/make-image.sh build/finder 64m FINDER | tail -1)
@@ -370,7 +370,7 @@ zstd -d Tests/Images/dirty-ntfs3g.img.zst -o build/d.img && $F build/d.img build
 ```
 
 **Left:**
-- The git clone check (`rw-suite.sh --git`): macOS writes `._` files for `com.apple.provenance` into `.git/refs`, and `git fsck` rejects them (D-47). Passes once Step 16's native xattrs land; the default suite gains `--git` then.
+- The git clone check: passes since Step 16 (native xattrs, D-48); now part of the default suite.
 - Windows `chkdsk /scan` on a suite image: needs the Windows VM (Step 06).
 - Surprise removal through a real mount: `hdiutil detach -force` refuses while the daemon holds the disk ("Resource busy"), so only the engine test covers it. Try a USB stick in Step 17.
 
@@ -378,6 +378,31 @@ zstd -d Tests/Images/dirty-ntfs3g.img.zst -o build/d.img && $F build/d.img build
 - Without the case-insensitive capability, `mv README readme` succeeds and does nothing.
 - libntfs-3g's readdir is in index-block order, not collation order.
 - macOS 27 tags every new file with `com.apple.provenance`.
+
+### Step 16: Xattrs, Finder metadata, links, flags — done 2026-11-01 (brought forward after Step 10, D-47), except the Windows check
+
+**Done:**
+- Engine xattrs (D-48): `ue_xattr_list/get/set/remove` over named streams, CREATE/REPLACE flags, positioned resource-fork writes, `:` ↔ U+F03A, 64 MiB cap. Daemon: `setxattr`/`getxattr`/`listxattr`/`removexattr` with macFUSE's position argument. macOS no longer writes `._` files.
+- Links (D-49): `ue_symlink` (WSL format), `ue_readlink` (native, junction, WSL, Interix), `ue_link`; symlinks and junctions report `UE_T_LNK`. Daemon: `symlink`, `readlink` (absolute targets under the mount point), `link`.
+- Flags (D-50): `chflags hidden` ↔ hidden; `chflags uchg` sets read-only, shown as mode only.
+- `mkfixture reparse PATH symlink-rel|symlink-abs|junction TARGET` writes reparse points as Windows does ([MS-FSCC] layouts); `test-engine.sh` builds `reparse.img` with all four kinds.
+- Tests: `test_xattr`, `test_links`, `test_windows_links`; `rw-suite.sh` now checks xattrs, `cp -p`, `ln -s`, `ln`, uchg, plain `rm -r`, no `._` anywhere, a git clone with `fsck --strict`, and xattrs and links again after a read-only remount.
+
+**Verify:**
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh     # test_xattr, test_links, test_windows_links; 10 written images CLEAN
+Tests/Fuse/rw-suite.sh --runs 3               # "3 run(s) passed" (~23 s), git clone + fsck included
+Scripts/fuzz.sh --time 60                     # PASSED (ue_fill_attr now reads reparse and system-file data)
+swift Tests/Fuse/tags.swift <apfs-file> <mount>/tagged.txt copy   # tags Red, Work, copies with FileManager
+umount <mount>; unlatch-fuse <img> <mount>; swift Tests/Fuse/tags.swift /dev/null <mount>/tagged.txt   # same tags
+```
+Tagged copy: `FileManager.copyItem` of a file tagged Red and Work onto the mount kept both tags after unmount and remount, with no `._` file.
+
+**Left:** "Windows reads the results" (symlinks and ADS made here, opened on Windows) waits for the Windows VM, like Steps 06 and 07. A Finder drag of a tagged and commented file was not done by hand; the `copyfile` path Finder uses was.
+
+**Surprises:**
+- `ue_xattr_list` first skipped every small xattr: `lowest_vcn` overlaps the value header of resident attributes.
+- Showing read-only as `uchg` broke git, because git deletes its own 0444 pack files.
 
 ## Carry-overs
 

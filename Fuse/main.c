@@ -189,7 +189,7 @@ int main(int argc, char **argv)
     }
 
     // When in doubt, read-only.
-    uf_fs_t fs = { .read_only = true, .uid = getuid(), .gid = getgid() };
+    uf_fs_t fs = { .read_only = true, .mountpoint = mountpoint, .uid = getuid(), .gid = getgid() };
     if (p.state != UE_VOL_CLEAN) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
     } else if (!want_ro) {

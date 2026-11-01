@@ -13,6 +13,9 @@
 //                                         clean, v1.1 with an open client, or v2.0 as left
 //                                         by Windows Fast Startup)
 //     stream PATH NAME SIZE SEED     named $DATA stream (alternate data stream) on PATH
+//     reparse PATH KIND TARGET       Windows reparse point on an existing PATH, as Windows
+//                                    writes it: KIND symlink-rel (TARGET like ..\\x.txt),
+//                                    symlink-abs or junction (TARGET like C:\\Users)
 //   mkfixture gen SIZE SEED [OFF] write SIZE bytes of the stream, from offset OFF, to stdout
 #include "config.h"
 
@@ -28,6 +31,8 @@
 #include <ntfs-3g/dir.h>
 #include <ntfs-3g/inode.h>
 #include <ntfs-3g/logfile.h>
+#include <ntfs-3g/reparse.h>
+#include <ntfs-3g/unistr.h>
 #include <ntfs-3g/mst.h>
 #include <ntfs-3g/unistr.h>
 #include <ntfs-3g/volume.h>
@@ -261,6 +266,53 @@ static int cmd_stream(ntfs_volume *vol, const char *path, const char *name, uint
     return rc;
 }
 
+// IO_REPARSE_TAG_SYMLINK / MOUNT_POINT buffers per [MS-FSCC] 2.1.2.4 and 2.1.2.5: substitute
+// name "\\??\\<target>" for absolute targets, the target itself for relative symlinks;
+// print name = target.
+static int cmd_reparse(ntfs_volume *vol, const char *path, const char *kind, const char *target)
+{
+    bool junction = !strcmp(kind, "junction"), rel = !strcmp(kind, "symlink-rel");
+    char subst[4200];
+    ntfschar *us = NULL, *up = NULL;
+    int ls, lp, rc = 0;
+
+    if (!junction && !rel && strcmp(kind, "symlink-abs"))
+        return fprintf(stderr, "mkfixture: unknown reparse kind %s\n", kind), 1;
+    snprintf(subst, sizeof(subst), "%s%s", rel ? "" : "\\??\\", target);
+    if ((ls = ntfs_mbstoucs(subst, &us)) <= 0 || (lp = ntfs_mbstoucs(target, &up)) <= 0)
+        return die("name", target);
+    size_t hdr = junction ? 8 : 12, names = (size_t)(ls + lp) * 2;
+    size_t dlen = hdr + names, total = 8 + dlen;
+    unsigned char *buf = calloc(1, total), *d = buf + 8;
+    if (!buf)
+        return die("alloc", path);
+    uint32_t tag = junction ? 0xA0000003u : 0xA000000Cu;
+    memcpy(buf, &tag, 4);                           // little-endian host (arm64)
+    uint16_t v = (uint16_t)dlen;
+    memcpy(buf + 4, &v, 2);
+    uint16_t f[4] = { 0, (uint16_t)(ls * 2), (uint16_t)(ls * 2), (uint16_t)(lp * 2) };
+    memcpy(d, f, 8);                                // subst off/len, print off/len
+    if (!junction) {
+        uint32_t flags = rel ? 1 : 0;               // SYMLINK_FLAG_RELATIVE
+        memcpy(d + 8, &flags, 4);
+    }
+    memcpy(d + hdr, us, (size_t)ls * 2);
+    memcpy(d + hdr + (size_t)ls * 2, up, (size_t)lp * 2);
+    ntfs_inode *ni = ntfs_pathname_to_inode(vol, NULL, path);
+    if (!ni)
+        rc = die("open", path);
+    else {
+        if (ntfs_set_ntfs_reparse_data(ni, (const char *)buf, total, 0))
+            rc = die("reparse", path);
+        if (ntfs_inode_close(ni) && !rc)
+            rc = die("close", path);
+    }
+    free(buf);
+    free(us);
+    free(up);
+    return rc;
+}
+
 static int run(ntfs_volume *vol, char *line)
 {
     char cmd[16], path[4096], word[32];
@@ -288,6 +340,9 @@ static int run(ntfs_volume *vol, char *line)
         return cmd_logfile(vol, path);
     if (!strcmp(cmd, "stream") && sscanf(line, "%*s %*s %31s %llu %llu", word, &a, &b) == 3)
         return cmd_stream(vol, path, word, a, b);
+    char target[4096];
+    if (!strcmp(cmd, "reparse") && sscanf(line, "%*s %*s %31s %4095s", word, target) == 2)
+        return cmd_reparse(vol, path, word, target);
     fprintf(stderr, "mkfixture: bad line: %s", line);
     return 1;
 }

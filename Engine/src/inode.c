@@ -123,6 +123,12 @@ int ue_fill_attr(ntfs_inode *ni, ue_attr_t *out)
     out->ctime = ntfs2timespec(ni->last_mft_change_time);
     out->atime = ntfs2timespec(ni->last_access_time);
 
+    // Symlinks and junctions (a junction is a directory, but shows as a link, like ntfs-3g).
+    if ((ni->flags & (FILE_ATTR_REPARSE_POINT | FILE_ATTR_SYSTEM)) && ue_is_symlink(ni)) {
+        out->type = UE_T_LNK;
+        out->mode = 0777;
+        return 0;
+    }
     if (ue_is_dir(ni)) {
         out->type = UE_T_DIR;
         out->mode = 0755;

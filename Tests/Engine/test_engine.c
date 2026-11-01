@@ -1003,6 +1003,117 @@ static int write_loop(const char *base, int n)
         printf("%s %s\n", failures == before ? "ok  " : "FAIL", #t); \
     } while (0)
 
+// Step 16: xattrs are named streams; list/get/set/remove, flags, positions, ':' names.
+static void test_xattr(void)
+{
+    wvol_t w;
+    ue_attr_t a;
+    ue_ino_t root;
+    char buf[256];
+    size_t n;
+    int err = wopen(&w, "clean", "xattr");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "x.txt", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(write_gen(w.e, a.ino, 0, 5000, 31) == 0, "data");
+    WCHECK(ue_xattr_list(w.e, a.ino, NULL, 0, &n) == 0 && n == 0, "empty list: %zu", n);
+    WCHECK(ue_xattr_get(w.e, a.ino, "nope", 0, buf, sizeof(buf), &n) == 93, "ENOATTR");
+    WCHECK(ue_xattr_set(w.e, a.ino, "com.example.a", 0, "hello", 5, 0) == 0, "set a");
+    WCHECK(ue_xattr_set(w.e, a.ino, "com.apple.metadata:_kMDItemUserTags", 0, "tags", 4, 0) == 0, "set colon");
+    WCHECK(ue_xattr_set(w.e, a.ino, "com.example.a", 0, "x", 1, UE_XATTR_CREATE) == EEXIST, "CREATE on existing");
+    WCHECK(ue_xattr_set(w.e, a.ino, "com.example.b", 0, "x", 1, UE_XATTR_REPLACE) == 93, "REPLACE on missing");
+    WCHECK(ue_xattr_set(w.e, a.ino, "com.example.a", 0, "hi", 2, UE_XATTR_REPLACE) == 0, "replace shrinks");
+    WCHECK(ue_xattr_set(w.e, a.ino, "com.apple.ResourceFork", 0, "abcdef", 6, 0) == 0, "fork");
+    WCHECK(ue_xattr_set(w.e, a.ino, "com.apple.ResourceFork", 4, "XYZ", 3, 0) == 0, "fork at 4");
+    WCHECK(ue_xattr_list(w.e, a.ino, NULL, 0, &n) == 0, "size query");
+    WCHECK(ue_xattr_list(w.e, a.ino, buf, 4, &n) == ERANGE, "small buffer");
+    WCHECK(wreopen(&w, true) == 0, "reopen");
+    WCHECK(ue_walk(w.e, "/x.txt", &a) == 0, "walk");
+    WCHECK(ue_xattr_list(w.e, a.ino, buf, sizeof(buf), &n) == 0, "list");
+    bool sa = false, sc = false, sf = false;
+    for (size_t i = 0; i < n; i += strlen(buf + i) + 1) {
+        sa |= !strcmp(buf + i, "com.example.a");
+        sc |= !strcmp(buf + i, "com.apple.metadata:_kMDItemUserTags");
+        sf |= !strcmp(buf + i, "com.apple.ResourceFork");
+    }
+    WCHECK(sa && sc && sf, "names after reopen");
+    WCHECK(ue_xattr_get(w.e, a.ino, "com.example.a", 0, buf, sizeof(buf), &n) == 0 && n == 2 && !memcmp(buf, "hi", 2), "value a");
+    WCHECK(ue_xattr_get(w.e, a.ino, "com.apple.ResourceFork", 0, buf, sizeof(buf), &n) == 0 && n == 7 &&
+           !memcmp(buf, "abcdXYZ", 7), "fork value");
+    WCHECK(ue_xattr_get(w.e, a.ino, "com.apple.ResourceFork", 0, NULL, 0, &n) == 0 && n == 7, "fork size");
+    WCHECK(ue_xattr_get(w.e, a.ino, "com.example.a", 0, buf, 1, &n) == ERANGE, "get ERANGE");
+    WCHECK(ue_xattr_remove(w.e, a.ino, "com.example.a") == 0, "remove");
+    WCHECK(ue_xattr_remove(w.e, a.ino, "com.example.a") == 93, "remove again");
+    WCHECK(ue_xattr_set(w.e, a.ino, "bad/name", 0, "x", 1, 0) == EINVAL, "slash");
+    WCHECK(check_gen(w.e, a.ino, 0, 5000, 31) == 0, "file data untouched");
+    WCHECK(ue_getattr(w.e, a.ino, &a) == 0 && a.size == 5000, "size is the unnamed stream");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+// Step 16: WSL symlinks, reading them back, hard links.
+static void test_links(void)
+{
+    wvol_t w;
+    ue_attr_t f, l, h, b;
+    ue_ino_t root;
+    char buf[512];
+    int err = wopen(&w, "clean", "links");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "target.txt", UE_T_REG, 0644, &f) == 0, "create");
+    WCHECK(ue_symlink(w.e, root, "rel", "target.txt", &l) == 0 && l.type == UE_T_LNK, "symlink");
+    WCHECK(ue_symlink(w.e, root, "abs", "/Volumes/x/y", &b) == 0, "absolute symlink");
+    WCHECK(ue_symlink(w.e, root, "rel", "x", &b) == EEXIST, "symlink over a name");
+    WCHECK(ue_readlink(w.e, l.ino, "/mnt", buf, sizeof(buf)) == 0 && !strcmp(buf, "target.txt"), "readlink %s", buf);
+    WCHECK(ue_readlink(w.e, l.ino, "/mnt", buf, 4) == ENAMETOOLONG, "small buffer");
+    WCHECK(ue_readlink(w.e, f.ino, "/mnt", buf, sizeof(buf)) == EINVAL, "not a link");
+    WCHECK(ue_link(w.e, f.ino, root, "hard.txt", &h) == 0 && h.ino == f.ino && h.nlink == 2, "link nlink %u", h.nlink);
+    WCHECK(ue_link(w.e, root, root, "rootlink", &b) == EPERM, "directory link");
+    WCHECK(ue_link(w.e, f.ino, root, "hard.txt", &b) == EEXIST, "link over a name");
+    WCHECK(wreopen(&w, true) == 0, "reopen");
+    WCHECK(ue_walk(w.e, "/rel", &l) == 0 && l.type == UE_T_LNK, "type after reopen");
+    WCHECK(ue_readlink(w.e, l.ino, "/mnt", buf, sizeof(buf)) == 0 && !strcmp(buf, "target.txt"), "readlink after reopen");
+    WCHECK(ue_walk(w.e, "/abs", &b) == 0 && ue_readlink(w.e, b.ino, "/mnt", buf, sizeof(buf)) == 0 &&
+           !strcmp(buf, "/Volumes/x/y"), "absolute target %s", buf);
+    WCHECK(ue_remove(w.e, root, "hard.txt", false) == 0, "unlink one name");
+    WCHECK(ue_walk(w.e, "/target.txt", &f) == 0 && f.nlink == 1, "nlink back to 1");
+    WCHECK(ue_remove(w.e, root, "rel", false) == 0, "remove symlink");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
+// Step 16: reparse points written the way Windows writes them (mkfixture reparse).
+static void test_windows_links(void)
+{
+    static const struct { const char *path, *target; } want[] = {
+        { "/rel.lnk", "users/public/hello.txt" },
+        { "/abs.lnk", "/mnt/users/public/hello.txt" },
+        { "/Docs", "/mnt/users/public" },
+        { "/other.lnk", "/mnt/.NTFS-3G/D:/elsewhere/x.txt" },
+    };
+    file_io_t f;
+    ue_engine_t *e;
+    ue_attr_t a;
+    char buf[512];
+
+    CHECK(file_io_open(&f, img("reparse"), false) == 0, "open image");
+    CHECK(ue_open(&f.io, UE_OPEN_RDONLY, &e, NULL) == 0, "ue_open");
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        int err = ue_walk(e, want[i].path, &a);
+        if (!err && a.type != UE_T_LNK)
+            err = EFTYPE;
+        if (!err)
+            err = ue_readlink(e, a.ino, "/mnt", buf, sizeof(buf));
+        if (err || strcmp(buf, want[i].target)) {
+            fprintf(stderr, "  FAIL %s: %s, got \"%s\"\n", want[i].path, strerror(err), err ? "" : buf);
+            failures++;
+        }
+    }
+    ue_close(e);
+    file_io_close(&f);
+}
+
 // Surprise removal / failed write (Step 10): after the first failed device write the engine
 // returns EIO for everything, writes nothing more, and close reports the failure.
 static void test_device_failure(void)
@@ -1109,6 +1220,9 @@ int main(int argc, char **argv)
     RUN(test_setattr);
     RUN(test_verifier);
     RUN(test_enospc);
+    RUN(test_xattr);
+    RUN(test_links);
+    RUN(test_windows_links);
     RUN(test_device_failure);
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);

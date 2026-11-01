@@ -4,6 +4,8 @@
 // lowntfs-3g's ntfs_fuse_rename uses, so each intermediate state is a valid volume.
 #include "internal.h"
 
+#include <limits.h>
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -359,6 +361,108 @@ int ue_create(ue_engine_t *e, ue_ino_t dir, const char *name, uint32_t type, uin
 out:
     free(u);
     int cerr = ue_iput(dni);
+    return err ? err : cerr;
+}
+
+// Symlinks are created as WSL symlinks (IO_REPARSE_TAG_LX_SYMLINK, D-49): readable by
+// Windows (WSL), Linux ntfs-3g and newer ntfs3, with the target stored as UTF-8 verbatim.
+int ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *target, ue_attr_t *out)
+{
+    ntfs_inode *dni, *ni;
+    ntfschar *u, *ut = NULL;
+    u64 mref;
+    int len, tlen, err;
+
+    if (!e || !out || !target || !*target)
+        return EINVAL;
+    if (e->readonly)
+        return EROFS;
+    if (strlen(target) >= PATH_MAX)
+        return ENAMETOOLONG;
+    if ((err = check_new_name(e, name, &u, &len)))
+        return err;
+    if ((tlen = ntfs_mbstoucs(target, &ut)) <= 0) {
+        free(u);
+        return EINVAL;
+    }
+    if ((err = open_dir(e, dir, &dni))) {
+        free(u);
+        free(ut);
+        return err;
+    }
+    if (dni->mft_no == FILE_Extend) {
+        err = EPERM;
+        goto out;
+    }
+    if ((err = find(dni, u, len, &mref)) != ENOENT) {
+        err = err ? err : EEXIST;
+        goto out;
+    }
+    err = 0;
+    e->vol->special_files = NTFS_FILES_WSL;
+    ni = ntfs_create_symlink(dni, const_cpu_to_le32(0), u, (u8)len, ut, tlen);
+    if (!ni) {
+        err = errno ? errno : EIO;
+        goto out;
+    }
+    ntfs_inode_update_mbsname(dni, name, ni->mft_no);
+    ntfs_inode_update_times(dni, NTFS_UPDATE_MCTIME);
+    NInoSetDirty(ni);
+    err = ue_fill_attr(ni, out);
+    if (!err)
+        err = ue_hold(e, ni);
+    if (ntfs_inode_close_in_dir(ni, dni) && !err)
+        err = errno ? errno : EIO;
+out:
+    free(u);
+    free(ut);
+    int cerr = ue_iput(dni);
+    return err ? err : cerr;
+}
+
+// A hard link: another $FILE_NAME for ino in newdir. Directories cannot be linked.
+int ue_link(ue_engine_t *e, ue_ino_t ino, ue_ino_t newdir, const char *newname, ue_attr_t *out)
+{
+    ntfs_inode *ni, *dni;
+    ntfschar *u;
+    u64 mref;
+    int len, err;
+
+    if (!e || !out)
+        return EINVAL;
+    if (e->readonly)
+        return EROFS;
+    if ((err = check_new_name(e, newname, &u, &len)))
+        return err;
+    if ((err = ue_iget(e, ino, &ni))) {
+        free(u);
+        return err;
+    }
+    bool isdir = ue_is_dir(ni);
+    err = ue_iput(ni);
+    if (!err && isdir)
+        err = EPERM;
+    if (!err && !(err = open_dir(e, newdir, &dni))) {
+        if (dni->mft_no == FILE_Extend)
+            err = EPERM;
+        else if ((err = find(dni, u, len, &mref)) == ENOENT)
+            err = 0;
+        else if (!err)
+            err = EEXIST;
+        int cerr = ue_iput(dni);
+        err = err ? err : cerr;
+    }
+    if (!err)
+        err = link_name(e, ino, newdir, u, len);
+    free(u);
+    if (err)
+        return err;
+    if ((err = ue_iget(e, ino, &ni)))
+        return err;
+    err = ue_fill_attr(ni, out);
+    if (!err)
+        err = ue_hold(e, ni);
+    int cerr = ue_iput(ni);
     return err ? err : cerr;
 }
 

@@ -22,8 +22,8 @@ Each step updates this list.
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
 | Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
-| Compare a mounted volume with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
-| Read-write suite through a mount (fresh images) | `Tests/Fuse/rw-suite.sh --runs 3 [--git]` |
+| Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
+| Read-write suite through a mount (fresh images; xattrs, links, git clone) | `Tests/Fuse/rw-suite.sh --runs 3 [--no-git]` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
 | Test UnlatchCore | `swift test --package-path Shared` |
@@ -44,6 +44,8 @@ Each step updates this list.
 | Make a test NTFS image (prints its path) | `Scripts/make-image.sh t1 512m T1` |
 | Inspect an image | `build/ntfs3g/bin/ntfsinfo -m t1.img`, `build/ntfs3g/bin/ntfsls -s t1.img` |
 | Attach an image as a block device, unmounted (prints `diskN`) | `Scripts/attach-image.sh t1.img`; detach with `hdiutil detach diskN` |
+
+Fixture reparse points: `mkfixture` `reparse PATH symlink-rel|symlink-abs|junction TARGET`.
 
 ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster ntfscmp ntfscp ntfsfix ntfsinfo ntfslabel ntfsls ntfsresize ntfsundelete`. Put images under `build/` (ignored) or anywhere else outside the repo; `*.img` is ignored everywhere.
 

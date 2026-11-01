@@ -19,6 +19,7 @@ typedef struct {
     ue_engine_t *engine;
     ue_ino_t root;                    // engine reference of the root (FUSE_ROOT_ID maps to it)
     bool read_only;
+    const char *mountpoint;           // absolute; readlink shows absolute Windows targets under it
     uid_t uid;
     gid_t gid;
     uf_node_t *nodes;                 // open addressing, power-of-two capacity

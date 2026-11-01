@@ -9,10 +9,12 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <time.h>
 
 // Attribute and entry cache lifetimes. Every change comes through the kernel either way, but
@@ -432,7 +434,10 @@ static void reply_attr_of(fuse_req_t req, uf_fs_t *fs, const ue_attr_t *a)
 }
 
 // NTFS has no owners: chown and chgrp succeed and change nothing (D-46). Of the BSD flags,
-// only UF_HIDDEN maps to NTFS; other flag bits are ignored the same way.
+// UF_HIDDEN maps to hidden, and setting UF_IMMUTABLE (uchg) on a file sets read-only. The
+// read-only bit is shown only as a missing w in the mode, never as uchg: an immutable file
+// cannot be unlinked, and git and others delete their 0444 files (D-50). It is cleared with
+// chmod u+w. Other flag bits are ignored.
 static void uf_setattr(fuse_req_t req, fuse_ino_t ino, struct fuse_darwin_attr *attr, int to_set,
                        struct fuse_file_info *fi)
 {
@@ -486,6 +491,8 @@ static void uf_setattr(fuse_req_t req, fuse_ino_t ino, struct fuse_darwin_attr *
         }
         mask |= UE_SET_FLAGS;
         in.flags = (cur.flags & ~(uint32_t)UE_F_HIDDEN) | ((attr->flags & UF_HIDDEN) ? UE_F_HIDDEN : 0);
+        if (cur.type == UE_T_REG && (attr->flags & UF_IMMUTABLE))
+            in.flags |= UE_F_READONLY;
     }
     if ((err = ue_setattr(fs->engine, eino, mask, &in, &out))) {
         fuse_reply_err(req, err);
@@ -624,18 +631,48 @@ static void uf_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_f
 
 static void uf_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
 {
-    (void)link;
-    (void)parent;
-    (void)name;
-    fuse_reply_err(req, fs_of(req)->read_only ? EROFS : ENOTSUP);   // Step 16
+    uf_fs_t *fs = fs_of(req);
+    char nfc[UF_NAME_MAX];
+    ue_attr_t a;
+    int err;
+
+    if (fs->read_only)
+        err = EROFS;
+    else if (!(err = nfc_name(name, nfc)))
+        err = ue_symlink(fs->engine, to_engine(fs, parent), nfc, link, &a);
+    if (err)
+        fuse_reply_err(req, err);
+    else
+        reply_entry(req, fs, &a);
 }
 
 static void uf_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
 {
-    (void)ino;
-    (void)newparent;
-    (void)newname;
-    fuse_reply_err(req, fs_of(req)->read_only ? EROFS : ENOTSUP);   // Step 16
+    uf_fs_t *fs = fs_of(req);
+    char nfc[UF_NAME_MAX];
+    ue_attr_t a;
+    int err;
+
+    if (fs->read_only)
+        err = EROFS;
+    else if (!(err = nfc_name(newname, nfc)))
+        err = ue_link(fs->engine, to_engine(fs, ino), to_engine(fs, newparent), nfc, &a);
+    if (err)
+        fuse_reply_err(req, err);
+    else
+        reply_entry(req, fs, &a);
+}
+
+static void uf_readlink(fuse_req_t req, fuse_ino_t ino)
+{
+    uf_fs_t *fs = fs_of(req);
+    char target[PATH_MAX];
+    int err = ue_readlink(fs->engine, to_engine(fs, ino), fs->mountpoint, target, sizeof(target));
+
+    if (err)
+        fuse_reply_err(req, err);
+    else
+        fuse_reply_readlink(req, target);
 }
 
 static void uf_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
@@ -652,6 +689,77 @@ static void uf_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t
         fuse_reply_err(req, err);
     else
         reply_entry(req, fs_of(req), &a);
+}
+
+// MARK: extended attributes (named streams, D-48)
+
+static void uf_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size,
+                        int flags, uint32_t position)
+{
+    uf_fs_t *fs = fs_of(req);
+    uint32_t uflags = 0;
+
+    if (fs->read_only) {
+        fuse_reply_err(req, EROFS);
+        return;
+    }
+    if (flags & XATTR_CREATE)
+        uflags |= UE_XATTR_CREATE;
+    if (flags & XATTR_REPLACE)
+        uflags |= UE_XATTR_REPLACE;
+    fuse_reply_err(req, ue_xattr_set(fs->engine, to_engine(fs, ino), name, position, value, size, uflags));
+}
+
+static void uf_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name, size_t size, uint32_t position)
+{
+    uf_fs_t *fs = fs_of(req);
+    size_t len = 0;
+    char *buf = NULL;
+    int err;
+
+    if (size && !(buf = malloc(size))) {
+        fuse_reply_err(req, ENOMEM);
+        return;
+    }
+    err = ue_xattr_get(fs->engine, to_engine(fs, ino), name, position, buf, size, &len);
+    if (err)
+        fuse_reply_err(req, err);
+    else if (!size)
+        fuse_reply_xattr(req, len);
+    else
+        fuse_reply_buf(req, buf, len);
+    free(buf);
+}
+
+static void uf_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
+{
+    uf_fs_t *fs = fs_of(req);
+    size_t needed = 0;
+    char *buf = NULL;
+    int err;
+
+    if (size && !(buf = malloc(size))) {
+        fuse_reply_err(req, ENOMEM);
+        return;
+    }
+    err = ue_xattr_list(fs->engine, to_engine(fs, ino), buf, size, &needed);
+    if (err)
+        fuse_reply_err(req, err);
+    else if (!size)
+        fuse_reply_xattr(req, needed);
+    else
+        fuse_reply_buf(req, buf, needed);
+    free(buf);
+}
+
+static void uf_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name)
+{
+    uf_fs_t *fs = fs_of(req);
+
+    if (fs->read_only)
+        fuse_reply_err(req, EROFS);
+    else
+        fuse_reply_err(req, ue_xattr_remove(fs->engine, to_engine(fs, ino), name));
 }
 
 const struct fuse_lowlevel_ops uf_ops = {
@@ -680,4 +788,9 @@ const struct fuse_lowlevel_ops uf_ops = {
     .symlink = uf_symlink,
     .link = uf_link,
     .mknod = uf_mknod,
+    .readlink = uf_readlink,
+    .setxattr = uf_setxattr,
+    .getxattr = uf_getxattr,
+    .listxattr = uf_listxattr,
+    .removexattr = uf_removexattr,
 };

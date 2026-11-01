@@ -4,6 +4,7 @@
 #
 #   Scripts/fuzz.sh [--time SECONDS] [target ...]   fuzz each target (default 60 s each)
 #   Scripts/fuzz.sh --regress                       only replay Tests/Fuzz/crashes/*
+#   Scripts/fuzz.sh --check-asan                    exit 0 if an ASan program starts within 30 s
 #
 # Saved crashes are replayed first. A new crash is copied to Tests/Fuzz/crashes/<target>/
 # and the script fails. Needs Homebrew LLVM (Apple clang has no libFuzzer runtime).
@@ -11,11 +12,12 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-secs=60 regress=0 targets=()
+secs=60 regress=0 check_asan=0 targets=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --time) secs="$2"; shift 2 ;;
         --regress) regress=1; shift ;;
+        --check-asan) check_asan=1; shift ;;
         fuzz_*) targets+=("$1"); shift ;;
         *) echo "usage: $0 [--time S] [--regress] [fuzz_probe|fuzz_open_ls ...]" >&2; exit 64 ;;
     esac
@@ -28,6 +30,13 @@ for p in "${LLVM_PREFIX:-}" "$(brew --prefix llvm 2>/dev/null)" "$(brew --prefix
     [ -n "$p" ] && [ -x "$p/bin/clang" ] && { cc="$p/bin/clang"; break; }
 done
 [ -n "$cc" ] || { echo "fuzz: needs Homebrew LLVM (brew install llvm) or LLVM_PREFIX" >&2; exit 1; }
+if [ "$check_asan" = 1 ]; then
+    # ASan programs from Homebrew LLVM have hung at startup on the CI runner (D-35).
+    mkdir -p build/fuzz
+    echo 'int main(void) { return 0; }' > build/fuzz/asan-check.c
+    "$cc" -fsanitize=address -isysroot "$(xcrun --sdk macosx --show-sdk-path)" -o build/fuzz/asan-check build/fuzz/asan-check.c
+    exec perl -e 'alarm 30; exec @ARGV' build/fuzz/asan-check
+fi
 [ -f build/ntfs3g-fuzz/lib/libntfs-3g.a ] || Scripts/build-ntfs3g.sh --fuzz
 [ -f build/ntfs3g/lib/libntfs-3g.a ] || Scripts/build-ntfs3g.sh
 mkdir -p "$out/seeds" "$out/artifacts"

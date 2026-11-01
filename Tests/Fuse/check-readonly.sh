@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Compares a mounted NTFS volume with what the harness reads from the same image (plan Step 08).
 #
-#   Tests/Fuse/check-readonly.sh <image> <mountpoint>
+#   Tests/Fuse/check-readonly.sh <image> <mountpoint>      (mounted with unlatch-fuse -r)
 #
 # Every directory: names, types and sizes match `unlatch-engine ls`. Every file: SHA-256
 # through the mount matches `unlatch-engine cat`. Then df totals match `unlatch-engine info`,
@@ -60,7 +60,8 @@ read -r blocks avail < <(df -k "$mnt" | awk 'NR == 2 {print $2, $4}')
 [ "$blocks" -eq $((total / 1024)) ] || bad "df total $blocks KiB, engine $((total / 1024))"
 [ "$avail" -eq $((free / 1024)) ] || bad "df available $avail KiB, engine $((free / 1024))"
 
-# Read-only: nothing may change.
+# Read-only: nothing may change. A clean volume mounts read-write unless -r was given.
+mount | grep " on $(cd "$mnt" && pwd) " | grep -q read-only || bad "mount is not read-only (mount with unlatch-fuse -r)"
 touch "$mnt/.unlatch-check" 2>/dev/null && bad "create succeeded on a read-only mount"
 mkdir "$mnt/.unlatch-check-d" 2>/dev/null && bad "mkdir succeeded on a read-only mount"
 

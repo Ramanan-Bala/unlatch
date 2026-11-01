@@ -111,7 +111,27 @@ int  ue_remove(ue_engine_t *e, ue_ino_t dir, const char *name, bool is_dir);
 int  ue_rename(ue_engine_t *e, ue_ino_t odir, const char *oname, ue_ino_t ndir, const char *nname, uint32_t flags);
 int  ue_setattr(ue_engine_t *e, ue_ino_t ino, uint32_t mask, const ue_attr_t *in, ue_attr_t *out);
 int  ue_sync(ue_engine_t *e);
-// later: ue_xattr_* / ue_readlink / ue_symlink / ue_link (Step 16), ue_blockmap / ue_complete_io (Step 15)
+
+// Extended attributes (Step 16, D-48): each one is a named $DATA stream of the same name.
+// list: NUL-terminated UTF-8 names into buf; *needed is the full size (ERANGE if size is too
+// small; buf NULL asks for the size). get: buf NULL returns the value size in *len; pos is
+// for resource forks, 0 otherwise. set: pos 0 replaces the value. ENOATTR when absent.
+#define UE_XATTR_MAX (64u << 20)
+enum { UE_XATTR_CREATE = 1, UE_XATTR_REPLACE = 2 };
+int  ue_xattr_list(ue_engine_t *e, ue_ino_t ino, char *buf, size_t size, size_t *needed);
+int  ue_xattr_get(ue_engine_t *e, ue_ino_t ino, const char *name, uint64_t pos, void *buf, size_t size, size_t *len);
+int  ue_xattr_set(ue_engine_t *e, ue_ino_t ino, const char *name, uint64_t pos, const void *buf, size_t size,
+                  uint32_t flags);
+int  ue_xattr_remove(ue_engine_t *e, ue_ino_t ino, const char *name);
+
+// Links (Step 16, D-49). readlink reads native symlinks, junctions, WSL and Interix links;
+// absolute Windows targets are shown under mount_point. buf gets a NUL-terminated UTF-8
+// target (ENAMETOOLONG if it does not fit; EINVAL if ino is not a link). symlink creates a
+// WSL symlink. link adds a hard link (EPERM for directories). Both hold the new item.
+int  ue_readlink(ue_engine_t *e, ue_ino_t ino, const char *mount_point, char *buf, size_t size);
+int  ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *target, ue_attr_t *out);
+int  ue_link(ue_engine_t *e, ue_ino_t ino, ue_ino_t newdir, const char *newname, ue_attr_t *out);
+// later: ue_blockmap / ue_complete_io (Step 15)
 
 #ifdef __cplusplus
 }

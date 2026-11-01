@@ -44,7 +44,7 @@ umount build/m
 hdiutil detach "$disk"
 ```
 
-Options: `-f` stays in the foreground, `-d` prints FUSE debug output, `--backend fskit` uses the FSKit backend (mount point under `/Volumes`), and `-o opt,...` passes extra macFUSE options. A block device needs no sudo when the user owns it, as with `hdiutil`-attached images. A volume mounts read-write only when it probes clean and the image or disk opens writable; `-r` forces read-only. Dirty, hibernated and unclean-log volumes always mount read-only. Until xattrs are native (Step 16), macOS writes `._` AppleDouble files next to new files (D-47).
+Options: `-f` stays in the foreground, `-d` prints FUSE debug output, `--backend fskit` uses the FSKit backend (mount point under `/Volumes`), and `-o opt,...` passes extra macFUSE options. A block device needs no sudo when the user owns it, as with `hdiutil`-attached images. A volume mounts read-write only when it probes clean and the image or disk opens writable; `-r` forces read-only. Dirty, hibernated and unclean-log volumes always mount read-only. Extended attributes are stored as NTFS named streams (D-48), so macOS writes no `._` files; symlinks are created in the WSL format (D-49).
 
 **Apple's NTFS driver:** Apple's read-only NTFS driver may also claim a disk. `attach-image.sh` attaches with `-nomount`, so nothing mounts it first. Step 12 settles the auto-mount race.
 
@@ -61,7 +61,7 @@ The daemon writes `status/<serial>.json` (`VolumeStatus` in UnlatchCore, D-41) a
 
 | Check | Command |
 |---|---|
-| Everything below at once | `Tests/Fuse/check-readonly.sh build/c.img build/m` |
+| Everything below at once | `$fuse -r build/c.img build/m && Tests/Fuse/check-readonly.sh build/c.img build/m` |
 | Listing | `ls -la build/m` matches `unlatch-engine ls <img> /` |
 | Times | `stat build/m/ReadMe.TXT` matches `unlatch-engine stat <img> /ReadMe.TXT` |
 | Space | `df build/m` matches `unlatch-engine info <img>` |
