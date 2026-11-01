@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Current phase | 2 FSKit module |
-| Last completed step | 08 FSKit module, read-only: code builds (2026-11-01); **mount untested: needs signing**. 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Last completed step | 08 FSKit module, read-only: code builds (2026-11-01); **mount untested: needs a paid Apple Developer membership (D-38)**. 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
 | Next step | 08 mount checks once signed, then 09 |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
@@ -269,9 +269,8 @@ Scripts/bootstrap.sh && xcodebuild -quiet -scheme Unlatch -derivedDataPath build
 ```
 
 **Left:** every "Done when" item that needs a mount, listed in `docs/dev-setup.md` §5: listing, times, `df`, content hashes, and the Fast Startup image mounting read-only. Blocked on the owner:
-1. Sign in to Xcode with an Apple ID, and put the team ID in `Config/Local.xcconfig` (it still has the placeholder `ABCDE12345`).
+1. A paid Apple Developer Program membership: a free Personal Team cannot carry the FSKit Module capability (D-38). Then put the paid team's ID in `Config/Local.xcconfig`.
 2. Enable the extension in System Settings after the first signed install.
-3. Whether a free Personal Team can carry `com.apple.developer.fskit.fsmodule` is unknown; record the answer in DECISIONS.
 
 **Surprises:**
 - `FSDirectoryVerifier` is a plain `UInt64` in Swift, not a wrapper type.
