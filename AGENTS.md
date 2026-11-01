@@ -20,6 +20,8 @@ Each step updates this list.
 | Check tools, build libntfs-3g if missing, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
 | Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
+| Mount an image read-only through macFUSE (mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] <img-or-/dev/diskN> /Volumes/<name>`; `umount /Volumes/<name>` |
+| Compare a mounted volume with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
 | Test UnlatchCore | `swift test --package-path Shared` |
@@ -45,7 +47,7 @@ ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster nt
 
 `Unlatch.xcodeproj` is generated from `project.yml` and is not committed. After changing `project.yml`, run `Scripts/bootstrap.sh` again.
 
-Builds are ad-hoc signed by default (`Config/Base.xcconfig`). To build an extension that macOS will load, create `Config/Local.xcconfig` from the `.example` with your team ID: it turns on Automatic signing and the entitlements (D-37). `docs/dev-setup.md` covers signing, enabling the extension, mounting and logs.
+Mounting goes through macFUSE's FSKit backend (D-39): install macFUSE (`brew install --cask macfuse`) and enable it under File System Extensions. `unlatch-fuse` builds against `/usr/local` (`MACFUSE_PREFIX`). Builds are ad-hoc signed (`Config/Base.xcconfig`); the dormant FSKit module in `Extension/` needs a paid team (D-37, D-38). `docs/dev-setup.md` covers macFUSE, mounting and logs.
 
 ## Layout
 
@@ -54,7 +56,8 @@ Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c,
              vendor/ntfs-3g (pinned in vendor/VERSION), vendor/patches/
 EngineTool/  unlatch-engine host harness (works on image files); file_io.c is the file-backed
              ue_io_t, walk.c the host-side path walk
-Extension/   Swift FSKit module (UnlatchFileSystem, NTFSVolume, BlockIO); imports the engine as
+Fuse/        unlatch-fuse: the mount daemon, libfuse3 low-level ops over the engine (D-40)
+Extension/   dormant Swift FSKit module (needs a paid team, D-38); imports the engine as
              module UnlatchEngineC (Engine/include/module.modulemap)
 Shared/      Swift package UnlatchCore
 CLI/         Swift package, the `unlatch` executable

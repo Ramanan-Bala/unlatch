@@ -1,6 +1,6 @@
 # Engine CI: builds libntfs-3g and the engine, runs the engine tests, golden images, fsx
-# regressions plus a short soak, and both fuzzers. FSKit is not tested in CI: the extension
-# needs signing and approval in System Settings (docs/testing.md).
+# regressions plus a short soak, and both fuzzers. Mounting is not tested in CI: it needs
+# macFUSE's extension enabled in System Settings (docs/dev-setup.md).
 name: engine
 
 on:
@@ -17,7 +17,9 @@ jobs:
           lfs: true
 
       - name: Tools
-        run: brew install xcodegen
+        run: |
+          brew install xcodegen
+          brew install --cask macfuse      # headers and libfuse3 for unlatch-fuse (D-40); nothing is mounted
 
       - name: Cache libntfs-3g
         uses: actions/cache@v4

@@ -1,69 +1,67 @@
-# Developer setup: signing, enabling and mounting the FSKit extension
+# Developer setup: macFUSE, mounting, logs
 
 Never use a drive that holds real data. Use image files (`Scripts/make-image.sh`, `Tests/Images/`) and disposable disks.
 
-## 1. Signing (once per machine)
+Unlatch mounts through **macFUSE's FSKit backend** (D-39): macFUSE's own signed FSKit extension forwards file system calls to the `unlatch-fuse` daemon, which runs the engine. Nothing of ours needs signing, and no kernel extension is loaded.
 
-Without a team, the app and extension build ad-hoc signed with no entitlements. That's enough for CI and the engine work, but macOS won't load the FSKit extension (D-06). To sign for real:
+## 1. Install and enable macFUSE (once per machine)
 
-1. Sign in to Xcode with your Apple ID: Xcode → Settings → Accounts. A paid Apple Developer Program team is needed: Xcode refuses the FSKit Module capability for a free Personal Team (D-38).
-2. Copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (git-ignored) and set `DEVELOPMENT_TEAM` to your team ID (Xcode → Settings → Accounts → the team, or developer.apple.com → Membership).
-3. Regenerate and build:
-   ```sh
-   Scripts/bootstrap.sh
-   xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData -allowProvisioningUpdates build
-   ```
-   Automatic signing registers `io.github.ramanan-bala.Unlatch`, `….Unlatch.FSModule` and `group.io.github.ramanan-bala.Unlatch` under your team.
-4. Check the entitlements:
-   ```sh
-   codesign -d --entitlements - build/DerivedData/Build/Products/Debug/Unlatch.app/Contents/Extensions/UnlatchFSModule.appex
-   ```
+1. Install macFUSE 5.4 or later: `brew install --cask macfuse`, or the installer from macfuse.github.io. Skip the kernel-extension approval it offers; the FSKit backend doesn't need it.
+2. Enable its file system extension: System Settings → General → Login Items & Extensions → File System Extensions → turn on **macFUSE**. Enabling it is a security setting, so a person always does it.
+3. Check: `pluginkit -m -v -p com.apple.fskit.fsmodule` lists `io.macfuse.app.fsmodule.macfuse`.
 
-## 2. Install and enable the extension
+`unlatch-fuse` builds against `/usr/local/include/fuse3` and `/usr/local/lib/libfuse3.dylib`. For another prefix, set `MACFUSE_PREFIX` in `Config/Local.xcconfig`.
 
-1. Copy the app to `/Applications`, so the system finds the embedded extension, and launch it once:
-   ```sh
-   ditto build/DerivedData/Build/Products/Debug/Unlatch.app /Applications/Unlatch.app
-   open /Applications/Unlatch.app
-   ```
-2. Check that the system sees the extension:
-   ```sh
-   pluginkit -m -v -p com.apple.fskit.fsmodule
-   ```
-   It should list `io.github.ramanan-bala.Unlatch.FSModule`.
-3. Enable it in System Settings → General → Login Items & Extensions → File System Extensions → **Unlatch**. The app will deep-link there in Step 14 (`FSClient.shared.openFileSystemExtensionsSettings()`). Enabling it is a security setting, so it's always done by a person.
+## 2. Build
+
+```sh
+Scripts/bootstrap.sh
+xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build
+fuse=build/DerivedData/Build/Products/Debug/unlatch-fuse
+```
 
 ## 3. Mount an image
 
 ```sh
-Scripts/make-image.sh t1 512m T1                  # or: zstd -d Tests/Images/content-ntfs3g.img.zst -o c.img
-disk=$(Scripts/attach-image.sh t1.img)            # prints diskN, not mounted
-mkdir -p /tmp/unlatch
-mount -F -t unlatch "$disk" /tmp/unlatch          # if it fails with a permission error: sudo (record which in DECISIONS)
-ls -la /tmp/unlatch; df -h /tmp/unlatch
-umount /tmp/unlatch
+zstd -d Tests/Images/content-ntfs3g.img.zst -o build/c.img
+mkdir -p build/m
+$fuse build/c.img build/m            # an image file directly
+ls -la build/m; df -h build/m
+umount build/m
+```
+
+Through a block device, as a real disk would be:
+
+```sh
+disk=$(Scripts/attach-image.sh build/c.img)   # diskN, not mounted
+$fuse /dev/$disk build/m
+umount build/m
 hdiutil detach "$disk"
 ```
 
-Mounting read-only: `mount -F -t unlatch -o rdonly "$disk" /tmp/unlatch`.
+Options: `-f` stays in the foreground, `-d` prints FUSE debug output, `--backend kext` uses macFUSE's kernel extension instead (it needs approval in Recovery), and `-o opt,...` passes extra macFUSE options. Step 08 always mounts read-only; dirty, hibernated and unclean-log volumes will stay read-only once writing arrives in Step 10.
 
-**Apple's NTFS driver:** Apple's read-only NTFS driver may also claim the disk. `attach-image.sh` attaches with `-nomount`, so nothing mounts it first. Step 12 settles the auto-mount race.
+**Apple's NTFS driver:** Apple's read-only NTFS driver may also claim a disk. `attach-image.sh` attaches with `-nomount`, so nothing mounts it first. Step 12 settles the auto-mount race.
 
 ## 4. Logs and status
 
 ```sh
-log stream --level debug --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'
-ls ~/Library/Group\ Containers/group.io.github.ramanan-bala.Unlatch/status/   # one JSON record per volume serial
+$fuse -f build/c.img build/m          # errors go to stderr in the foreground
+ls ~/Library/Application\ Support/Unlatch/status/   # one JSON record per volume serial
 ```
 
-The extension writes `status/<serial>.json` (`VolumeStatus` in UnlatchCore) at check and load. It records the probe state (`clean`, `dirty`, `hibernated`, `unclean_log`, `corrupt`, `not_ntfs`), the reason, and whether the volume was loaded read-only.
+The daemon writes `status/<serial>.json` (`VolumeStatus` in UnlatchCore, D-41) at probe, mount and unmount. It records the probe state (`clean`, `dirty`, `hibernated`, `unclean_log`, `corrupt`, `not_ntfs`), the reason, whether the volume is read-only, and whether it is mounted.
 
-## 5. Step 08 checks (once signed and enabled)
+## 5. Step 08 checks
 
 | Check | Command |
 |---|---|
-| Listing | `ls -la /tmp/unlatch` matches `unlatch-engine ls <img> /` |
-| Times | `stat /tmp/unlatch/ReadMe.TXT` matches `unlatch-engine stat <img> /ReadMe.TXT` |
-| Space | `df /tmp/unlatch` matches `unlatch-engine info <img>` |
-| Content | `shasum /tmp/unlatch/docs/sub/report.bin` matches `unlatch-engine cat <img> /docs/sub/report.bin \| shasum` |
+| Listing | `ls -la build/m` matches `unlatch-engine ls <img> /` |
+| Times | `stat build/m/ReadMe.TXT` matches `unlatch-engine stat <img> /ReadMe.TXT` |
+| Space | `df build/m` matches `unlatch-engine info <img>` |
+| Content | `shasum build/m/docs/sub/report.bin` matches `unlatch-engine cat <img> /docs/sub/report.bin \| shasum` |
 | Fast Startup image | `logfile-faststartup-synthetic` mounts read-only; its status record says `hibernated` |
+
+## 6. The dormant FSKit module
+
+`Extension/` holds a native FSKit module (Step 08's first version). macOS loads it only when it is signed by a paid Apple Developer team: Xcode refuses the FSKit Module capability for a free Personal Team (D-38). To try it with a paid team, copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig`, set `DEVELOPMENT_TEAM`, build with `-allowProvisioningUpdates`, copy the app to `/Applications`, enable **Unlatch** under File System Extensions, and mount with `mount -F -t unlatch diskN <dir>`.

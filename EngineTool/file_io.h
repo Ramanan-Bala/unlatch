@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// File-backed ue_io_t for image files (host harness and tests).
+// File-backed ue_io_t for image files and block devices (/dev/diskN, /dev/rdiskN).
 #ifndef UE_FILE_IO_H
 #define UE_FILE_IO_H
 
@@ -9,6 +9,7 @@
 
 typedef struct {
     int fd;
+    bool is_device;                   // block-aligned transfers only
     ue_io_t io;
 } file_io_t;
 

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-/// The extension's verdict on one NTFS volume, shared with the app and CLI through the
-/// App Group container (`status/<serial>.json`). Written at check, mount and unmount.
+/// The mount daemon's verdict on one NTFS volume, shared with the app and CLI through
+/// `~/Library/Application Support/Unlatch/status/<serial>.json` (D-41). Written at probe,
+/// mount and unmount; `Fuse/status.c` writes the same JSON.
 public struct VolumeStatus: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable {
         case clean, dirty, hibernated, uncleanLog = "unclean_log", corrupt, notNTFS = "not_ntfs"
@@ -33,10 +34,10 @@ public struct VolumeStatus: Codable, Equatable, Sendable {
         self.timestamp = timestamp
     }
 
-    /// `<App Group container>/status`, or nil when the App Group entitlement is missing.
+    /// `~/Library/Application Support/Unlatch/status`.
     public static func directory() -> URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Unlatch.appGroup)?
-            .appendingPathComponent("status", isDirectory: true)
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Unlatch/status", isDirectory: true)
     }
 
     /// Writes this record atomically to `status/<serial>.json`.

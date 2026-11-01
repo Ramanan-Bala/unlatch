@@ -2,6 +2,8 @@
 
 Unlatch mounts NTFS volumes read-write on macOS 27+ (Apple Silicon). It is an FSKit extension with libntfs-3g running in-process, plus a menu-bar app and a CLI called `unlatch`. The license is GPL-3.0-or-later.
 
+> **Plan change, 2026-11-01 (D-39).** The owner has no paid Apple Developer membership, and a free Personal Team cannot sign an FSKit module (D-38). Unlatch therefore mounts through **macFUSE's FSKit backend** (`-o backend=fskit`): macFUSE's own signed FSKit extension talks to a small Unlatch daemon, `unlatch-fuse`, which runs the same engine over libfuse's low-level API. Steps 01–07 are unchanged. Steps 08–11 below are rewritten for it. Steps 12–20 still mention FSKit, entitlements and KOIO; each of those steps maps them to the daemon first (see "Re-scoping later steps" at the end of Phase 2). The Swift FSKit module in `Extension/` stays in the tree, dormant, in case a paid team becomes available.
+
 Background: `docs/Unlatch-Review.md` explains why the plan differs from the original guide. The original guide is `docs/NTFS for Mac Complete Build Guide.md`, which is now reference only.
 
 ---
@@ -59,7 +61,7 @@ Unlatch/
 |---|---|---|
 | 0 Foundations | 01–02 | Repo builds, libntfs-3g and its tools build |
 | 1 Engine on host | 03–07 | Engine read-write on images passes the model test and fuzz smoke; CI green |
-| 2 FSKit | 08–11 | **M0 GO/NO-GO**: FSKit read-write mount works and meets the speed gate |
+| 2 Mounting | 08–11 | **M0 GO/NO-GO**: read-write mount through macFUSE works and meets the speed gate |
 | 3 Mount management | 12–14 | Detection, auto-mount, CLI and app all work |
 | 4 Performance and depth | 15–17 | KOIO is fast, xattrs and links work, robustness suite passes |
 | 5 Ship | 18–20 | Notarized DMG, updates, beta, release |
@@ -315,70 +317,45 @@ Tasks:
 
 ---
 
-## Phase 2: FSKit
+## Phase 2: Mounting (macFUSE FSKit backend)
 
-### Step 08: FSKit module skeleton: probe, check, read-only mount
-**Read first:**
-- Apple docs: `FSUnaryFileSystem`, `FSUnaryFileSystemOperations`, `FSManageableResourceMaintenanceOperations`, `FSBlockDeviceResource`, `FSVolume`, `FSVolume.Handler`
-- the extension Info.plist keys (from Apple's current FSKit template in Xcode 27, or a sample project)
-- `KhaosT/FSKitSample`, for the general shape only
+### Step 08: FUSE daemon skeleton: probe, safety check, read-only mount
+**Read first:** macFUSE's `fuse_lowlevel.h` and `fuse_common.h` (`$(MACFUSE_PREFIX)/include/fuse3`, the `__APPLE__` / Darwin-extension parts in particular), the macFUSE wiki page on the FSKit backend, `EngineTool/file_io.c`.
 
-**Goal:** the system mounts an NTFS image read-only through Unlatch.
+**Goal:** an NTFS image or device mounts read-only through macFUSE's FSKit backend, with no kernel extension and no signing of our own.
 
 Tasks:
-1. Make `UnlatchFSModule` a real FSKit extension:
-   - Info.plist with the `com.apple.fskit.fsmodule` extension point, short name `unlatch`, block-device resources, and the personality settings from the template
-   - entitlements: `com.apple.developer.fskit.fsmodule` and the App Group
-   - the app embeds it
-2. `BlockIO.swift`: builds a `ue_io_t` from an `FSBlockDeviceResource`.
-   - Use the **synchronous** `read(into:startingAt:length:)` and `write(from:startingAt:length:)`. Never use metadata-cache APIs on the same ranges.
-   - Allocation-free callbacks; the context is an `Unmanaged` box.
-   - Short transfers loop. Thrown errors map to `errno`.
-3. `EngineQueue.swift`: one serial `DispatchQueue` per volume. Every `ue_*` call goes through it, and FSKit's reply handlers run after the call returns. Never on the main thread.
-4. `probeResource`: `ue_probe` → `.usable(name: label, containerID: UUID derived from the serial)`, or `.notRecognized`. Check the exact `FSProbeResult` factory names.
-5. `startCheck(task:options:)`: run `ue_probe` and return a `Progress`. Write a `VolumeStatus` JSON record (`bsdName`, `serial`, `state`, `reason`, `readOnly`, `engineABI`, timestamp) to the App Group container under `status/<serial>.json`. **Fail the check only for `CORRUPT`/`NOT_NTFS`.** A dirty or hibernated volume passes the check but is forced read-only at load. `startFormat` throws `ENOTSUP`.
-6. `loadResource`: read-only if the probe state ≠ `CLEAN`, if the resource isn't writable, or if the mount options say `rdonly`. Then `ue_open` and return `NTFSVolume`.
-7. `NTFSVolume` (subclass of `FSVolume`, adopting `FSVolume.Handler`):
-   - `mount`, `unmount`, `activate`, `deactivate`
-   - `lookupItem`, `getAttributes`, `enumerateDirectory`, `reclaimItem`
-   - `volumeStatistics`, `supportedVolumeCapabilities`: case-insensitive, case-preserving, persistent IDs, no hard links yet, 64-bit sizes
-   - `NTFSItem` (an `FSItem` subclass) holds `ue_ino_t`; the generation is the sequence number
-   - writes return `EROFS`
-8. NFC-normalize every incoming name (`precomposedStringWithCanonicalMapping`) in one helper.
-9. The `errno` → `POSIXError` mapping lives in one function.
-10. `docs/dev-setup.md`: development signing, enabling the extension (`FSClient.shared.openFileSystemExtensionsSettings()` or the System Settings path on 27), `pluginkit -m -v -p com.apple.fskit.fsmodule`, and the mount command (`mount -F -t unlatch diskN /tmp/mnt`, sudo if needed; record it), plus `log stream --predicate 'subsystem == "<prefix>.unlatch"'`.
+1. `Fuse/` target `unlatch-fuse` (a command-line tool): links `UnlatchEngine` and macFUSE's `libfuse3`. macFUSE is a prerequisite the user installs; Unlatch never bundles it (its license forbids bundling with commercial software, and a GPL project only links the LGPL libfuse).
+2. Block I/O: `EngineTool/file_io.c` serves image files and block devices (`DKIOCGETBLOCKSIZE`/`DKIOCGETBLOCKCOUNT`, aligned bounce for unaligned requests).
+3. Safety at mount time: `ue_probe`, refuse `CORRUPT`/`NOT_NTFS`, everything else read-only in this step. Write the status record (D-41).
+4. Low-level ops with the Darwin extensions: `lookup`, `forget`/`forget_multi` (a lookup count per node, `ue_release` at zero), `getattr` (flags, birth time), `opendir`/`readdir`/`releasedir` (`.` and `..` as offsets 1 and 2, engine cookies after), `open`/`read`/`release`, `statfs`. Write ops return `EROFS`. Single-threaded session loop, so engine calls are serialized.
+5. Every incoming name is NFC-normalized in one helper.
+6. `docs/dev-setup.md`: installing macFUSE, enabling its file system extension, mounting, unmounting.
 
-**Done when:** a golden image attached with `attach-image.sh` and mounted shows correct `ls -la` output, `stat` times and `df` numbers; `shasum` of a file through the mount matches the harness; unmount is clean; the Fast Startup image mounts read-only with its status record saying `HIBERNATED`. Record in DECISIONS: signing, approval and the mount command, and whether sudo was needed.
+**Done when:** a golden image file, and the same image attached with `attach-image.sh`, mount and show correct `ls -la`, `stat` times and `df` numbers; `shasum` through the mount matches the harness; `umount` is clean; the Fast Startup image mounts read-only with its status record saying `hibernated`. Record in DECISIONS: the backend, the mount command, and whether sudo was needed.
 
-### Step 09: Read path through `ReadWriteHandler`, open/close
-**Read first:** Apple docs for `FSVolume.ReadWriteHandler`, `FSVolume.OpenCloseHandler`, `FSMutableFileDataBuffer`; Step 08 code.
-**Goal:** fast, correct reads.
+### Step 09: Read path: attributes, Finder, read speed
+**Read first:** Step 08 code; macFUSE mount options (`noappledouble`, `local`, `iosize`, caching options as the FSKit backend supports them).
 
 Tasks:
-1. `read(from:at:length:into:)`: call `ue_read` straight into the buffer FSKit provides (`withUnsafeMutableBytes`), with no intermediate copy. Clamp at EOF.
-2. `OpenCloseHandler` open/close: track open counts (needed for deferred delete in Step 10). Do not adopt `DataCacheHandler` yet.
-3. Set `FSItem.Attributes` completely: type, mode (0755 dirs, 0644 files, without `w` when read-only), uid/gid from the mount context (or 99 "unknown"; record which), size, alloc size, nlink, times, flags (`UF_HIDDEN` from `UE_F_HIDDEN`), file ID.
-4. Directory enumeration packs attributes when asked, and pages correctly with the cookie and verifier.
-5. Measure a quick read benchmark with `dd if=file of=/dev/null bs=4m` after `purge` and a raw `dd` of the device. Note both in PROGRESS.
+1. Reads: avoid the extra copy where libfuse allows it; a read-ahead or `iosize` setting if the backend honours it.
+2. Attributes complete: mode (no `w` when read-only), uid/gid (the mounting user; record it), size, allocated size, nlink, all four times, `UF_HIDDEN`, file IDs, generation from the sequence number.
+3. Directory listings page correctly with offsets under concurrent changes (the verifier is not available in FUSE; re-check the engine's cookie stability).
+4. Route libntfs-3g logging and the daemon's own errors to OSLog (`engine`, `mount`).
+5. Read benchmark: `dd if=file of=/dev/null bs=4m` after `purge`, against a raw `dd` of the device. Note both in PROGRESS.
 
-**Done when:** recursive `shasum` of every file on a golden image matches the harness, Finder browses it (Quick Look works, hidden flags are respected), and the read numbers are recorded.
+**Done when:** recursive `shasum` of every file on a golden image matches the harness, Finder browses it (Quick Look works, hidden flags respected), and the read numbers are recorded.
 
-### Step 10: Write path through FSKit
-**Read first:** Apple docs for `createItem`, `removeItem`, `renameItem`, `setAttributes`, `synchronize`, `ReadWriteHandler.write`; Step 05 tests.
-**Goal:** a full read-write volume.
+### Step 10: Write path through FUSE
+**Read first:** Step 05 tests; libfuse semantics of `create`, `unlink` while open, `rename` flags (`RENAME_EXCL`, `RENAME_SWAP`), `setattr` with the Darwin `to_set` bits.
 
 Tasks:
-1. Wire `write`, `createItem` (files and dirs; symlink type returns `ENOTSUP` for now), `removeItem` (deferred delete while open), `renameItem` (with `overItem`), `setAttributes` (size, times, flags, mode → read-only), and `synchronize`.
-2. `unmount`/`deactivate`: `ue_sync` then `ue_close`. Write the status record (`readOnly: false`, cleanly unmounted).
-3. Surprise removal: when `BlockIO` returns `ENXIO`/`EIO`, put the engine in a failed state where every call returns `EIO` immediately. Never retry writes. Unmount without marking clean.
-4. Test script `Tests/FSKit/rw-suite.sh`, run on a mounted image:
-   - `cp`/`rsync` a source tree
-   - `shasum -c`
-   - `mv`/`rm -r`/`truncate`/`touch -t`
-   - Finder-style copies (`ditto`)
-   - git clone on the volume
-   - unmount, then the harness probes `CLEAN`, then fsck through the harness's `ntfsinfo`
-5. Write a short note on `._` AppleDouble files: they show up until Step 16. That is expected.
+1. Read-write when the probe says `CLEAN`, the device is writable and `ro` was not asked for.
+2. Wire `write`, `create`, `mkdir`, `unlink`/`rmdir` (deferred delete while open is the engine's ghost mechanism), `rename` (EXCL; SWAP → `ENOTSUP`), `setattr` (size, times, flags, mode → read-only), `flush`/`fsync`/`fsyncdir` → `ue_sync`. Symlinks → `ENOTSUP` for now.
+3. Unmount (`destroy`): `ue_sync` then `ue_close`; status record `readOnly: false`, cleanly unmounted.
+4. Surprise removal: when block I/O returns `ENXIO`/`EIO`, the engine fails every later call with `EIO`; never retry writes; never mark clean.
+5. `Tests/Fuse/rw-suite.sh` on a mounted image: `cp`/`rsync` a tree, `shasum -c`, `mv`/`rm -r`/`truncate`/`touch -t`, `ditto`, a git clone, unmount, then the harness probes `CLEAN`.
+6. A short note on `._` AppleDouble files (or `-o noappledouble`), until Step 16.
 
 **Done when:** the rw-suite passes 3 times in a row on a fresh image, the image probes `CLEAN` afterwards, and Windows `chkdsk /scan` passes on the result (Step 06 script).
 
@@ -386,19 +363,21 @@ Tasks:
 **Goal:** measured speed against baselines. Decide whether to continue.
 
 Tasks:
-1. `Bench/run.sh <volume> <label>`:
-   - sequential write (`dd if=/dev/zero bs=4m count=N` plus `sync`, and `mkfile` for a file larger than RAM)
-   - sequential read (`purge`, then `dd bs=4m` and an `F_NOCACHE` reader; a small Swift script is fine)
-   - small files (untar about 30k files)
-   - metadata churn (create, rename, delete 10k)
-   - optional `fio` 4k random
+1. `Bench/run.sh <volume> <label>`: sequential write (`dd if=/dev/zero bs=4m` plus `sync`, `mkfile` larger than RAM), sequential read (`purge`, `dd bs=4m`, an `F_NOCACHE` reader), small files (untar about 30k files), metadata churn (create, rename, delete 10k), optional `fio` 4k random. Median of 5 runs into `Bench/results/<date>-<commit>-<label>.json` with the drive, connection and macOS build.
+2. Baselines on the same disposable SSD and port: raw `dd` of `/dev/rdiskN`, APFS, exFAT, and stock ntfs-3g on macFUSE (FSKit backend). Document in `Bench/README.md`.
+3. `Bench/compare.py`: a markdown table.
+4. `docs/M0-gate.md`. Proposed: sequential read ≥ 60% of APFS, sequential write ≥ 40%, and not slower than stock ntfs-3g on the same backend. Agree the thresholds after the first run; record them in DECISIONS.
 
-   It takes the median of 5 runs and writes `Bench/results/<date>-<commit>-<label>.json` with the drive, connection and macOS build.
-2. Baselines on the same disposable SSD over the same port: raw `dd` of `/dev/rdiskN`, APFS, exFAT, and ntfs-3g on macFUSE (ntfs-3g on FUSE-T if available). Document the setup in `Bench/README.md`.
-3. `Bench/compare.py`: a markdown table of the results.
-4. Write the gate in `docs/M0-gate.md`. Proposed: sequential read ≥ 80% of APFS on the same drive, sequential write ≥ 60%, both clearly above macFUSE. Agree the thresholds after the first run, and record the decision in DECISIONS.
+**Done when:** `docs/M0-gate.md` has the numbers and an explicit **GO** or **NO-GO**. A NO-GO stops the plan for a review (multi-threaded session loop, larger I/O sizes, or the kext backend as an opt-in).
 
-**Done when:** `docs/M0-gate.md` has the numbers and an explicit **GO** or **NO-GO**. A NO-GO stops the plan: open a review covering whether KOIO (Step 15) should come forward before Phase 3.
+### Re-scoping later steps (D-39)
+
+When a later step starts, it first maps its FSKit wording to the daemon:
+- **Step 12:** mounting means launching `unlatch-fuse` (no `FSClient`, no mount entitlement, so spike S1 disappears). DiskArbitration detection and the race with Apple's NTFS driver (S2) stay.
+- **Step 13/14:** `doctor` and onboarding check that macFUSE is installed and its extension is enabled, instead of our own extension.
+- **Step 15:** KOIO is not available through macFUSE; the step becomes I/O-size, caching and threading tuning.
+- **Step 16:** xattrs depend on what macFUSE's FSKit backend passes through; otherwise `noappledouble` and `._` files.
+- **Step 18:** without a membership there is no Developer ID or notarization. Distribution is source plus a Homebrew formula or tap that depends on the macFUSE cask; an unsigned DMG is optional.
 
 ---
 

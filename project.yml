@@ -150,6 +150,25 @@ targets:
     dependencies:
       - target: UnlatchEngine
 
+  unlatch-fuse:
+    type: tool
+    platform: macOS
+    sources:
+      - Fuse
+      - path: EngineTool/file_io.c
+      - path: EngineTool/file_io.h
+    settings:
+      base:
+        PRODUCT_NAME: unlatch-fuse
+        HEADER_SEARCH_PATHS: [$(SRCROOT)/Engine/include, $(SRCROOT)/EngineTool]
+        # macFUSE's headers and libfuse3 (D-40); -isystem keeps -Werror off its headers.
+        OTHER_CFLAGS: [-Wall, -Wextra, -Werror, -isystem, $(MACFUSE_PREFIX)/include/fuse3]
+        LIBRARY_SEARCH_PATHS: $(MACFUSE_PREFIX)/lib
+        OTHER_LDFLAGS: [-lfuse3, -framework, CoreFoundation]
+        MACFUSE_PREFIX: /usr/local
+    dependencies:
+      - target: UnlatchEngine
+
 schemes:
   Unlatch:
     build:
@@ -158,6 +177,7 @@ schemes:
         UnlatchFSModule: all
         UnlatchEngine: all
         unlatch-engine: all
+        unlatch-fuse: all
   unlatch-engine:
     build:
       targets:
