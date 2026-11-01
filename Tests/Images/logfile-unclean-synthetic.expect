@@ -1,0 +1,4 @@
+# Synthetic $LogFile restart pages v1.1 with an open client and no clean flag.
+state unclean_log
+label LOG
+rw_open EOPNOTSUPP

@@ -1,0 +1,4 @@
+# Synthetic $LogFile restart pages v2.0, the version Windows Fast Startup leaves.
+state hibernated
+label LOG
+rw_open EPERM

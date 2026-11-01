@@ -1,0 +1,28 @@
+From: Unlatch <noreply@github.com>
+Subject: [PATCH] ntfs_boot_sector_parse: reject sector counts that overflow
+
+number_of_sectors comes from the boot sector unchecked, and
+"(sectors - 1) << sector_size_bits" is undefined behaviour (signed
+overflow) for large or negative values. Reject them before the shift.
+
+Found by Unlatch's libFuzzer target fuzz_probe with UBSan (Step 07).
+---
+--- a/libntfs-3g/bootsect.c	2026-11-01 13:59:55
++++ b/libntfs-3g/bootsect.c	2026-11-01 13:59:55
+@@ -223,6 +223,16 @@
+ 	ntfs_log_debug("NumberOfSectors = %lld\n", (long long)sectors);
+ 	if (!sectors) {
+ 		ntfs_log_error("Volume size is set to zero.\n");
++		return -1;
++	}
++	/*
++	 * Reject sizes whose byte offset cannot be represented, so the
++	 * shift below cannot overflow (Unlatch patch 0002, found by fuzzing).
++	 */
++	if ((sectors < 0)
++	    || ((sectors - 1) > ((s64)(~(u64)0 >> 1) >> vol->sector_size_bits))) {
++		ntfs_log_error("Volume size %lld sectors is invalid.\n",
++			       (long long)sectors);
+ 		return -1;
+ 	}
+ 	if (vol->dev->d_ops->seek(vol->dev, 

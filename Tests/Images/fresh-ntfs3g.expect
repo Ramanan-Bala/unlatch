@@ -1,0 +1,4 @@
+# mkntfs -Q, 16 MB, no files. Not made by Windows.
+state clean
+label FRESH
+count / 0

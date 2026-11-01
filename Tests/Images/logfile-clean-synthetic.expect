@@ -1,0 +1,4 @@
+# Synthetic $LogFile restart pages v1.1 with RESTART_VOLUME_IS_CLEAN (mkfixture logfile clean).
+state clean
+label LOG
+rw_open 0

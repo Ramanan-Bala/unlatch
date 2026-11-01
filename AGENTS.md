@@ -32,6 +32,9 @@ Each step updates this list.
 | Browse an image | `unlatch-engine ls [--stats] <img> [path]`, `stat <img> <path>`, `cat <img> <path>`, `tree <img> [path]` |
 | fsx randomized model test | `unlatch-engine fsx <empty.img> --seed N --ops M [--verbose]`; soak: `Scripts/fsx-soak.sh --seeds 1000`; regressions: `Scripts/fsx-soak.sh --regressions` |
 | Windows chkdsk oracle | `Scripts/chkdsk-vm.sh --fsx <seed>` (needs `WINDOWS_SSH`; see `docs/testing.md`) |
+| Golden images | `Scripts/test-golden.sh`; regenerate with `Tests/Images/make-golden.sh` (changes serials and times) |
+| Fuzz (needs Homebrew LLVM) | `Scripts/fuzz.sh --time 60`; replay saved crashes: `Scripts/fuzz.sh --regress` |
+| CI | `.github/workflows/engine.yml` (`xcode-27` runner); `gh run list --workflow engine` |
 | Change an image | `unlatch-engine put <img> <local\|-> <path>`, `get <img> <path> <local\|->`, `mkdir`, `mv <img> <from> <to>`, `rm [-d]`, `truncate <img> <path> <size>`, `touch` |
 | Build a fixture image | `build/test-engine/mkfixture <img> < script` (see the header of `Engine/src/fixtures/mkfixture.c`) |
 | Make a test NTFS image (prints its path) | `Scripts/make-image.sh t1 512m T1` |

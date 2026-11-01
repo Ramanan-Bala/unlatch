@@ -9,10 +9,15 @@
 //     uninit PATH SIZE INIT SEED     write INIT bytes, then extend data_size to SIZE
 //     many DIR COUNT                 COUNT empty files f00000, f00001, ... in DIR
 //     flags PATH hidden|system|readonly
-//   mkfixture gen SIZE SEED       write the stream to stdout
+//     logfile clean|unclean|faststartup   write two $LogFile restart pages (synthetic: v1.1
+//                                         clean, v1.1 with an open client, or v2.0 as left
+//                                         by Windows Fast Startup)
+//     stream PATH NAME SIZE SEED     named $DATA stream (alternate data stream) on PATH
+//   mkfixture gen SIZE SEED [OFF] write SIZE bytes of the stream, from offset OFF, to stdout
 #include "config.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +27,8 @@
 #include <ntfs-3g/attrib.h>
 #include <ntfs-3g/dir.h>
 #include <ntfs-3g/inode.h>
+#include <ntfs-3g/logfile.h>
+#include <ntfs-3g/mst.h>
 #include <ntfs-3g/unistr.h>
 #include <ntfs-3g/volume.h>
 
@@ -162,6 +169,98 @@ static int cmd_many(ntfs_volume *vol, const char *dirpath, unsigned count)
     return ntfs_inode_close(dir) ? die("close", dirpath) : 0;
 }
 
+static void put16(u8 *p, unsigned v) { p[0] = (u8)v; p[1] = (u8)(v >> 8); }
+static void put32(u8 *p, uint32_t v) { put16(p, v & 0xFFFF); put16(p + 2, v >> 16); }
+static void put64(u8 *p, uint64_t v) { put32(p, (uint32_t)v); put32(p + 4, (uint32_t)(v >> 32)); }
+
+// Writes two restart pages (offsets 0 and 4096) that pass libntfs-3g's ntfs_check_logfile:
+// RSTR header with a 9-entry update sequence array, a restart area with one client.
+static int cmd_logfile(ntfs_volume *vol, const char *mode)
+{
+    enum { PAGE = 4096, RA = 48, CA = 0x30 };
+    bool fast = !strcmp(mode, "faststartup"), clean = !strcmp(mode, "clean");
+    ntfs_inode *ni;
+    ntfs_attr *na;
+    int rc = 0;
+
+    if (!fast && !clean && strcmp(mode, "unclean")) {
+        fprintf(stderr, "mkfixture: logfile clean|unclean|faststartup\n");
+        return 1;
+    }
+    if (!(ni = ntfs_inode_open(vol, FILE_LogFile)) || !(na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0)))
+        return die("open", "$LogFile");
+    uint64_t fs = (uint64_t)na->data_size;
+    unsigned fs_bits = 0;
+    for (uint64_t f = fs; f; f >>= 1)
+        fs_bits++;
+    for (int copy = 0; copy < 2 && !rc; copy++) {
+        u8 page[PAGE];
+        memset(page, 0, sizeof(page));
+        memcpy(page, "RSTR", 4);
+        put16(page + 4, 30);                       // usa_ofs: offsetof(usn)
+        put16(page + 6, 1 + PAGE / 512);           // usa_count
+        put32(page + 16, PAGE);                    // system_page_size
+        put32(page + 20, PAGE);                    // log_page_size
+        put16(page + 24, RA);                      // restart_area_offset
+        put16(page + 26, fast ? 0 : 1);            // minor_ver
+        put16(page + 28, fast ? 2 : 1);            // major_ver
+        put16(page + 30, 1);                       // usn
+        u8 *ra = page + RA;
+        put64(ra + 0, 0x100000 + (uint64_t)copy);  // current_lsn (copy 1 newer)
+        put16(ra + 8, 1);                          // log_clients
+        put16(ra + 10, LOGFILE_NO_CLIENT_CPU);     // client_free_list
+        put16(ra + 12, 0);                         // client_in_use_list: client 0
+        put16(ra + 14, clean ? 0x0002 : 0);        // flags: RESTART_VOLUME_IS_CLEAN
+        put32(ra + 16, 67 - fs_bits);              // seq_number_bits
+        put16(ra + 20, CA + 160);                  // restart_area_length
+        put16(ra + 22, CA);                        // client_array_offset
+        put64(ra + 24, fs);                        // file_size
+        put16(ra + 36, 0x30);                      // log_record_header_length
+        put16(ra + 38, 0x40);                      // log_page_data_offset
+        put32(ra + 40, 1);                         // restart_log_open_count
+        u8 *cr = ra + CA;                          // LOG_CLIENT_RECORD
+        put64(cr + 0, 0x100000);                   // oldest_lsn
+        put64(cr + 8, 0x100000);                   // client_restart_lsn
+        put16(cr + 16, LOGFILE_NO_CLIENT_CPU);     // prev_client
+        put16(cr + 18, LOGFILE_NO_CLIENT_CPU);     // next_client
+        put16(cr + 20, 1);                         // seq_number
+        put32(cr + 28, 8);                         // client_name_length (bytes)
+        put16(cr + 32, 'N'); put16(cr + 34, 'T'); put16(cr + 36, 'F'); put16(cr + 38, 'S');
+        if (ntfs_mst_pre_write_fixup((NTFS_RECORD *)page, PAGE) ||
+            ntfs_attr_pwrite(na, (s64)copy * PAGE, PAGE, page) != PAGE)
+            rc = die("write", "$LogFile");
+    }
+    ntfs_attr_close(na);
+    if (ntfs_inode_close(ni) && !rc)
+        rc = die("close", "$LogFile");
+    return rc;
+}
+
+static int cmd_stream(ntfs_volume *vol, const char *path, const char *name, uint64_t size, uint64_t seed)
+{
+    ntfs_inode *ni = ntfs_pathname_to_inode(vol, NULL, path);
+    ntfschar *uname = NULL;
+    ntfs_attr *na;
+    int len, rc = 0;
+
+    if (!ni)
+        return die("open", path);
+    len = ntfs_mbstoucs(name, &uname);
+    if (len <= 0 || ntfs_attr_add(ni, AT_DATA, uname, (u8)len, NULL, 0) ||
+        !(na = ntfs_attr_open(ni, AT_DATA, uname, (u32)len))) {
+        free(uname);
+        ntfs_inode_close(ni);
+        return die("add stream", name);
+    }
+    if (write_stream(na, 0, size, seed))
+        rc = die("write stream", name);
+    ntfs_attr_close(na);
+    free(uname);
+    if (ntfs_inode_close(ni) && !rc)
+        rc = die("close", path);
+    return rc;
+}
+
 static int run(ntfs_volume *vol, char *line)
 {
     char cmd[16], path[4096], word[32];
@@ -185,6 +284,10 @@ static int run(ntfs_volume *vol, char *line)
         return cmd_many(vol, path, (unsigned)a);
     if (!strcmp(cmd, "flags") && sscanf(line, "%*s %*s %31s", word) == 1)
         return cmd_flags(vol, path, word);
+    if (!strcmp(cmd, "logfile"))
+        return cmd_logfile(vol, path);
+    if (!strcmp(cmd, "stream") && sscanf(line, "%*s %*s %31s %llu %llu", word, &a, &b) == 3)
+        return cmd_stream(vol, path, word, a, b);
     fprintf(stderr, "mkfixture: bad line: %s", line);
     return 1;
 }
@@ -195,11 +298,12 @@ int main(int argc, char **argv)
     ntfs_volume *vol;
     int rc = 0;
 
-    if (argc == 4 && !strcmp(argv[1], "gen")) {
-        uint64_t size = strtoull(argv[2], NULL, 10), seed = strtoull(argv[3], NULL, 10), off = 0;
+    if ((argc == 4 || argc == 5) && !strcmp(argv[1], "gen")) {
+        uint64_t size = strtoull(argv[2], NULL, 10), seed = strtoull(argv[3], NULL, 10);
+        uint64_t base = argc == 5 ? strtoull(argv[4], NULL, 10) : 0, off = 0;
         while (off < size) {
             size_t n = size - off > CHUNK ? CHUNK : (size_t)(size - off);
-            gen_fill(seed, off, buf, n);
+            gen_fill(seed, base + off, buf, n);
             if (fwrite(buf, 1, n, stdout) != n)
                 return 1;
             off += n;

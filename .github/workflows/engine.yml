@@ -1,0 +1,70 @@
+# Engine CI: builds libntfs-3g and the engine, runs the engine tests, golden images, fsx
+# regressions plus a short soak, and both fuzzers. FSKit is not tested in CI: the extension
+# needs signing and approval in System Settings (docs/testing.md).
+name: engine
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  engine:
+    runs-on: xcode-27          # macOS 27 + Xcode 27 (GitHub preview image)
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Tools
+        run: brew install xcodegen
+
+      - name: Cache libntfs-3g
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/ntfs3g
+            build/ntfs3g-fuzz
+          key: ntfs3g-${{ runner.os }}-${{ hashFiles('Engine/vendor/VERSION', 'Engine/vendor/patches/**', 'Scripts/build-ntfs3g.sh') }}
+
+      - name: Build libntfs-3g
+        run: |
+          [ -f build/ntfs3g/lib/libntfs-3g.a ] || Scripts/build-ntfs3g.sh
+          [ -f build/ntfs3g-fuzz/lib/libntfs-3g.a ] || Scripts/build-ntfs3g.sh --fuzz
+
+      - name: Bootstrap and build all Xcode targets
+        run: |
+          Scripts/bootstrap.sh
+          xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build
+
+      - name: Swift packages
+        run: |
+          swift test --package-path Shared
+          swift build --package-path CLI
+
+      - name: Engine tests (without the 4 GiB checks)
+        env:
+          UNLATCH_SKIP_BIG: "1"
+        run: Scripts/test-engine.sh
+
+      - name: Golden images
+        run: Scripts/test-golden.sh
+
+      - name: fsx regressions and a short soak
+        run: |
+          Scripts/fsx-soak.sh --regressions
+          Scripts/fsx-soak.sh --seeds 100 --start "$(( RANDOM % 100000 + 1 ))"
+
+      - name: Fuzz (60 s per target)
+        run: Scripts/fuzz.sh --time 60
+
+      - name: Keep failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failures
+          path: |
+            build/fuzz/artifacts/
+            build/fsx/fail-*
+            Tests/fsx-regressions.txt
+          if-no-files-found: ignore

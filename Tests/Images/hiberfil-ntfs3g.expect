@@ -1,0 +1,5 @@
+# hiberfil.sys whose header starts "HIBR" (as Windows writes on hibernate), copied in with ntfscp.
+state hibernated
+label HIBER
+file /hiberfil.sys 8192 9c10ccd770b565682afcab8e771604549128d9172c5f740a5e1748c3d1c73222
+rw_open EPERM

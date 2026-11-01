@@ -2,14 +2,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Builds the vendored libntfs-3g (static, arm64) and ntfsprogs with no FUSE driver.
 # Output: build/ntfs3g/{lib,include,bin}. Source tree stays untouched (out-of-tree build).
+#
+#   Scripts/build-ntfs3g.sh          product build
+#   Scripts/build-ntfs3g.sh --fuzz   ASan + UBSan + fuzzer coverage build into build/ntfs3g-fuzz,
+#                                    with Homebrew LLVM (Apple clang has no libFuzzer runtime)
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 src="$root/Engine/vendor/ntfs-3g"
 patches="$root/Engine/vendor/patches"
-work="$root/build/ntfs3g-src"
-obj="$root/build/ntfs3g-obj"
-prefix="$root/build/ntfs3g"
+variant=""
+[ "${1:-}" = --fuzz ] && variant="-fuzz"
+work="$root/build/ntfs3g$variant-src"
+obj="$root/build/ntfs3g$variant-obj"
+prefix="$root/build/ntfs3g$variant"
 jobs="$(sysctl -n hw.ncpu)"
 
 [ -d "$src" ] || { echo "build-ntfs3g: $src missing" >&2; exit 1; }
@@ -31,10 +37,22 @@ if [ ! -x "$work/configure" ]; then
     (cd "$work" && autoreconf -fi)
 fi
 
-export CC="$(xcrun -f clang)"
-export CFLAGS="-arch arm64 -mmacosx-version-min=27.0 -O2 -g"
-export LDFLAGS="-arch arm64 -mmacosx-version-min=27.0"
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+if [ -n "$variant" ]; then
+    llvm=""
+    for p in "${LLVM_PREFIX:-}" "$(brew --prefix llvm 2>/dev/null)" "$(brew --prefix llvm@20 2>/dev/null)"; do
+        [ -n "$p" ] && [ -x "$p/bin/clang" ] && { llvm="$p/bin/clang"; break; }
+    done
+    [ -n "$llvm" ] || { echo "build-ntfs3g: --fuzz needs Homebrew LLVM (brew install llvm) or LLVM_PREFIX" >&2; exit 1; }
+    export CC="$llvm"
+    export CFLAGS="-arch arm64 -mmacosx-version-min=27.0 -isysroot $SDKROOT -O1 -g -fno-omit-frame-pointer \
+-fsanitize=address,undefined,fuzzer-no-link -fno-sanitize=alignment,shift-base -fno-sanitize-recover=undefined"
+    export LDFLAGS="-arch arm64 -mmacosx-version-min=27.0 -isysroot $SDKROOT -fsanitize=address,undefined -fno-sanitize=alignment,shift-base"
+else
+    export CC="$(xcrun -f clang)"
+    export CFLAGS="-arch arm64 -mmacosx-version-min=27.0 -O2 -g"
+    export LDFLAGS="-arch arm64 -mmacosx-version-min=27.0"
+fi
 
 # --exec-prefix stops configure from installing into /bin, /sbin and /lib.
 cd "$obj"
