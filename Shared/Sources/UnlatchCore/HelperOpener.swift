@@ -7,6 +7,7 @@ public struct HelperOpener: DeviceOpener {
     public static let label = "\(Unlatch.bundlePrefix).unlatch.helper"
     public static let socketPath = "/var/run/\(label).sock"
     public static var installed: Bool { FileManager.default.fileExists(atPath: socketPath) }
+    public static let installedPath = "/Library/PrivilegedHelperTools/\(label)"
 
     public init() {}
 
@@ -58,6 +59,12 @@ public struct HelperOpener: DeviceOpener {
         switch code {
         case EBUSY: throw MountError.busy(path)
         case EPERM where msg.contains("NTFS"): throw MountError.notNTFS(bsd)
+        case EPERM where msg == String(cString: strerror(EPERM)):
+            // The helper's own open() was refused: macOS privacy protection (D-60).
+            throw MountError.refused("""
+                macOS blocked the Unlatch helper from opening \(path). Allow it once: System Settings > \
+                Privacy & Security > Full Disk Access > + > \(Self.installedPath).
+                """)
         default: throw MountError.refused("The Unlatch helper refused \(path): \(msg).")
         }
     }

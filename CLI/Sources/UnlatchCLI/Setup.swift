@@ -20,7 +20,7 @@ enum Paths {
 
     static var daemon: URL { find(env: "UNLATCH_FUSE", name: "unlatch-fuse") }
     static var helper: URL { find(env: "UNLATCH_HELPER", name: HelperOpener.label) }
-    static let installedHelper = "/Library/PrivilegedHelperTools/\(HelperOpener.label)"
+    static let installedHelper = HelperOpener.installedPath
     static let launchdPlist = "/Library/LaunchDaemons/\(HelperOpener.label).plist"
 }
 
@@ -85,7 +85,11 @@ struct InstallHelper: ParsableCommand {
                              ofItemAtPath: Paths.launchdPlist)
         let (rc, out) = shell(["/bin/launchctl", "bootstrap", "system", Paths.launchdPlist])
         guard rc == 0 else { throw fail("launchctl bootstrap failed: \(out)") }
-        print("Installed the Unlatch helper (\(Paths.installedHelper)).")
+        print("""
+            Installed the Unlatch helper (\(Paths.installedHelper)).
+            Allow it once in System Settings > Privacy & Security > Full Disk Access (+, then that path):
+            macOS does not let a background helper open removable disks otherwise.
+            """)
     }
 }
 

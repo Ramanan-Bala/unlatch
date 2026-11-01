@@ -124,28 +124,37 @@ public actor MountService {
         var args = [daemon.path, "--fd", "3"]
         if readOnly { args.append("-r") }
         args += [device, mountPoint]
+        var errPipe: [Int32] = [0, 0]
+        guard pipe(&errPipe) == 0 else { throw MountError.daemonFailed("pipe: \(String(cString: strerror(errno)))") }
+        // Move every descriptor the spawn juggles above 9 first. Otherwise one of them can be
+        // 2 or 3 itself (the helper's socket just freed fd 3, and the pipe took it), and the
+        // dup2/close actions below would close the device they had just put on fd 3.
+        let dev = fcntl(fd, F_DUPFD_CLOEXEC, 10)
+        let errRead = fcntl(errPipe[0], F_DUPFD_CLOEXEC, 10)
+        let errWrite = fcntl(errPipe[1], F_DUPFD_CLOEXEC, 10)
+        close(errPipe[0])
+        close(errPipe[1])
+        defer { close(dev) }
+        guard dev >= 0, errRead >= 0, errWrite >= 0 else {
+            throw MountError.daemonFailed("descriptors: \(String(cString: strerror(errno)))")
+        }
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
-        var errPipe: [Int32] = [0, 0]
-        guard pipe(&errPipe) == 0 else { throw MountError.daemonFailed("pipe: \(String(cString: strerror(errno)))") }
-        posix_spawn_file_actions_adddup2(&actions, fd, 3)
-        posix_spawn_file_actions_adddup2(&actions, errPipe[1], 2)
-        // Only fds 2 and 3 may reach the daemon: a stray copy of the pipe's write end would
-        // live on in the background daemon and keep the read below from ever ending.
-        posix_spawn_file_actions_addclose(&actions, errPipe[0])
-        posix_spawn_file_actions_addclose(&actions, errPipe[1])
-        if fd != 3 { posix_spawn_file_actions_addclose(&actions, fd) }
+        // dup2 clears close-on-exec on the copies, so only fds 2 and 3 reach the daemon
+        // (plus 0 and 1); a stray copy of the pipe's write end would keep the read below open.
+        posix_spawn_file_actions_adddup2(&actions, dev, 3)
+        posix_spawn_file_actions_adddup2(&actions, errWrite, 2)
         var pid: pid_t = 0
         let cargs = args.map { strdup($0) } + [nil]
         defer { cargs.forEach { free($0) } }
         let rc = posix_spawn(&pid, daemon.path, &actions, nil, cargs, environ)
-        close(errPipe[1])
+        close(errWrite)
         guard rc == 0 else {
-            close(errPipe[0])
+            close(errRead)
             throw MountError.daemonFailed("\(daemon.path): \(String(cString: strerror(rc)))")
         }
-        let errText = String(decoding: FileHandle(fileDescriptor: errPipe[0], closeOnDealloc: true).readDataToEndOfFile(),
+        let errText = String(decoding: FileHandle(fileDescriptor: errRead, closeOnDealloc: true).readDataToEndOfFile(),
                              as: UTF8.self)
         var st: Int32 = 0
         waitpid(pid, &st, 0)

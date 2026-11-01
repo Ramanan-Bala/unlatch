@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 13 CLI `unlatch` and the privileged helper (2026-11-01; helper not yet installed on the owner's Mac). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Last completed step | 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
 | Next step | 14 Menu-bar app and onboarding |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
@@ -487,7 +487,7 @@ UNLATCH_INTEGRATION=1 swift test --package-path Shared        # 8 of 8: list, mo
 - A stray copy of the stderr pipe's write end in the spawned daemon made reading it hang.
 - Finishing an `AsyncStream` runs its termination handler synchronously, which re-entered `stop()` and trapped in `queue.sync`.
 
-### Step 13: CLI `unlatch` and the privileged helper — done 2026-11-01 (helper verified once the owner installs it)
+### Step 13: CLI `unlatch` and the privileged helper — done 2026-11-01
 
 **Done:**
 - `Helper/main.c` → `io.github.ramanan-bala.unlatch.helper` (D-57). A launchd socket job; it accepts only the console user, only `diskN`/`diskNsM` names, and only volumes DiskArbitration calls NTFS. It opens the node and returns the descriptor over `SCM_RIGHTS`, and exits after 30 s idle.
@@ -510,8 +510,9 @@ $U mount; echo $?                                    # 2
 $U doctor
 ```
 
+**Real disk (owner's Seagate, read-only):** `sudo unlatch install-helper`, then Full Disk Access for the helper (D-60), then `unlatch mount seagate -r` mounted it at `/Volumes/seagate` with no sudo. Apple's driver had it before and got it back after each failed attempt.
+
 **Left:**
-- The helper end to end on a real disk: `sudo unlatch install-helper`, then `unlatch mount <disk> -r`.
 - An auto-mount loop (`DiskWatcher` plus `MountService` plus `AutoMountPolicy`); the app runs it in Step 14.
 
 **Surprises:**
