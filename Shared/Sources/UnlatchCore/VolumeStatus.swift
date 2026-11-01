@@ -19,6 +19,8 @@ public struct VolumeStatus: Codable, Equatable, Sendable {
     public var engineABI: Int
     public var unlatchVersion: String
     public var timestamp: Date
+    /// The daemon's process ID while mounted (absent in records from before Step 17).
+    public var pid: Int32?
 
     public init(bsdName: String, serial: String, label: String, state: State, reason: String,
                 readOnly: Bool, mounted: Bool, engineABI: Int, timestamp: Date = Date()) {

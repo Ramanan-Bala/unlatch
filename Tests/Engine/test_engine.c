@@ -1000,6 +1000,50 @@ static int write_loop(const char *base, int n)
     return 0;
 }
 
+static bool count_entry(void *ctx, const char *name, const ue_attr_t *attr, uint64_t next);
+
+// Crash leftovers (Step 17, D-65): a read-write open deletes root ghosts and turns a rename
+// temp name that is its item's only name into a visible "Unlatch recovered N". Temp names in
+// other directories stay hidden, and new temp names never collide with them.
+static void test_crash_leftovers(void)
+{
+    wvol_t w;
+    ue_attr_t a;
+    ue_ino_t root;
+
+    // Read-only: nothing is touched.
+    file_io_t f;
+    ue_engine_t *e;
+    CHECK(file_io_open(&f, img("leftover"), false) == 0, "open ro");
+    CHECK(ue_open(&f.io, UE_OPEN_RDONLY, &e, NULL) == 0, "ue_open ro");
+    CHECK(ue_lookup(e, root_of(e), "Unlatch recovered 1", &a) == ENOENT, "recovered on a read-only open");
+    ue_close(e);
+    file_io_close(&f);
+
+    int err = wopen(&w, "leftover", "leftover");
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+    WCHECK(ue_lookup(w.e, root, "Unlatch recovered 1", &a) == 0, "rename temp not recovered");
+    WCHECK(check_gen(w.e, a.ino, 0, 3000, 3) == 0, "recovered content");
+    WCHECK(ue_lookup(w.e, root, "keep.txt", &a) == 0, "keep.txt");
+    // Only keep.txt, sub and the recovered file are listed; the ghost is gone.
+    uint64_t v;
+    int count = 0;
+    WCHECK(ue_readdir(w.e, root, 0, count_entry, &count, &v) == 0, "readdir");
+    WCHECK(count == 3, "root lists %d entries, want 3", count);
+    // New temp names (a case-only rename uses one) do not collide with sub's leftover.
+    WCHECK(ue_lookup(w.e, root, "sub", &a) == 0, "sub");
+    ue_attr_t b;
+    WCHECK(ue_create(w.e, a.ino, "x", UE_T_REG, 0644, &b) == 0, "create in sub");
+    WCHECK(ue_rename(w.e, a.ino, "x", a.ino, "X", 0) == 0, "case-only rename in sub");
+    ue_release(w.e, b.ino);
+    CHECK(wclose(&w) == 0, "close");
+    // Opening again finds nothing more to do.
+    err = wopen(&w, "leftover", "leftover2");
+    CHECK(err == 0, "reopen");
+    CHECK(wclose(&w) == 0, "close 2");
+}
+
 // ---- Page cache (Step 15, D-62): a model test against an in-memory device. The engine's
 // cache functions are internal; their prototypes are repeated here.
 typedef struct ue_bcache ue_bcache_t;
@@ -1250,6 +1294,54 @@ static void test_links(void)
 }
 
 // Step 16: reparse points written the way Windows writes them (mkfixture reparse).
+// Native Windows symlinks for relative on-volume targets (Step 17, D-67); the others stay WSL
+// links. Every target reads back exactly as written. Scripts/test-engine.sh checks the tags.
+static void test_native_links(void)
+{
+    static const struct { const char *dir, *name, *target; } links[] = {
+        { "", "s-file", "t.txt" },              // native, file
+        { "", "s-dir", "d" },                   // native, directory
+        { "d", "s-up", "../t.txt" },            // native, through ..
+        { "d", "s-dot", "./../d/inner.txt" },   // native
+        { "", "s-escape", "../t.txt" },         // WSL: leaves the volume
+        { "", "s-abs", "/Volumes/X/t.txt" },    // WSL: absolute
+        { "", "s-missing", "nothing" },         // WSL: dangling
+        { "", "s-colon", "a:b" },               // WSL: not a Windows name
+    };
+    wvol_t w;
+    ue_attr_t a, d, l;
+    char buf[512];
+    int err = wopen(&w, "clean", "native-links");
+
+    CHECK(err == 0, "open: %s", strerror(err));
+    ue_ino_t root = root_of(w.e);
+    WCHECK(ue_create(w.e, root, "t.txt", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(ue_create(w.e, root, "d", UE_T_DIR, 0755, &d) == 0, "mkdir");
+    WCHECK(ue_create(w.e, d.ino, "inner.txt", UE_T_REG, 0644, &a) == 0, "create inner");
+    for (size_t i = 0; i < sizeof(links) / sizeof(*links); i++) {
+        ue_ino_t dir = *links[i].dir ? d.ino : root;
+        WCHECK(ue_symlink(w.e, dir, links[i].name, links[i].target, &l) == 0 && l.type == UE_T_LNK, "symlink %s",
+               links[i].name);
+        ue_release(w.e, l.ino);
+    }
+    WCHECK(wreopen(&w, true) == 0, "reopen");
+    for (size_t i = 0; i < sizeof(links) / sizeof(*links); i++) {
+        char path[256];
+        snprintf(path, sizeof(path), "%s%s/%s", *links[i].dir ? "/" : "", links[i].dir, links[i].name);
+        WCHECK(ue_walk(w.e, path, &l) == 0 && l.type == UE_T_LNK, "%s is not a link", path);
+        WCHECK(ue_readlink(w.e, l.ino, "/mnt", buf, sizeof(buf)) == 0 && !strcmp(buf, links[i].target),
+               "%s reads back %s", path, buf);
+    }
+    // A directory symlink is removed with unlink, like any link; rename moves it.
+    root = root_of(w.e);
+    WCHECK(ue_rename(w.e, root, "s-dir", root, "s-dir2", 0) == 0, "rename a directory symlink");
+    WCHECK(ue_remove(w.e, root, "s-dir2", true) == ENOTDIR, "rmdir of a directory symlink");
+    WCHECK(ue_remove(w.e, root, "s-dir2", false) == 0, "unlink a directory symlink");
+    WCHECK(ue_symlink(w.e, root, "s-dir", "d", &l) == 0, "symlink again");
+    ue_release(w.e, l.ino);
+    CHECK(wclose(&w) == 0, "close");
+}
+
 static void test_windows_links(void)
 {
     static const struct { const char *path, *target; } want[] = {
@@ -1434,9 +1526,11 @@ int main(int argc, char **argv)
         RUN(test_enospc);
         RUN(test_xattr);
         RUN(test_links);
+        RUN(test_native_links);
         RUN(test_windows_links);
         RUN(test_damaged_entry);
         RUN(test_device_failure);
+        RUN(test_crash_leftovers);
     }
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);

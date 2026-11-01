@@ -38,7 +38,11 @@ say() { printf '  %-44s' "$1"; }
 ok() { echo ok; }
 dev=""
 detach() { [ -z "$dev" ] || hdiutil detach -quiet "$dev" 2>/dev/null || true; dev=""; }
-die() { echo "FAIL: $*" >&2; mount | grep -q " on $mnt " && umount "$mnt"; sleep 0.5; detach; exit 1; }
+# A system indexer can hold a fresh volume for a moment after heavy writes (EBUSY).
+unmount() { for _ in 1 2 3 4 5 6 7 8 9 10; do umount "$mnt" 2>/dev/null && return 0; sleep 0.5; done; umount "$mnt"; }
+die() { echo "FAIL: $*" >&2; mount | grep -q " on $mnt " && unmount; sleep 0.5; detach; exit 1; }
+readdir_writer="$root/build/readdir-writer"
+clang -Wall -Wextra -Werror -o "$readdir_writer" "$root/Tests/Fuse/readdir-writer.c" || exit 1
 
 # SHA-256 of every file under a tree, by relative path, without AppleDouble files.
 hashes() { (cd "$1" && find . -type f ! -name '._*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256); }
@@ -98,8 +102,31 @@ for run in $(seq 1 "$runs"); do
     ok
     say "ln -s, ln"
     ln -s t.txt "$mnt/sym"; ln -s ../t.txt "$mnt/cp/up"; ln "$mnt/t.txt" "$mnt/hard"
+    ln -s cp/include "$mnt/dirlink"; ln -s /Volumes/elsewhere/x "$mnt/abslink"    # native dir; WSL
     [ "$(cat "$mnt/sym")" = abc ] && [ "$(cat "$mnt/cp/up")" = abc ] || die "symlink targets"
+    [ -d "$mnt/dirlink/ntfs-3g" ] && [ "$(readlink "$mnt/abslink")" = /Volumes/elsewhere/x ] || die "directory and absolute symlinks"
+    rm "$mnt/dirlink"; ln -s cp/include "$mnt/dirlink"         # a directory symlink unlinks like a link
     [ "$(stat -f %l "$mnt/t.txt")" = 2 ] || die "nlink"; ok
+    say "names: NFC/NFD, emoji, 255, reserved"
+    mkdir "$mnt/names"
+    nfd=$(printf 'cafe\xcc\x81.txt'); nfc=$(printf 'caf\xc3\xa9.txt')
+    echo nfd > "$mnt/names/$nfd"
+    [ "$(cat "$mnt/names/$nfc")" = nfd ] || die "NFD name not found by its NFC form"
+    [ "$(ls "$mnt/names" | wc -l | tr -d ' ')" = 1 ] || die "NFD and NFC made two files"
+    echo e > "$mnt/names/$(printf '\xf0\x9f\x93\x81 emoji \xe2\x9c\x85')" || die "emoji name"
+    long=$(printf 'n%.0s' $(seq 1 255)); echo l > "$mnt/names/$long" || die "255-char name"
+    ! echo x 2> /dev/null > "$mnt/names/${long}n" || die "256-char name accepted"
+    for bad in CON aux.txt 'trail.' 'trail ' 'a:b' 'q?' 'lt<'; do
+        ! touch "$mnt/names/$bad" 2> /dev/null || die "Windows-invalid name '$bad' accepted"
+    done
+    echo c > "$mnt/names/Case.txt"; mv "$mnt/names/Case.txt" "$mnt/names/case.TXT"
+    ls "$mnt/names" | grep -qx 'case.TXT' || die "case-only rename"
+    rm -r "$mnt/names"; ok
+
+    say "readdir with a concurrent writer"
+    mkdir "$mnt/rdw"; "$readdir_writer" "$mnt/rdw" 2000 > "$work/rdw.txt" 2>&1 || { cat "$work/rdw.txt" >&2; die "readdir-writer"; }
+    rm -r "$mnt/rdw"; ok
+
     say "unlink while open"
     exec 3< "$mnt/big.bin"; rm "$mnt/big.bin"
     [ "$(shasum -a 256 <&3)" = "$(shasum -a 256 < "$work/big.bin")" ] || die "read after unlink"; exec 3<&-; ok
@@ -116,7 +143,7 @@ for run in $(seq 1 "$runs"); do
     [ -z "$(find "$mnt" -name '._*' | head -1)" ] || die "AppleDouble files: $(find "$mnt" -name '._*' | head -3)"; ok
     say "unmount, probe CLEAN, ntfsfix -n"
     cp_snapshot="$work/cp.sha"; (cd "$mnt/cp" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) > "$cp_snapshot"
-    umount "$mnt"
+    unmount
     "$engine" probe "$vol" | grep -q '^state: *clean' || die "probe after unmount: $("$engine" probe "$vol" | head -1)"
     "$ntfsfix" -n "$vol" > "$work/ntfsfix.txt" 2>&1 || { cat "$work/ntfsfix.txt" >&2; die "ntfsfix -n"; }
     ok
@@ -126,10 +153,11 @@ for run in $(seq 1 "$runs"); do
     diff "$cp_snapshot" <(cd "$mnt/cp" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) > /dev/null || die "cp tree after remount"
     [ "$(xattr -p com.example.note "$mnt/t.txt")" = "a note" ] || die "xattr after remount"
     [ "$(readlink "$mnt/sym")" = t.txt ] && [ "$(stat -f %l "$mnt/hard")" = 2 ] || die "links after remount"
+    [ "$(readlink "$mnt/dirlink")" = cp/include ] && [ -d "$mnt/dirlink/ntfs-3g" ] || die "directory symlink after remount"
     expect_same "$src" "$mnt/moved" "moved tree after remount"
     [ "$(cat "$mnt/t.txt")" = abc ] || die "t.txt after remount"
     [ ! -e "$mnt/big.bin" ] || die "unlinked file came back"
-    umount "$mnt"; ok
+    unmount; ok
     [ -z "$dev" ] || { sleep 0.5; detach; }
 done
 echo "rw-suite: $runs run(s) passed"

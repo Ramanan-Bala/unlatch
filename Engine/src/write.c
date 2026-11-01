@@ -17,6 +17,7 @@
 #include <ntfs-3g/inode.h>
 #include <ntfs-3g/layout.h>
 #include <ntfs-3g/ntfstime.h>
+#include <ntfs-3g/reparse.h>
 #include <ntfs-3g/unistr.h>
 
 #define MAX_DEPTH 4096
@@ -28,6 +29,13 @@ static void set_archive(ntfs_inode *ni)
         NInoSetDirty(ni);
         NInoFileNameSetDirty(ni);
     }
+}
+
+// A directory for rename and remove purposes: not a symlink or junction, which are
+// directories on disk but links to the host (D-49, D-67).
+static bool real_dir(ntfs_inode *ni)
+{
+    return ue_is_dir(ni) && !((ni->flags & FILE_ATTR_REPARSE_POINT) && ue_is_symlink(ni));
 }
 
 static int open_dir(ue_engine_t *e, ue_ino_t dir, ntfs_inode **out)
@@ -154,7 +162,7 @@ static int remove_name(ue_engine_t *e, ue_ino_t dir, const ntfschar *u, int len,
         err = EPERM;
         goto close_both;
     }
-    isdir = ue_is_dir(ni);
+    isdir = real_dir(ni);
     if (want_dir == 1 && !isdir) {
         err = ENOTDIR;
         goto close_both;
@@ -236,6 +244,127 @@ int ue_delete_ghosts(ue_engine_t *e)
             if (r && !err)
                 err = r;
         }
+    }
+    return err;
+}
+
+// ---- Crash leftovers (Step 17, D-65). A crash, unplug or kill can leave ghost names (D-25,
+// always in the root, D-30) and rename temp names (D-26). On a read-write open the root is
+// swept: ghosts are deleted (their file had no other name left), and a rename temp name is
+// dropped when the item has another name, or else renamed to a visible "Unlatch recovered
+// N" so nothing is lost. Temp names in other directories stay hidden; they are harmless, and
+// fresh ones never collide with them (ue_open seeds next_tmp_id from the clock).
+
+#define SWEEP_BATCH 64
+
+typedef struct {
+    char *names[SWEEP_BATCH];
+    int n;
+    bool more;
+} sweep_t;
+
+static int sweep_collect(void *ctx, const ntfschar *name, const int name_len, const int name_type,
+                         const s64 pos, const MFT_REF mref, const unsigned dt_type)
+{
+    sweep_t *s = ctx;
+    char *utf8 = NULL;
+
+    (void)pos;
+    (void)mref;
+    (void)dt_type;
+    if (name_type == FILE_NAME_DOS || ntfs_ucstombs(name, name_len, &utf8, 0) < 0)
+        return 0;
+    if (ue_hidden_entry(0, UINT64_MAX, utf8)) {
+        if (s->n < SWEEP_BATCH) {
+            s->names[s->n++] = utf8;
+            return 0;
+        }
+        s->more = true;
+    }
+    free(utf8);
+    return 0;
+}
+
+static int sweep_one(ue_engine_t *e, const char *name)
+{
+    ntfschar *u = NULL, *r = NULL;
+    ntfs_inode *root, *ni;
+    int len, rlen, err;
+    u64 mref;
+
+    if ((err = ue_to_ucs(name, &u, &len)))
+        return err;
+    if ((err = open_dir(e, UE_ROOT_INO, &root)))
+        goto out;
+    err = find(root, u, len, &mref);
+    ue_iput(root);
+    if (err)
+        goto out;
+    if (strncmp(name, UE_GHOST_PREFIX, strlen(UE_GHOST_PREFIX)) == 0) {
+        ue_logf(UE_LOG_WARNING, "deleting %s, left by an earlier crash or unplug", name);
+        err = unlink_name(e, UE_ROOT_INO, u, len);
+        goto out;
+    }
+    if ((err = ue_iget(e, mref, &ni)))
+        goto out;
+    int links = real_links(ni);
+    ue_iput(ni);
+    if (links > 1) {
+        ue_logf(UE_LOG_WARNING, "removing %s, a rename temp name left by an earlier crash", name);
+        err = unlink_name(e, UE_ROOT_INO, u, len);
+        goto out;
+    }
+    // Its only name: keep the item under a visible name.
+    for (int i = 1; i < 1000; i++) {
+        char vis[64];
+        u64 other;
+        snprintf(vis, sizeof(vis), "Unlatch recovered %d", i);
+        free(r);
+        r = NULL;
+        if ((err = ue_to_ucs(vis, &r, &rlen)) || (err = open_dir(e, UE_ROOT_INO, &root)))
+            goto out;
+        err = find(root, r, rlen, &other);
+        ue_iput(root);
+        if (err == ENOENT) {
+            ue_logf(UE_LOG_WARNING, "renaming %s, left by an interrupted rename, to \"%s\"", name, vis);
+            if (!(err = link_name(e, mref, UE_ROOT_INO, r, rlen)))
+                err = unlink_name(e, UE_ROOT_INO, u, len);
+            goto out;
+        }
+        if (err)
+            goto out;
+    }
+    err = EEXIST;
+out:
+    free(u);
+    free(r);
+    return err;
+}
+
+int ue_sweep_root(ue_engine_t *e)
+{
+    int err = 0;
+
+    for (int round = 0; round < 64; round++) {
+        sweep_t s = { .n = 0 };
+        ntfs_inode *root;
+        s64 pos = 0;
+
+        if ((err = open_dir(e, UE_ROOT_INO, &root)))
+            return err;
+        if (ntfs_readdir(root, &pos, &s, sweep_collect))
+            err = errno ? errno : EIO;
+        ue_iput(root);
+        for (int i = 0; i < s.n; i++) {
+            int r = err ? 0 : sweep_one(e, s.names[i]);
+            if (r) {
+                ue_logf(UE_LOG_WARNING, "cannot clean up %s: %s", s.names[i], strerror(r));
+                err = r;
+            }
+            free(s.names[i]);
+        }
+        if (err || !s.more)
+            break;
     }
     return err;
 }
@@ -370,6 +499,112 @@ out:
 
 // Symlinks are created as WSL symlinks (IO_REPARSE_TAG_LX_SYMLINK, D-49): readable by
 // Windows (WSL), Linux ntfs-3g and newer ntfs3, with the target stored as UTF-8 verbatim.
+static int parent_of(ue_engine_t *e, uint64_t rec, uint64_t *parent);
+
+// Native Windows symlinks (Step 17, D-67). A relative target that resolves, without leaving
+// the volume, to an existing file or directory becomes an IO_REPARSE_TAG_SYMLINK with
+// SYMLINK_FLAG_RELATIVE, which Windows programs follow (a directory symlink for a directory).
+// Anything else (absolute, dangling, leaving the volume, through another link, or with
+// characters Windows names cannot hold) stays a WSL symlink. 0 when native; *isdir set.
+static int resolve_on_volume(ue_engine_t *e, ue_ino_t dir, const char *target, bool *isdir)
+{
+    char *copy, *rest, *comp;
+    uint64_t cur = MREF(dir);
+    bool cur_dir = true;
+    int err = 0, steps = 0;
+
+    if (target[0] == '/' || strpbrk(target, "\\:*?\"<>|"))
+        return EXDEV;
+    for (const unsigned char *c = (const unsigned char *)target; *c; c++)
+        if (*c < 0x20)
+            return EXDEV;
+    if (!(copy = strdup(target)))
+        return ENOMEM;
+    rest = copy;
+    while (!err && (comp = strsep(&rest, "/"))) {
+        if (++steps > MAX_DEPTH || !cur_dir) {
+            err = EXDEV;              // too deep, or a component under a file
+        } else if (!*comp) {
+            err = EXDEV;              // "a//b" or a trailing slash
+        } else if (!strcmp(comp, ".")) {
+            continue;
+        } else if (!strcmp(comp, "..")) {
+            if (cur == FILE_root)
+                err = EXDEV;          // leaves the volume
+            else
+                err = parent_of(e, cur, &cur);
+        } else {
+            ntfschar *u;
+            int len;
+            u64 mref;
+            ntfs_inode *dni, *ni;
+            if ((err = ue_to_ucs(comp, &u, &len)))
+                break;
+            if (!(dni = ue_iopen_rec(e, cur))) {
+                err = errno ? errno : EIO;
+                free(u);
+                break;
+            }
+            err = find(dni, u, len, &mref);
+            ue_iput(dni);
+            free(u);
+            if (err)
+                break;                // dangling: Windows needs to know file or directory
+            if (!(ni = ue_iopen_rec(e, MREF(mref)))) {
+                err = errno ? errno : EIO;
+                break;
+            }
+            if (ni->flags & FILE_ATTR_REPARSE_POINT)
+                err = EXDEV;          // through another link: keep it simple, WSL
+            cur_dir = ue_is_dir(ni);
+            ue_iput(ni);
+            cur = MREF(mref);
+        }
+    }
+    free(copy);
+    if (!err)
+        *isdir = cur_dir;
+    return err;
+}
+
+// [MS-FSCC] 2.1.2.4 SYMLINK_REPARSE_BUFFER, relative: substitute and print names are both
+// the target with '\' separators.
+static char *native_reparse(const char *target, size_t *size)
+{
+    char *win = strdup(target);
+    ntfschar *ut = NULL;
+    int tlen;
+
+    if (!win)
+        return NULL;
+    for (char *c = win; *c; c++)
+        if (*c == '/')
+            *c = '\\';
+    tlen = ntfs_mbstoucs(win, &ut);
+    free(win);
+    if (tlen <= 0)
+        return NULL;
+    size_t names = (size_t)tlen * 2, dlen = 12 + 2 * names, total = 8 + dlen;
+    unsigned char *buf = calloc(1, total), *d;
+    if (!buf || dlen > 16 * 1024) {
+        free(buf);
+        free(ut);
+        return NULL;
+    }
+    d = buf + 8;
+    uint32_t tag = 0xA000000Cu, flags = 1;   // IO_REPARSE_TAG_SYMLINK, SYMLINK_FLAG_RELATIVE
+    uint16_t dl = (uint16_t)dlen, f[4] = { 0, (uint16_t)names, (uint16_t)names, (uint16_t)names };
+    memcpy(buf, &tag, 4);                  // little-endian host (arm64)
+    memcpy(buf + 4, &dl, 2);
+    memcpy(d, f, 8);                       // substitute offset/length, print offset/length
+    memcpy(d + 8, &flags, 4);
+    memcpy(d + 12, ut, names);
+    memcpy(d + 12 + names, ut, names);
+    free(ut);
+    *size = total;
+    return (char *)buf;
+}
+
 int ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *target, ue_attr_t *out)
 {
     ntfs_inode *dni, *ni;
@@ -389,9 +624,15 @@ int ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *targe
         free(u);
         return EINVAL;
     }
+    // Resolved before dir is opened: the walk opens records itself, and a record must never
+    // be open twice (D-24).
+    bool isdir = false;
+    size_t rsize = 0;
+    char *rbuf = resolve_on_volume(e, dir, target, &isdir) == 0 ? native_reparse(target, &rsize) : NULL;
     if ((err = open_dir(e, dir, &dni))) {
         free(u);
         free(ut);
+        free(rbuf);
         return err;
     }
     if (dni->mft_no == FILE_Extend) {
@@ -403,8 +644,24 @@ int ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *targe
         goto out;
     }
     err = 0;
-    e->vol->special_files = NTFS_FILES_WSL;
-    ni = ntfs_create_symlink(dni, const_cpu_to_le32(0), u, (u8)len, ut, tlen);
+    if (rbuf) {
+        ni = ntfs_create(dni, const_cpu_to_le32(0), u, (u8)len, isdir ? S_IFDIR : S_IFREG);
+        if (ni && ntfs_set_ntfs_reparse_data(ni, rbuf, rsize, 0)) {
+            err = errno ? errno : EIO;
+            free(rbuf);
+            rbuf = NULL;
+            // Undo: the new name must not stay behind as a plain file or directory.
+            ntfs_delete(e->vol, NULL, ni, dni, u, (u8)len);
+            free(u);
+            free(ut);
+            return err;                // ntfs_delete closed dni
+        }
+        free(rbuf);
+        rbuf = NULL;
+    } else {
+        e->vol->special_files = NTFS_FILES_WSL;
+        ni = ntfs_create_symlink(dni, const_cpu_to_le32(0), u, (u8)len, ut, tlen);
+    }
     if (!ni) {
         err = errno ? errno : EIO;
         goto out;
@@ -420,6 +677,7 @@ int ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *targe
 out:
     free(u);
     free(ut);
+    free(rbuf);
     int cerr = ue_iput(dni);
     return err ? err : cerr;
 }
@@ -559,7 +817,7 @@ static int kind_of(ue_engine_t *e, u64 mref, bool *isdir, bool *empty)
         ue_iput(ni);
         return EPERM;
     }
-    *isdir = ue_is_dir(ni);
+    *isdir = real_dir(ni);
     if (empty)
         *empty = !*isdir || ntfs_check_empty_dir(ni) == 0;
     return ue_iput(ni);

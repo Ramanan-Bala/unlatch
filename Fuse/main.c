@@ -254,9 +254,12 @@ int main(int argc, char **argv)
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", argv[optind + 1], strerror(errno));
         return 1;
     }
-    char source_copy[1024];
+    // basename() may return a static buffer that later calls overwrite (libfuse's own use of
+    // it turned the status record's bsdName into "unlatch-fuse"), so keep a copy.
+    char source_copy[1024], bsd_buf[256];
     snprintf(source_copy, sizeof(source_copy), "%s", argv[optind]);
-    const char *bsd_name = basename(source_copy);
+    snprintf(bsd_buf, sizeof(bsd_buf), "%s", basename(source_copy));
+    const char *bsd_name = bsd_buf;
 
     file_io_t f;
     ue_probe_t p;

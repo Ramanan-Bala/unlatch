@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <ntfs-3g/attrib.h>
 #include <ntfs-3g/bootsect.h>
@@ -241,6 +242,13 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
         unmount_volume(vol, ctx);
         free(e);
         return err;
+    }
+
+    // Temp names from earlier sessions may still exist (crash leftovers): never reuse an id.
+    e->next_tmp_id = (uint64_t)time(NULL) * 1000;
+    if (!readonly && (err = ue_sweep_root(e)) && (err == EIO || e->dev_ctx->failed)) {
+        ue_close(e);
+        return EIO;
     }
 
     if (probe_out) {

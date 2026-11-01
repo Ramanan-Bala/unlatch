@@ -15,12 +15,13 @@ public final class StatusStore: @unchecked Sendable {
         return d
     }()
 
-    /// Every readable record, newest first. Unreadable files are skipped.
+    /// Every readable record, newest first. Unreadable files are skipped. Timestamps have 1 s
+    /// resolution; on a tie a mounted record comes first (it is the volume there now).
     public func all() -> [VolumeStatus] {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
         return files.filter { $0.pathExtension == "json" }
             .compactMap { try? Self.decoder.decode(VolumeStatus.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.timestamp > $1.timestamp }
+            .sorted { $0.timestamp != $1.timestamp ? $0.timestamp > $1.timestamp : ($0.mounted && !$1.mounted) }
     }
 
     /// The newest record for a BSD name (`disk6s1`), or for an image file name.

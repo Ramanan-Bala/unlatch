@@ -91,5 +91,6 @@ bool ue_hidden_entry(uint64_t dir_rec, uint64_t rec, const char *utf8_name);
 int ue_hold(ue_engine_t *e, const ntfs_inode *ni);              // host now holds this item
 int ue_delete_ghost(ue_engine_t *e, ue_held_t *h);              // write.c
 int ue_delete_ghosts(ue_engine_t *e);                            // ue_close
+int ue_sweep_root(ue_engine_t *e);                               // ue_open, read-write (D-65)
 
 #endif // UE_INTERNAL_H

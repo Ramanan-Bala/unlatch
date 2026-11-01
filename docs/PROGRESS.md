@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
-| Next step | 17 Robustness |
+| Last completed step | 17 robustness (owner-hardware items open). 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Next step | 18 Packaging |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -570,16 +570,42 @@ Bench/baselines.sh --runs 3 unlatch                # numbers in docs/M0-gate.md
 - Polling the macFUSE session fd delays requests (D-64).
 - Without closing in `destroy`, `umount` returned while dirty pages were still being written; a probe right after it raced the daemon.
 
+### Step 17: Robustness and the manual matrix — done 2026-11-01, except items needing owner hardware
+
+Re-scoped for macFUSE and this Mac (D-65). Results are in `docs/test-matrix.md`: no open data-loss or corruption issue.
+
+**Done:**
+- Crash leftovers (D-65): root sweep of ghosts and rename temp names on read-write open; temp-name ids seeded from the clock. Fixture `leftover.img`, `test_crash_leftovers`.
+- Native Windows symlinks for relative on-volume targets (D-67), file and directory; WSL links otherwise; directory symlinks remove and rename as links. `test_native_links`, reparse-tag checks in `test-engine.sh`, and Windows follows them (VM).
+- Directory listings from a per-handle snapshot (D-66); `Tests/Fuse/readdir-writer.c` (in the rw-suite) went from 32 duplicates to 0.
+- Dead mounts after a killed daemon are force-unmounted by `MountService.list()` (D-68); the daemon records its pid. `unmount` retries EBUSY for 3 s.
+- Fixed on the way: the daemon's status records had `bsdName` "unlatch-fuse" (a `basename()` static buffer); images made in the same second shared a serial (`make-image.sh` now randomizes it); status records with equal timestamps sort mounted-first.
+- `Tests/Fuse/interrupt.sh` (kill, force-eject), rw-suite "names" step (NFC/NFD, emoji, 255/256, reserved, case-only), directory and absolute symlinks in the suite, capacity runs, Windows chkdsk of a cache-written suite image (passed) and `windows-check.ps1` (fixed a stray line).
+
+**Verify:**
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh          # test_crash_leftovers, test_native_links, reparse tags
+Tests/Fuse/rw-suite.sh --runs 3; Tests/Fuse/rw-suite.sh --runs 2 --disk
+Tests/Fuse/interrupt.sh                            # kill passes; detach reports SKIP for images
+UNLATCH_INTEGRATION=1 swift test --package-path Shared   # deadDaemonMountIsReaped
+export WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222
+Tests/Fuse/rw-suite.sh --runs 1 && Scripts/chkdsk-vm.sh build/rw-suite/run.img rw-suite-step17
+```
+
+**Left (owner hardware):** USB pull mid-copy, sleep and wake, 50 GB file and 1M-file tree on a real disk, the 24-hour soak. All are open rows in `docs/test-matrix.md`.
+
+**Surprises:**
+- macOS will not force-eject an attached image while a process holds it, so surprise removal cannot be simulated with images.
+- macFUSE keeps a dead daemon's mount; `statfs` still works on it, directory reads fail with ENXIO.
+- Swift Testing runs the integration tests in parallel, which exposed the shared serials.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07 (VM available now):** Windows-made golden images (`Tests/Images/README.md`).
-- **Step 17:** native Windows symlinks for on-volume targets (D-55).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
-- **Step 16/17:** readdir cookies are index positions; deleting entries while a listing is in progress could shift later entries. `rm -rf` of 1,000-file trees passes because fts reads a directory fully before deleting; test a concurrent writer in Step 17.
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
-- **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
 - **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.
 - **Step 18:** `ENABLE_HARDENED_RUNTIME` is already on; Developer ID signing and notarization are not set up.

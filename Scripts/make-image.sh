@@ -24,4 +24,9 @@ if ! log="$("$mkntfs" -F -Q -L "$label" "$img" 2>&1)"; then
     exit 1
 fi
 
+# mkntfs seeds its serial from the clock, so images made in the same second share one, and
+# status records are keyed by serial (D-41): give each image a random serial.
+serial=$(od -An -N8 -tx8 /dev/urandom | tr -d ' \n')
+"$root/build/ntfs3g/bin/ntfslabel" --new-serial="$serial" "$img" > /dev/null 2>&1 || true
+
 echo "$img"

@@ -319,72 +319,137 @@ static void uf_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
     fuse_reply_attr(req, &st, UF_TIMEOUT(fs));
 }
 
-static void uf_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
-{
-    (void)ino;
-    fi->keep_cache = 1;
-    fuse_reply_open(req, fi);
-}
+// Directory listings come from a snapshot per open handle, taken when a listing starts (offset
+// 0). The engine's cookies are index positions, which shift when another process adds or
+// removes names mid-listing: that returned names twice (Step 17, D-66). Offsets are snapshot
+// positions: "." is 1, ".." is 2, entry k is k + 3.
+typedef struct {
+    char *name;
+    struct fuse_darwin_attr st;
+} snap_ent_t;
 
 typedef struct {
-    fuse_req_t req;
+    snap_ent_t *ents;
+    size_t n, cap;
+    bool valid;
+    int err;
     const uf_fs_t *fs;
-    char *buf;
-    size_t size, used;
-} dir_ctx_t;
+} dir_snap_t;
 
-static bool add_entry(dir_ctx_t *c, const char *name, const struct fuse_darwin_attr *st, uint64_t next)
+static void snap_clear(dir_snap_t *d)
 {
-    size_t n = fuse_add_direntry(c->req, c->buf + c->used, c->size - c->used, name, st, (off_t)next);
+    for (size_t i = 0; i < d->n; i++)
+        free(d->ents[i].name);
+    d->n = 0;
+    d->valid = false;
+}
 
-    if (n > c->size - c->used)
+static bool snap_add(void *ctx, const char *name, const ue_attr_t *attr, uint64_t next_cookie)
+{
+    dir_snap_t *d = ctx;
+
+    (void)next_cookie;
+    if (d->n == d->cap) {
+        size_t cap = d->cap ? d->cap * 2 : 64;
+        snap_ent_t *e = realloc(d->ents, cap * sizeof(*e));
+        if (!e) {
+            d->err = ENOMEM;
+            return false;
+        }
+        d->ents = e;
+        d->cap = cap;
+    }
+    if (!(d->ents[d->n].name = strdup(name))) {
+        d->err = ENOMEM;
         return false;
-    c->used += n;
+    }
+    fill_attr(d->fs, attr, &d->ents[d->n].st);
+    d->n++;
     return true;
 }
 
-static bool emit(void *ctx, const char *name, const ue_attr_t *attr, uint64_t next_cookie)
+static void uf_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-    dir_ctx_t *c = ctx;
-    struct fuse_darwin_attr st;
+    dir_snap_t *d = calloc(1, sizeof(*d));
 
-    fill_attr(c->fs, attr, &st);
-    return add_entry(c, name, &st, next_cookie);
+    (void)ino;
+    if (!d) {
+        fuse_reply_err(req, ENOMEM);
+        return;
+    }
+    d->fs = fs_of(req);
+    fi->fh = (uint64_t)(uintptr_t)d;
+    fi->keep_cache = 1;
+    if (fuse_reply_open(req, fi) != 0)
+        free(d);
 }
 
-// Offsets are engine cookies: "." and ".." are positions 1 and 2 (the engine's own cookies
-// for them), and the engine's entries resume from 2.
 static void uf_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
     uf_fs_t *fs = fs_of(req);
-    dir_ctx_t c = { .req = req, .fs = fs, .size = size };
+    dir_snap_t *d = (dir_snap_t *)(uintptr_t)fi->fh;
     struct fuse_darwin_attr dot = { .mode = S_IFDIR };
-    uint64_t verifier;
+    size_t used = 0;
+    char *buf;
     int err = 0;
 
-    (void)fi;
-    if (!(c.buf = malloc(size))) {
+    if (!d) {
+        fuse_reply_err(req, EBADF);
+        return;
+    }
+    if (off == 0 || !d->valid) {
+        uint64_t verifier;
+        snap_clear(d);
+        d->err = 0;
+        err = ue_readdir(fs->engine, to_engine(fs, ino), 2, snap_add, d, &verifier);
+        if (!err)
+            err = d->err;
+        if (err) {
+            snap_clear(d);
+            fuse_reply_err(req, err);
+            return;
+        }
+        d->valid = true;
+    }
+    if (!(buf = malloc(size))) {
         fuse_reply_err(req, ENOMEM);
         return;
     }
     dot.ino = ino == FUSE_ROOT_ID ? 2 : (ino_t)ino;
-    if (off < 1 && !add_entry(&c, ".", &dot, 1))
-        goto out;
-    if (off < 2 && !add_entry(&c, "..", &dot, 2))
-        goto out;
-    err = ue_readdir(fs->engine, to_engine(fs, ino), off < 2 ? 2 : (uint64_t)off, emit, &c, &verifier);
-out:
-    if (err && !c.used)
-        fuse_reply_err(req, err);
-    else
-        fuse_reply_buf(req, c.buf, c.used);
-    free(c.buf);
+    for (uint64_t pos = off < 0 ? 0 : (uint64_t)off;; pos++) {
+        const char *name;
+        const struct fuse_darwin_attr *st;
+        if (pos == 0) {
+            name = ".";
+            st = &dot;
+        } else if (pos == 1) {
+            name = "..";
+            st = &dot;
+        } else if (pos - 2 < d->n) {
+            name = d->ents[pos - 2].name;
+            st = &d->ents[pos - 2].st;
+        } else {
+            break;
+        }
+        size_t n = fuse_add_direntry(req, buf + used, size - used, name, st, (off_t)(pos + 1));
+        if (n > size - used)
+            break;
+        used += n;
+    }
+    fuse_reply_buf(req, buf, used);
+    free(buf);
 }
 
 static void uf_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
+    dir_snap_t *d = (dir_snap_t *)(uintptr_t)fi->fh;
+
     (void)ino;
-    (void)fi;
+    if (d) {
+        snap_clear(d);
+        free(d->ents);
+        free(d);
+    }
     fuse_reply_err(req, 0);
 }
 

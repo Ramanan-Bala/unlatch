@@ -82,8 +82,9 @@ int status_write(const char *bsd_name, const ue_probe_t *p, bool read_only, bool
     put_string(f, bsd_name);
     fprintf(f, ",\n  \"engineABI\" : %d,\n  \"label\" : ", UE_ABI_VERSION);
     put_string(f, p->label);
-    fprintf(f, ",\n  \"mounted\" : %s,\n  \"readOnly\" : %s,\n  \"reason\" : ",
-            mounted ? "true" : "false", read_only ? "true" : "false");
+    // pid: the app and CLI force-unmount a mount whose daemon is gone (Step 17, D-68).
+    fprintf(f, ",\n  \"mounted\" : %s,\n  \"pid\" : %d,\n  \"readOnly\" : %s,\n  \"reason\" : ",
+            mounted ? "true" : "false", (int)getpid(), read_only ? "true" : "false");
     put_string(f, p->reason);
     fprintf(f, ",\n  \"serial\" : \"%016llX\",\n  \"state\" : \"%s\",\n  \"timestamp\" : \"%s\",\n"
                "  \"unlatchVersion\" : \"%s\"\n}\n",

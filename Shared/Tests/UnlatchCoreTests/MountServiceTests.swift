@@ -131,3 +131,19 @@ func watcherSeesAnAttachedVolume() async throws {
     #expect(seen)
     _ = try sh("/usr/bin/hdiutil", "detach", bsd)
 }
+
+@Test(.enabled(if: integration), .timeLimit(.minutes(2)))
+func deadDaemonMountIsReaped() async throws {
+    let service = try MountService(daemon: root.appendingPathComponent("build/DerivedData/Build/Products/Debug/unlatch-fuse"))
+    let bsd = try attachFreshImage("corereap", mount: false)
+    let r = try await service.mount(bsd)
+    let pid = try #require(await service.status(bsd)?.pid)
+    kill(pid, SIGKILL)
+    try await Task.sleep(nanoseconds: 500_000_000)
+    // macFUSE keeps the dead mount listed until it is force-unmounted; list() does that.
+    let disks = await service.list()
+    #expect(disks.first { $0.bsdName == bsd }?.owner == DiskInfo.Owner.none)
+    #expect(!FileManager.default.fileExists(atPath: r.mountPoint))
+    #expect(await service.status(bsd)?.mounted == false)
+    try await service.eject(bsd)
+}

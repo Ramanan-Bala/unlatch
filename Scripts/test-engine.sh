@@ -79,6 +79,16 @@ file /damaged/broken.txt 10 2
 file /damaged/c.txt 10 3
 zero-record /damaged/broken.txt
 FIXTURE
+# Crash leftovers (Step 17): a ghost, and a rename temp name that is its item's only name.
+"$root/Scripts/make-image.sh" leftover 32m LEFTOVER >/dev/null
+"$out/mkfixture" leftover.img <<'FIXTURE'
+file /keep.txt 100 1
+file /.unlatch-ghost-41 5000 2
+flags /.unlatch-ghost-41 hidden
+mkdir /sub
+file /.unlatch-rename-7 3000 3
+file /sub/.unlatch-rename-9 10 4
+FIXTURE
 if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
     "$root/Scripts/make-image.sh" big 5g BIG >/dev/null
     echo "file /4g.bin 4294967296 9" | "$out/mkfixture" big.img
@@ -160,11 +170,18 @@ for w in w-*.img; do
     "$products/unlatch-engine" probe "$w" | grep -q '^state: *clean$' || { echo "FAIL $w not clean" >&2; exit 1; }
     "$bin/ntfsinfo" -m "$w" > /dev/null 2>&1 || { echo "FAIL ntfsinfo $w" >&2; exit 1; }
     "$bin/ntfsfix" -n "$w" > fix.txt 2>&1 || { cat fix.txt >&2; echo "FAIL ntfsfix -n $w" >&2; exit 1; }
-    if "$bin/ntfsls" -R -a -s "$w" | grep -q '\.unlatch-'; then
+    # The leftover fixture keeps sub/.unlatch-rename-9 on purpose (only the root is swept, D-65).
+    if "$bin/ntfsls" -R -a -s "$w" | grep '\.unlatch-' | grep -qv '^\.unlatch-rename-9$'; then
         echo "FAIL $w has leftover .unlatch- names" >&2; exit 1
     fi
 done
 echo "ok   $(ls w-*.img | wc -l | tr -d ' ') written images"
+# Native Windows symlinks for on-volume targets, WSL links otherwise (D-67).
+for spec in s-file:0xa000000c s-dir:0xa000000c d/s-up:0xa000000c s-escape:0xa000001d s-abs:0xa000001d; do
+    tag=$("$bin/ntfsinfo" -F "/${spec%%:*}" w-native-links.img 2>/dev/null | awk '/Reparse tag/ {print $3}')
+    [ "$tag" = "${spec#*:}" ] || { echo "FAIL ${spec%%:*}: reparse tag $tag, want ${spec#*:}" >&2; exit 1; }
+done
+echo "ok   symlink reparse tags (native for on-volume targets)"
 
 echo "== fsx regressions"
 "$root/Scripts/fsx-soak.sh" --regressions | tail -1

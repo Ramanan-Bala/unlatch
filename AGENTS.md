@@ -21,6 +21,8 @@ Each step updates this list.
 | Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
 | Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--no-cache] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
+| Interruption tests (kill the daemon mid-copy, force-eject) | `Tests/Fuse/interrupt.sh [kill\|detach]` |
+| Test matrix (Step 17 results) | `docs/test-matrix.md` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
 | Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
 | Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk) | `Tests/Fuse/rw-suite.sh --runs 3 [--no-git] [--disk]` |

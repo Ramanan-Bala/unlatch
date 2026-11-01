@@ -60,12 +60,39 @@ public actor MountService {
 
     // MARK: listing
 
-    /// Every NTFS volume DiskArbitration knows, with who has it mounted.
+    /// Every NTFS volume DiskArbitration knows, with who has it mounted. Mounts left behind
+    /// by a daemon that died are cleaned up first (`reapDeadMounts`).
     public func list() -> [DiskInfo] {
+        reapDeadMounts()
         let mounts = Mount.table()
         return DA.leafBSDNames().compactMap { name in
             DADiskCreateFromBSDName(kCFAllocatorDefault, session, name).flatMap { DA.info($0, mounts: mounts) }
         }
+    }
+
+    /// Force-unmounts Unlatch mounts whose daemon is gone (killed or crashed): macFUSE keeps
+    /// such a mount listed, and every directory read on it fails with ENXIO (D-68). The daemon
+    /// records its pid in the status record; a mount without one is left alone.
+    @discardableResult
+    public func reapDeadMounts() -> [String] {
+        var reaped: [String] = []
+        for m in Mount.table() where m.type == "macfuse" && m.from.hasPrefix("unlatch@") {
+            let bsd = String(m.from.dropFirst("unlatch@".count))
+            // Records claiming this disk is mounted (timestamps have 1 s resolution, so a record
+            // of an earlier volume on the same diskN can tie with the current one).
+            let recs = statusStore.all().filter { $0.bsdName == bsd && $0.mounted && $0.pid != nil }
+            let dead = { (r: VolumeStatus) in kill(r.pid!, 0) != 0 && errno == ESRCH }
+            guard !recs.isEmpty, recs.allSatisfy(dead) else { continue }
+            if Darwin.unmount(m.on, MNT_FORCE) == 0 {
+                reaped.append(m.on)
+                for var r in recs {
+                    r.mounted = false
+                    try? r.write()
+                }
+                Unlatch.logger("mount").notice("removed \(m.on, privacy: .public): its daemon is gone")
+            }
+        }
+        return reaped
     }
 
     public func disk(_ bsdName: String) throws -> DiskInfo {
@@ -180,8 +207,17 @@ public actor MountService {
             return
         case .unlatch:
             guard let p = info.mountPoint else { return }
-            if Darwin.unmount(p, force ? MNT_FORCE : 0) != 0 {
-                throw errno == EBUSY ? MountError.busy(p) : MountError.unmountFailed(p, errno)
+            // Right after heavy writes, a system indexer can hold the volume for a moment
+            // (EBUSY with nothing in lsof); retry for up to 3 s before reporting busy.
+            var tries = 0
+            while Darwin.unmount(p, force ? MNT_FORCE : 0) != 0 {
+                let err = errno
+                if err == EBUSY && tries < 12 {
+                    tries += 1
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                    continue
+                }
+                throw err == EBUSY ? MountError.busy(p) : MountError.unmountFailed(p, err)
             }
         default:
             try await daUnmount(info.bsdName, force: force)

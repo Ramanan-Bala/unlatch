@@ -1,0 +1,88 @@
+# Test matrix (plan Step 17)
+
+Each row: what was tried, what should happen, what did, when and on which build. Build is the commit the row was run on; `step 17` means the Step 17 commit. Severity of open items: **S1** data loss or corruption, **S2** wrong behaviour without data loss, **S3** cosmetic or tooling.
+
+Machine: Apple M2, 8 GiB, macOS 27.0.1, macFUSE 5.4.0 (kext backend), Windows 11 24H2 Arm VM in UTM for the Windows checks.
+
+## Automated (re-run on every engine or daemon change)
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| Engine unit tests, both without and with the page cache (`Scripts/test-engine.sh`) | all pass, every written image CLEAN and `ntfsfix -n` clean, no leaks | pass (24 written images) | 2026-11-01 | step 17 |
+| Page-cache model test: 20,000 random reads, writes, write-backs against an in-memory device, 64-page cache, short last page, cold mode | every read matches a shadow copy; device equals it after write-back; all transfers sector-aligned | pass | 2026-11-01 | step 17 |
+| fsx regressions and random seeds (`Scripts/fsx-soak.sh`) | no model mismatch | pass | 2026-11-01 | step 17 |
+| Fuzzers, 60 s each (`Scripts/fuzz.sh`) | no crash | pass | 2026-11-01 | step 15 |
+| Read-write suite on image files, 3 runs (`Tests/Fuse/rw-suite.sh`) | every hash, xattr, link, name and listing check passes; CLEAN after unmount | pass | 2026-11-01 | step 17 |
+| Same suite on attached disks (`--disk`: raw node and page cache) | same | pass | 2026-11-01 | step 17 |
+| UnlatchCore integration tests (mount, unmount, eject, Apple's mount restored, watcher, dead-daemon reaping) | pass | 9 of 9 | 2026-11-01 | step 17 |
+| CLI tests | pass | 4 of 4 | 2026-11-01 | step 17 |
+
+## Interruption (`Tests/Fuse/interrupt.sh`)
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| `kill -9` of the daemon mid-copy (attached disk) | no stale mount; next probe not CORRUPT; next mount works | probe CLEAN, `ntfsfix -n` clean, remounted read-write, 1,218 files of the copy present, writes work, CLEAN after a normal unmount. macFUSE keeps the dead mount listed: `MountService.list()` now force-unmounts mounts whose daemon is gone (D-68); with plain `unlatch-fuse` it needs `umount -f` | 2026-11-01 | step 17 |
+| Force-eject of the disk mid-copy | daemon exits, no stale mount, next probe not CORRUPT | **not testable with images**: macOS refuses to eject an attached image while the daemon holds it. The engine side is covered by `test_device_failure` (device turns read-only underneath; every later call EIO, nothing more written) | 2026-11-01 | step 17 |
+| Pull a real USB stick mid-copy | as above | **open, S2**: needs a disposable USB stick from the owner | – | – |
+
+## Crash leftovers (D-25, D-26, D-30, D-65)
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| Volume with a ghost `.unlatch-ghost-N` and a rename temp `.unlatch-rename-N` in the root, opened read-write | ghost deleted; temp name kept as visible "Unlatch recovered 1" with its data | pass (`test_crash_leftovers`) | 2026-11-01 | step 17 |
+| Same volume opened read-only | nothing changes | pass | 2026-11-01 | step 17 |
+| Temp name left in a subdirectory, then a rename there | hidden, harmless; new temp names never collide (ids seeded from the clock) | pass | 2026-11-01 | step 17 |
+| Crash in the middle of a rename | volume consistent; at worst an extra hidden name | with the page cache, dirty pages reach the disk only between requests (the 1 s write-back timer takes the request lock) or when the cache is full, so a crash normally leaves the state before or after the rename. A torn write-back can leave both names or a temp name; the root sweep repairs root ones, others stay hidden | 2026-11-01 | step 17 |
+
+## Capacity
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| Fill a 256 MiB volume | ENOSPC, then writes work after deleting; volume CLEAN | `dd` stops at the end (232 KiB left, small files still fit in the MFT); writes work after deleting; CLEAN, `ntfsfix -n` clean | 2026-11-01 | step 17 |
+| 3.5 GiB file (the plan's 50 GB+ does not fit this Mac's 4 GiB image limit) | checksum matches after remount | copied in 4.0 s; SHA-256 matches after a read-only remount; CLEAN | 2026-11-01 | step 17 |
+| 100,000-file tree (the plan's 1M is scaled to this Mac) | all files listed after remount; `rm -rf` works; CLEAN | created in 52 s (1–16 KiB each); 100,000 listed after remount; `rm -rf` in 77 s; CLEAN, `ntfsfix -n` clean | 2026-11-01 | step 17 |
+| 50 GB+ file, 1M-file tree on a real disk | as above | **open, S3**: needs a large disposable disk | – | – |
+
+## Names
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| NFD name created, opened by its NFC form | one file, found both ways | pass (rw-suite "names") | 2026-11-01 | step 17 |
+| Emoji name; 255 UTF-16 units | accepted | pass | 2026-11-01 | step 17 |
+| 256 units; `CON`, `aux.txt`, trailing dot or space, `:`, `?`, `<` | refused (ENAMETOOLONG, EINVAL) | pass | 2026-11-01 | step 17 |
+| Case-only rename | the new case is shown | pass | 2026-11-01 | step 17 |
+| Unicode names written by Windows, read on the Mac | shown correctly | **open, S3**: part of the Windows-made golden images (leftovers after Step 20) | – | – |
+
+## Directory listings
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| Listing 300, 3,000 and 10,000 names while another process deletes a third and adds as many (`Tests/Fuse/readdir-writer.c`) | names present throughout appear exactly once | before: up to 32 names returned twice; after the per-handle snapshot (D-66): 0 | 2026-11-01 | step 17 |
+
+## Windows (UTM VM, `Scripts/chkdsk-vm.sh`)
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| `chkdsk` of a full rw-suite volume written through the page cache | no problems | "found no problems" (`Tests/oracle/rw-suite-step17.chkdsk.txt`) | 2026-11-01 | step 17 |
+| Symlinks made on the Mac, opened on Windows (`Tests/oracle/windows-check.ps1`) | on-volume targets followed; absolute ones not | `sym`, `cp/up` (through `..`) and `dirlink` (a directory) are SymbolicLink (tag 0xA000000C) and Windows reads through them; `abslink` stays a WSL reparse point | 2026-11-01 | step 17 |
+| Streams, hard links, hidden flag, git clone | as in Step 16 | all as before (409 clone files, 4 streams, 2 links, Hidden) | 2026-11-01 | step 17 |
+
+## System integration
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| Spotlight | volume not indexed | `mdutil -s`: "unknown indexing state" (macFUSE volumes are not indexed, D-61) | 2026-11-01 | step 17 |
+| Time Machine | Unlatch volumes not offered as destinations | Time Machine only offers APFS and HFS+ disks; not checked in its UI | 2026-11-01 | step 17 |
+| Unmount right after heavy writes | succeeds | a system process can hold a fresh volume for a moment (EBUSY, nothing in `lsof`); `MountService.unmount` now retries for 3 s | 2026-11-01 | step 17 |
+| Sleep and wake with a volume mounted; Power Nap | mount survives, data intact | **open, S2**: needs the owner at the Mac | – | – |
+
+## Soak
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| fsx soak, 1,000 seeds × 2,000 ops (Step 06) | no mismatch | pass (Step 06 run; regressions re-run every gate) | 2026-11-01 | step 06+ |
+| 24-hour soak: fuzz, fsx and a copy loop on a real disk | no failures | **open, S3**: needs a real disposable disk and a day of machine time | – | – |
+
+## Open items
+
+No open data-loss or corruption issue. Open, waiting on hardware or the owner: USB pull mid-copy (S2), sleep and wake (S2), 50 GB file and 1M-file tree on a real disk (S3), 24-hour soak (S3), Windows-made Unicode names (S3, with the golden images).
