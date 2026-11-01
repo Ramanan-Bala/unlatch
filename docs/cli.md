@@ -4,6 +4,7 @@
 unlatch list [--json]                      NTFS volumes and who has them mounted
 unlatch mount <disk> [-r|--read-only] [--json]
 unlatch unmount <disk> [--force]
+unlatch unmount --all [--force]            every volume Unlatch has mounted (before an update)
 unlatch eject <disk> [--force]             unmount, then eject the whole disk
 unlatch status [<disk>] [--json]           Unlatch's verdict per volume (clean, dirty, hibernated, ...)
 unlatch doctor                             check macOS, macFUSE, unlatch-fuse, the helper

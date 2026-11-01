@@ -64,6 +64,10 @@ targets:
         embed: false
         link: false
     postBuildScripts:
+      - name: Third-party notices into the app
+        script: |
+          "$SRCROOT/Scripts/make-notices.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Notices" > /dev/null
+        basedOnDependencyAnalysis: false
       - name: Copy unlatch-fuse, helper and CLI into the app
         script: |
           dest="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"

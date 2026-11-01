@@ -23,6 +23,10 @@ Each step updates this list.
 | Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--no-cache] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
 | Interruption tests (kill the daemon mid-copy, force-eject) | `Tests/Fuse/interrupt.sh [kill\|detach]` |
 | Test matrix (Step 17 results) | `docs/test-matrix.md` |
+| Set or check the version (VERSION and every copy) | `Scripts/set-version.sh X.Y.Z`; `Scripts/set-version.sh --check` |
+| Build a release: DMG, source tarball, SHA256SUMS, Homebrew files (publishes nothing) | `Scripts/release.sh [--allow-dirty]` → `build/release/<version>/`; steps in `docs/release.md` |
+| Notices bundle (licenses, source offer) | `Scripts/make-notices.sh <dir> [version]` |
+| Build unlatch-fuse and the helper with clang only (the Homebrew formula's path) | `Scripts/build-tools.sh <outdir>` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
 | Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
 | Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk) | `Tests/Fuse/rw-suite.sh --runs 3 [--no-git] [--disk]` |

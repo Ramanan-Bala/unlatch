@@ -12,8 +12,7 @@ enum Paths {
 
     private static func find(env: String, name: String) -> URL {
         if let p = ProcessInfo.processInfo.environment[env] { return URL(fileURLWithPath: p) }
-        let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-        let beside = exe.deletingLastPathComponent().appendingPathComponent(name)
+        let beside = Unlatch.executableDirectory.appendingPathComponent(name)
         if FileManager.default.isExecutableFile(atPath: beside.path) { return beside }
         return devProducts.appendingPathComponent(name)
     }

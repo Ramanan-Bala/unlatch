@@ -53,7 +53,7 @@ public actor MountService {
 
     static func defaultDaemon() -> URL {
         if let env = ProcessInfo.processInfo.environment["UNLATCH_FUSE"] { return URL(fileURLWithPath: env) }
-        return URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("unlatch-fuse")
+        return Unlatch.executableDirectory.appendingPathComponent("unlatch-fuse")
     }
 
     public static var macFUSEInstalled: Bool { FileManager.default.fileExists(atPath: "/Library/Filesystems/macfuse.fs") }

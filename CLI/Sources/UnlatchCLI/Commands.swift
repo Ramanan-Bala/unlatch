@@ -27,6 +27,10 @@ public enum UnlatchCLI {
         } catch let e as CLIExit {
             exit(e.code.rawValue)
         } catch {
+            // The root command with no subcommand asks for help by throwing (CleanExit).
+            if UnlatchCommand.exitCode(for: error) == .success {
+                UnlatchCommand.exit(withError: error)
+            }
             FileHandle.standardError.write(Data("unlatch: \(error.localizedDescription)\n".utf8))
             exit(Exit.of(error).rawValue)
         }
@@ -144,12 +148,32 @@ struct MountCmd: AsyncParsableCommand {
 
 struct Unmount: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Unmount a volume (whoever mounted it).")
-    @Argument(help: "The volume.") var disk: String
+    @Argument(help: "The volume.") var disk: String?
+    @Flag(help: "Unmount every volume Unlatch has mounted (before an update or uninstall).") var all = false
     @Flag(help: "Unmount even if files are open.") var force = false
+
+    func validate() throws {
+        if all == (disk != nil) { throw ValidationError("Give a volume or --all.") }
+    }
 
     func run() async throws {
         let s = try service()
-        let d = try resolve(disk, in: await s.list())
+        let disks = await s.list()
+        if all {
+            var failed = false
+            for d in disks where d.owner == .unlatch {
+                do {
+                    try await s.unmount(d.bsdName, force: force)
+                    print("Unmounted \(d.bsdName).")
+                } catch {
+                    _ = fail("\(d.bsdName): \(error.localizedDescription)")
+                    failed = true
+                }
+            }
+            if failed { throw CLIExit(code: .error) }
+            return
+        }
+        let d = try resolve(disk!, in: disks)
         do { try await s.unmount(d.bsdName, force: force) } catch { throw fail(error.localizedDescription) }
         print("Unmounted \(d.bsdName).")
     }

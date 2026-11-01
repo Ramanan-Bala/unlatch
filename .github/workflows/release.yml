@@ -1,0 +1,54 @@
+# Release (plan Step 18, D-69): on a pushed tag vX.Y.Z, builds the DMG, the source tarball and
+# the Homebrew tap files with Scripts/release.sh and attaches them to a DRAFT GitHub release.
+# The owner reviews the draft and publishes it by hand (docs/release.md). Nothing is signed with
+# a Developer ID and nothing is notarized: there is no Apple Developer membership.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: xcode-27          # macOS 27 + Xcode 27 (GitHub preview image)
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Tag matches VERSION
+        run: |
+          [ "v$(cat VERSION)" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, VERSION $(cat VERSION)"; exit 1; }
+          Scripts/set-version.sh --check
+
+      - name: Tools
+        run: |
+          brew install xcodegen
+          brew install --cask macfuse      # headers and libfuse3 to build against; never bundled
+
+      - name: Build libntfs-3g
+        timeout-minutes: 15
+        run: Scripts/build-ntfs3g.sh
+
+      - name: Build the release
+        run: |
+          Scripts/bootstrap.sh
+          Scripts/release.sh
+
+      - name: Draft the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="$(cat VERSION)"
+          out="build/release/$v"
+          # Release notes: this version's section of CHANGELOG.md, then the install notes.
+          awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
+          cat docs/release-notes-footer.md >> notes.md
+          pre=""; case "$v" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --draft $pre --title "Unlatch $v" --notes-file notes.md \
+            "$out/Unlatch-$v.dmg" "$out/unlatch-$v.tar.gz" "$out/SHA256SUMS" \
+            "$out/homebrew/Casks/unlatch.rb" "$out/homebrew/Formula/unlatch.rb"

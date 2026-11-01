@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Template: Scripts/release.sh fills in @VERSION@ and @SHA256@ (plan Step 18, D-69).
+# The command-line part only (unlatch, unlatch-fuse, the helper), built from source. The app
+# is the cask. Formulae cannot depend on casks, so macFUSE is checked here instead.
+class Unlatch < Formula
+  desc "Read-write NTFS volumes on macOS, through macFUSE (command-line tools)"
+  homepage "https://github.com/Ramanan-Bala/unlatch"
+  url "https://github.com/Ramanan-Bala/unlatch/releases/download/v@VERSION@/unlatch-@VERSION@.tar.gz"
+  sha256 "@SHA256@"
+  license "GPL-3.0-or-later"
+
+  depends_on xcode: ["27.0", :build]
+  depends_on arch: :arm64
+  depends_on :macos
+
+  def install
+    unless File.exist?("/usr/local/include/fuse3/fuse_lowlevel.h")
+      odie "macFUSE is required: brew install --cask macfuse, then allow its system extension"
+    end
+    # Plain clang and SwiftPM: xcodebuild's package resolution cannot run in Homebrew's sandbox.
+    system "Scripts/build-ntfs3g.sh"
+    system "Scripts/build-tools.sh", "out"
+    system "swift", "build", "--package-path", "CLI", "-c", "release", "--disable-sandbox"
+    libexec.install "out/unlatch-fuse", "out/io.github.ramanan-bala.unlatch.helper",
+                    "CLI/.build/release/unlatch"
+    bin.install_symlink libexec/"unlatch"
+    system "Scripts/make-notices.sh", "#{doc}/notices", version.to_s
+  end
+
+  def caveats
+    <<~EOS
+      Disk images you attach work at once. Real disks need the privileged helper, once:
+        sudo #{opt_bin}/unlatch install-helper
+      and Full Disk Access for it (System Settings > Privacy & Security > Full Disk Access).
+      `unlatch uninstall-helper` removes it again.
+    EOS
+  end
+
+  test do
+    assert_match "USAGE: unlatch", shell_output("#{bin}/unlatch --help")
+    # doctor exits 0 with macFUSE ready, 4 without it; either way it reports on macOS.
+    assert_match "macOS", shell_output("#{bin}/unlatch doctor 2>&1; true")
+  end
+end

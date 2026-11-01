@@ -28,6 +28,16 @@ struct SettingsView: View {
                 Button("Export logs…") { exportLogs() }
                 if let exportResult { Text(exportResult).font(.caption).foregroundStyle(.secondary) }
             }
+            Section("About") {
+                Text("Unlatch \(Unlatch.version). Free software under the GPL, version 3 or later; it includes libntfs-3g. macFUSE is installed separately.")
+                    .font(.caption).foregroundStyle(.secondary)
+                // Contents/Resources/Notices: licenses and the written source offer (Step 18).
+                Button("Licenses and source…") {
+                    if let url = Bundle.main.url(forResource: "NOTICES", withExtension: "md", subdirectory: "Notices") {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(width: 440)

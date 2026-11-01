@@ -21,6 +21,9 @@ jobs:
         with:
           lfs: true
 
+      - name: Version copies agree
+        run: Scripts/set-version.sh --check
+
       - name: Tools
         run: |
           brew install xcodegen

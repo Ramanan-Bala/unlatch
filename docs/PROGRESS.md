@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 3 Mount management |
-| Last completed step | 17 robustness (owner-hardware items open). 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
-| Next step | 18 Packaging |
+| Last completed step | 18 packaging (unsigned DMG, Homebrew files). 17 robustness (owner-hardware items open). 15 disk-path speed (page cache, D-62). 14 menu-bar app and onboarding (owner's UI review left). 13 CLI `unlatch` and the privileged helper (2026-11-01; verified on the owner's real disk, read-only). 12 UnlatchCore; 11 M0 GO; 16 early |
+| Next step | 19 Updates and uninstall |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -599,6 +599,33 @@ Tests/Fuse/rw-suite.sh --runs 1 && Scripts/chkdsk-vm.sh build/rw-suite/run.img r
 - macFUSE keeps a dead daemon's mount; `statfs` still works on it, directory reads fail with ENXIO.
 - Swift Testing runs the integration tests in parallel, which exposed the shared serials.
 
+### Step 18: Packaging without a Developer ID (re-scoped, D-69) — done 2026-11-01, except a clean-Mac check
+
+**Done:**
+- `VERSION` plus `Scripts/set-version.sh` (and `--check`, now in CI).
+- `Scripts/release.sh`: Release build, ad-hoc signing inside out with the hardened runtime (`Packaging/unlatch-fuse.entitlements`: library validation off for libfuse3), DMG (app, Applications link, Read Me First, Notices), source tarball, `SHA256SUMS`, rendered Homebrew files. Publishes nothing.
+- Notices (`Scripts/make-notices.sh`): GPL-3.0, libntfs-3g COPYING, COPYING.LIB, AUTHORS, CREDITS, swift-argument-parser's license (`Packaging/notices/`), written source offer; in the app (Settings > About > Licenses and source), the DMG, and the formula's docs.
+- Homebrew tap templates (`Packaging/homebrew/`): cask (depends on the macfuse cask; uninstall unmounts and removes the helper; zap) and formula (built with the new `Scripts/build-tools.sh`).
+- `.github/workflows/release.yml`: on a `v*` tag, a draft release with the files and the CHANGELOG section. `docs/release.md`, `docs/install.md`, `docs/release-notes-footer.md`, `CHANGELOG.md`.
+- Fixes found on the way: `unlatch --help` exited 1 with "CommandError error 1"; the CLI and `MountService` looked for `unlatch-fuse` next to `argv[0]`, which is only `unlatch` when run from PATH; new `unlatch unmount --all`.
+
+**Verify:**
+```sh
+Scripts/set-version.sh --check
+Scripts/release.sh --allow-dirty          # "Gatekeeper says: ... rejected" is expected
+hdiutil attach -nobrowse -readonly build/release/0.0.0/Unlatch-0.0.0.dmg   # app, Notices, Read Me First
+<dmg>/Unlatch.app/Contents/Helpers/unlatch-fuse <img> <dir>                # mounts read-write
+```
+Formula: built and installed from a `file://` tarball in a throwaway local tap; `brew test`, `brew style` and `brew audit` pass for the formula and the cask. The cask was audited but not installed, because its uninstall step would remove the helper installed on this Mac.
+
+**Left:**
+- "Works on a clean Mac": needs a second Mac or a macOS VM (none here). On this Mac the DMG's app starts and its daemon mounts read-write; Gatekeeper rejects the ad-hoc app as expected, and docs/install.md covers Open Anyway.
+- Creating the tap repository and publishing anything: the owner's (docs/release.md).
+
+**Surprises:**
+- With the hardened runtime, an ad-hoc binary cannot load another team's library; Debug builds hid this because their helpers are re-signed without the runtime flag.
+- `[ … ] && …` as the last command of a loop body stops a `set -e` script.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
@@ -606,6 +633,4 @@ Tests/Fuse/rw-suite.sh --runs 1 && Scripts/chkdsk-vm.sh build/rw-suite/run.img r
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
-- **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
 - **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.
-- **Step 18:** `ENABLE_HARDENED_RUNTIME` is already on; Developer ID signing and notarization are not set up.
