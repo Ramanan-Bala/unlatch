@@ -40,11 +40,13 @@ cflags=(-std=c11 -g -O1 -fno-omit-frame-pointer -arch arm64 -mmacosx-version-min
         -isystem build/ntfs3g-fuzz/include)
 engine_src=(Engine/src/*.c)
 for t in "${targets[@]}"; do
+    echo "fuzz: building $t"
     "$cc" "${cflags[@]}" "${san[@]}" -fsanitize=fuzzer -o "$out/$t" "Tests/Fuzz/$t.c" "${engine_src[@]}" \
         build/ntfs3g-fuzz/lib/libntfs-3g.a
 done
 
 # Seeds: real images in the fuzz "sector list" format (Tests/Fuzz/README.md).
+echo "fuzz: building seeds"
 xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -o "$out/mkseed" Tests/Fuzz/mkseed.c
 xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -o "$out/set_dirty" Tests/Engine/set_dirty.c
 xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -DHAVE_CONFIG_H=1 -Ibuild/ntfs3g/config -isystem build/ntfs3g/include \

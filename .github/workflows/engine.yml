@@ -7,6 +7,11 @@ on:
   push:
   pull_request:
 
+# A newer push to the same branch cancels the run it supersedes.
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   engine:
     runs-on: xcode-27          # macOS 27 + Xcode 27 (GitHub preview image)
@@ -59,6 +64,7 @@ jobs:
           Scripts/fsx-soak.sh --seeds 100 --start "$(( RANDOM % 100000 + 1 ))"
 
       - name: Fuzz (60 s per target)
+        timeout-minutes: 10
         run: Scripts/fuzz.sh --time 60
 
       - name: Keep failures
