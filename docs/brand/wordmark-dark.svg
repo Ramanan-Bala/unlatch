@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="736" height="288" viewBox="466 100 184 72">
+  <title>Unlatch (for dark backgrounds)</title>
+  <path d="M484 132 V118 a14 14 0 0 1 28 0 V124" fill="none" stroke="#6B6F86" stroke-width="6" stroke-linecap="round"/>
+  <rect x="472" y="130" width="52" height="36" rx="7" fill="#2F6FEB"/>
+  <path d="M480 156 h20" stroke="#7FA6F5" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="514" cy="156" r="3" fill="#2BC46E"/>
+  <circle cx="498" cy="142" r="3.5" fill="#FFFFFF"/>
+  <rect x="496.5" y="143" width="3" height="7" rx="1" fill="#FFFFFF"/>
+  <text fill="#F3F4F6" font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="28" font-weight="600" x="536" y="158">Unlatch</text>
+</svg>

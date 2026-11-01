@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="43 39 174 174">
+  <title>Unlatch app icon</title>
+  <rect x="60" y="56" width="140" height="140" rx="32" fill="#2F6FEB"/>
+  <rect x="80" y="92" width="100" height="52" rx="10" fill="#FFFFFF"/>
+  <path d="M112 118 h26" stroke="#C7D6F7" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="96" cy="118" r="5" fill="#2BC46E"/>
+  <path d="M146 146 V130 a12 12 0 0 1 24 0 V134" fill="none" stroke="#2F6FEB" stroke-width="12" stroke-linecap="round"/>
+  <path d="M146 146 V130 a12 12 0 0 1 24 0 V134" fill="none" stroke="#FFD34E" stroke-width="6" stroke-linecap="round"/>
+  <rect x="134" y="142" width="48" height="38" rx="8" fill="#FFD34E" stroke="#2F6FEB" stroke-width="4"/>
+  <circle cx="158" cy="158" r="4.5" fill="#1B3F8F"/>
+  <rect x="156" y="160" width="4" height="9" rx="1" fill="#1B3F8F"/>
+</svg>

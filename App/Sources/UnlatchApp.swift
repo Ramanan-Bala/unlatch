@@ -4,7 +4,7 @@ import SwiftUI
 @main
 struct UnlatchApp: App {
     var body: some Scene {
-        MenuBarExtra("Unlatch", systemImage: "externaldrive") {
+        MenuBarExtra("Unlatch", image: "MenuBarIcon") {
             Text("Unlatch (placeholder)")
             Divider()
             Button("Quit Unlatch") { NSApplication.shared.terminate(nil) }
