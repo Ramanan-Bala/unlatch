@@ -20,7 +20,7 @@ Each step updates this list.
 | Check tools, build libntfs-3g if missing, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
 | Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
-| Mount an image read-only through macFUSE (mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] <img-or-/dev/diskN> /Volumes/<name>`; `umount /Volumes/<name>` |
+| Mount an image read-only through macFUSE (kext backend; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
 | Compare a mounted volume with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
@@ -47,7 +47,7 @@ ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster nt
 
 `Unlatch.xcodeproj` is generated from `project.yml` and is not committed. After changing `project.yml`, run `Scripts/bootstrap.sh` again.
 
-Mounting goes through macFUSE's FSKit backend (D-39): install macFUSE (`brew install --cask macfuse`) and enable it under File System Extensions. `unlatch-fuse` builds against `/usr/local` (`MACFUSE_PREFIX`). Builds are ad-hoc signed (`Config/Base.xcconfig`); the dormant FSKit module in `Extension/` needs a paid team (D-37, D-38). `docs/dev-setup.md` covers macFUSE, mounting and logs.
+Mounting goes through macFUSE (D-39), by default its kext backend (D-43): install macFUSE (`brew install --cask macfuse`) and allow its kernel extension. `unlatch-fuse` builds against `/usr/local` (`MACFUSE_PREFIX`). Builds are ad-hoc signed (`Config/Base.xcconfig`); the dormant FSKit module in `Extension/` needs a paid team (D-37, D-38). `docs/dev-setup.md` covers macFUSE, mounting and logs.
 
 ## Layout
 

@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 2 Mounting (macFUSE, D-39) |
-| Last completed step | 07 (except Windows-made images). 08 on macFUSE: read-only daemon works for small reads; **blocked: macFUSE FSKit backend fails large reads (D-42)** |
-| Next step | 08 Done when, once reads work |
+| Last completed step | 08 mount daemon, read-only, on macFUSE (2026-11-01). 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Next step | 09 Read path: attributes, Finder, read speed |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -276,7 +276,7 @@ Scripts/bootstrap.sh && xcodebuild -quiet -scheme Unlatch -derivedDataPath build
 - `FSDirectoryVerifier` is a plain `UInt64` in Swift, not a wrapper type.
 - With no attributes requested, FSKit still expects `.` and `..` to be packed.
 
-### Step 08 (second version): FUSE daemon on macFUSE's FSKit backend — 2026-11-01; BLOCKED on macFUSE
+### Step 08 (second version): mount daemon on macFUSE — done 2026-11-01 (kext backend; FSKit backend blocked upstream)
 
 A free Personal Team cannot sign an FSKit module (D-38), and the owner chose not to buy a membership, so the plan moved to macFUSE's FSKit backend (D-39). Plan Steps 08–11 are rewritten; Steps 12–20 are re-scoped when each starts.
 
@@ -288,28 +288,39 @@ A free Personal Team cannot sign an FSKit module (D-38), and the owner chose not
 - `docs/dev-setup.md` rewritten for macFUSE.
 - `Tests/Fuse/macfuse-repro/`: a 60-line libfuse3 file system that reproduces the macFUSE bug below without Unlatch.
 
-**Verify:**
+- Default backend is macFUSE's kext (D-43); `--backend fskit` stays for when D-42 is fixed. Relative mount points are made absolute.
+
+**Verify** (kext backend; macFUSE 5.5.0 library, 5.4.0 kext loaded):
 ```sh
 xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build
-zstd -d Tests/Images/content-ntfs3g.img.zst -o build/c.img
-build/DerivedData/Build/Products/Debug/unlatch-fuse build/c.img /Volumes/UnlatchTest
-Tests/Fuse/check-readonly.sh build/c.img /Volumes/UnlatchTest   # 10 dirs, 308 files: all listings, df and write refusal pass; see below
-umount /Volumes/UnlatchTest
+F=build/DerivedData/Build/Products/Debug/unlatch-fuse
+zstd -d Tests/Images/content-ntfs3g.img.zst -o build/c.img; mkdir -p build/m
+$F build/c.img build/m && Tests/Fuse/check-readonly.sh build/c.img build/m && umount build/m
+#   "10 directories, 308 files compared, 0 failures" (listings, sizes, hashes incl. 256 MiB sparse, df, EROFS)
+disk=$(Scripts/attach-image.sh build/c.img); $F /dev/$disk build/m && Tests/Fuse/check-readonly.sh build/c.img build/m; umount build/m; hdiutil detach $disk
+#   same result through the block device, no sudo
+zstd -d Tests/Images/logfile-faststartup-synthetic.img.zst -o build/fs.img; $F build/fs.img build/m
+cat ~/Library/Application\ Support/Unlatch/status/54DDA118567EC0ED.json   # "state" : "hibernated", "readOnly" : true, "mounted" : true
+umount build/m                                                            # record then says "mounted" : false
+swift test --package-path Shared                                          # decodes the daemon's JSON
 ```
+`stat` times match the harness (`unlatch-engine stat`), and `mount` shows `read-only`.
 
-**Results on the content image:** mounts without sudo or a kernel extension; every listing, size, time and `df` number matches the harness; writes fail with `EROFS`; 307 of 308 file hashes match. The failure is `sparse.bin` (256 MiB), and it is macFUSE's.
-
-**Blocked (D-42):** macFUSE's FSKit backend (5.4.0 and 5.5.0, macOS 27) fails uncached reads of 256 KiB or more with `EIO`, although the daemon's reply is complete; 5.4.0 also silently returned junk for ranges it never asked the daemon for. `Tests/Fuse/macfuse-repro/` reproduces it with no Unlatch code. Rapid mount/unmount cycles also leave the extension "not found" or "not enabled". Not done: the attached-device mount and the Fast Startup check.
+**FSKit backend (D-42):** the same checks pass except reads. macFUSE's FSKit backend (5.4.0 and 5.5.0, macOS 27) fails uncached reads of 256 KiB or more with `EIO` although the daemon's reply is complete, and 5.4.0 silently returned junk for ranges it never asked the daemon for. `Tests/Fuse/macfuse-repro/` reproduces it with no Unlatch code. Rapid mount/unmount cycles also switch the extension off. Reporting it upstream needs the owner's OK (it's a public post).
 
 **Surprises:**
 - The FSKit backend mounts only under `/Volumes`, ignores `ro`, and ignores `max_read`/`max_readahead`.
+- `mount_macfuse` resolves a relative mount point against `/`.
+- The golden images share one serial (54DDA118567EC0ED), so their status records overwrite each other.
 - macFUSE's FSKit extension was not registered with pluginkit until the first mount attempt registered it.
 
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Owner (blocks Step 07 "Done when"):** Windows-made golden images, once the Windows VM exists (`Tests/Images/README.md`).
-- **Owner (blocks Step 08 "Done when"):** choose a transport while macFUSE's FSKit reads are broken (D-42): report the bug upstream and wait, macFUSE's kext backend (`--backend kext`, needs Reduced Security), or another transport.
+- **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
+- **Step 09:** the kext mount shows `synchronous`; check whether that comes from macFUSE defaults and what it costs.
+- **Step 12:** `unlatch-fuse` daemonizes after mounting with CoreFoundation not yet touched; if Step 12 launches it from the app, prefer `-f` under launchd instead of forking.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
 - **Owner (blocks Step 06 "Done when"):** run the Windows chkdsk oracle once a Windows VM exists (see Step 06 "Left").
 - **Step 06 oracle:** names created by libntfs-3g are in the POSIX namespace. Confirm Windows `chkdsk` accepts fsx-made images with such names, plus ghost and rename-temp leftovers.

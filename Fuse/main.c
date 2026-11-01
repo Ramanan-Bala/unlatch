@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // unlatch-fuse: mounts an NTFS image or device through macFUSE (plan Step 08, D-40).
 //
-//   unlatch-fuse [-f] [-d] [--backend fskit|kext] [-o opt,...] <image-or-device> <mountpoint>
+//   unlatch-fuse [-f] [-d] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>
+//
+// The default backend is macFUSE's kernel extension: its FSKit backend fails large reads on
+// macOS 27 (D-42, D-43).
 //
 // The safety decision is made here, before mounting: CORRUPT and NOT_NTFS are refused,
 // anything else mounts read-only (read-write comes in Step 10). The verdict goes to the
@@ -9,6 +12,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <libgen.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,10 +25,11 @@
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: unlatch-fuse [-f] [-d] [--backend fskit|kext] [-o opt,...] <image-or-device> <mountpoint>\n"
+            "usage: unlatch-fuse [-f] [-d] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>\n"
             "  -f            stay in the foreground\n"
             "  -d            FUSE debug output (implies -f)\n"
-            "  --backend B   macFUSE backend: fskit (default, no kernel extension) or kext\n"
+            "  --backend B   macFUSE backend: kext (default) or fskit (no kernel extension;\n"
+            "                mounts only under /Volumes; large reads fail on macOS 27, D-42)\n"
             "  -o opt,...    extra macFUSE mount options\n");
 }
 
@@ -48,7 +53,7 @@ int main(int argc, char **argv)
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
-    const char *backend = "fskit", *extra = NULL;
+    const char *backend = "kext", *extra = NULL;
     bool foreground = false, debug = false;
     int ch;
 
@@ -65,7 +70,13 @@ int main(int argc, char **argv)
         usage();
         return 2;
     }
-    const char *source = argv[optind], *mountpoint = argv[optind + 1];
+    const char *source = argv[optind];
+    // mount_macfuse resolves a relative mount point against /, so make it absolute.
+    char mountpoint[PATH_MAX];
+    if (!realpath(argv[optind + 1], mountpoint)) {
+        fprintf(stderr, "unlatch-fuse: %s: %s\n", argv[optind + 1], strerror(errno));
+        return 1;
+    }
     char source_copy[1024];
     snprintf(source_copy, sizeof(source_copy), "%s", source);
     const char *bsd_name = basename(source_copy);

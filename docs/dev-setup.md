@@ -2,13 +2,18 @@
 
 Never use a drive that holds real data. Use image files (`Scripts/make-image.sh`, `Tests/Images/`) and disposable disks.
 
-Unlatch mounts through **macFUSE's FSKit backend** (D-39): macFUSE's own signed FSKit extension forwards file system calls to the `unlatch-fuse` daemon, which runs the engine. Nothing of ours needs signing, and no kernel extension is loaded.
+Unlatch mounts through **macFUSE** (D-39): macFUSE forwards file system calls to the `unlatch-fuse` daemon, which runs the engine. Nothing of ours needs signing. macFUSE has two backends:
+
+- **kext** (the default, D-43): macFUSE's kernel extension. Mature, mounts anywhere, honours read-only. It must be allowed once: on Apple Silicon, Reduced Security in Recovery, then approval in System Settings → Privacy & Security, then a restart.
+- **fskit** (`--backend fskit`): no kernel extension, mounts only under `/Volumes`. On macOS 27 its uncached reads of 256 KiB or more fail (D-42, `Tests/Fuse/macfuse-repro/`), so don't use it for real data yet.
 
 ## 1. Install and enable macFUSE (once per machine)
 
-1. Install macFUSE 5.4 or later: `brew install --cask macfuse`, or the installer from macfuse.github.io. Skip the kernel-extension approval it offers; the FSKit backend doesn't need it.
-2. Enable its file system extension: System Settings → General → Login Items & Extensions → File System Extensions → turn on **macFUSE**. Enabling it is a security setting, so a person always does it.
-3. Check: `pluginkit -m -v -p com.apple.fskit.fsmodule` lists `io.macfuse.app.fsmodule.macfuse`.
+1. Install macFUSE 5.5 or later: `brew install --cask macfuse`, or the installer from macfuse.github.io.
+2. For the kext backend, allow the kernel extension as the installer describes. Check with `kmutil showloaded | grep macfuse` after the first mount.
+3. For the FSKit backend, enable its file system extension: System Settings → General → Login Items & Extensions → File System Extensions → **macFUSE**. If the switch is greyed out, view the list "By Category". Quick mount/unmount cycles can switch it off again (D-42).
+
+Allowing the kext and enabling extensions are security settings, so a person always does them.
 
 `unlatch-fuse` builds against `/usr/local/include/fuse3` and `/usr/local/lib/libfuse3.dylib`. For another prefix, set `MACFUSE_PREFIX` in `Config/Local.xcconfig`.
 
@@ -25,7 +30,7 @@ fuse=build/DerivedData/Build/Products/Debug/unlatch-fuse
 ```sh
 zstd -d Tests/Images/content-ntfs3g.img.zst -o build/c.img
 mkdir -p build/m
-$fuse build/c.img build/m            # an image file directly
+$fuse build/c.img build/m            # an image file directly (kext backend)
 ls -la build/m; df -h build/m
 umount build/m
 ```
@@ -39,7 +44,7 @@ umount build/m
 hdiutil detach "$disk"
 ```
 
-Options: `-f` stays in the foreground, `-d` prints FUSE debug output, `--backend kext` uses macFUSE's kernel extension instead (it needs approval in Recovery), and `-o opt,...` passes extra macFUSE options. Step 08 always mounts read-only; dirty, hibernated and unclean-log volumes will stay read-only once writing arrives in Step 10.
+Options: `-f` stays in the foreground, `-d` prints FUSE debug output, `--backend fskit` uses the FSKit backend (mount point under `/Volumes`), and `-o opt,...` passes extra macFUSE options. A block device needs no sudo when the user owns it, as with `hdiutil`-attached images. Step 08 always mounts read-only; dirty, hibernated and unclean-log volumes will stay read-only once writing arrives in Step 10.
 
 **Apple's NTFS driver:** Apple's read-only NTFS driver may also claim a disk. `attach-image.sh` attaches with `-nomount`, so nothing mounts it first. Step 12 settles the auto-mount race.
 
@@ -56,6 +61,7 @@ The daemon writes `status/<serial>.json` (`VolumeStatus` in UnlatchCore, D-41) a
 
 | Check | Command |
 |---|---|
+| Everything below at once | `Tests/Fuse/check-readonly.sh build/c.img build/m` |
 | Listing | `ls -la build/m` matches `unlatch-engine ls <img> /` |
 | Times | `stat build/m/ReadMe.TXT` matches `unlatch-engine stat <img> /ReadMe.TXT` |
 | Space | `df build/m` matches `unlatch-engine info <img>` |
