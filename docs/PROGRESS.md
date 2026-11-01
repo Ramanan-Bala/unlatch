@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Current phase | 2 Mounting (macFUSE, D-39) |
-| Last completed step | 08 mount daemon, read-only, on macFUSE (2026-11-01). 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
-| Next step | 09 Read path: attributes, Finder, read speed |
+| Last completed step | 09 read path: logging, attributes, Finder, read speed (2026-11-01). 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Next step | 10 Write path through FUSE |
 | libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), macFUSE 5.5.0, Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
@@ -314,19 +314,55 @@ swift test --package-path Shared                                          # deco
 - The golden images share one serial (54DDA118567EC0ED), so their status records overwrite each other.
 - macFUSE's FSKit extension was not registered with pluginkit until the first mount attempt registered it.
 
+### Step 09: Read path: attributes, Finder, read speed — done 2026-11-01
+
+**Done:**
+- Logging (D-44): `ue_set_log` in the seam; libntfs-3g messages → OSLog `engine`, daemon messages → OSLog `mount` (and stderr in the foreground or before detaching).
+- Backgrounding without fork (D-45): `posix_spawn` of `-f --ready-fd`; the parent waits until the mount is really there, so `ls` right after `unlatch-fuse` returns sees the files. Mount, unmount and failures are all logged.
+- Reads: one reused buffer; `st_blksize` 1 MiB so the kext sends 1 MiB reads (was 16 KiB); disks opened through `/dev/rdiskN`.
+- Attributes: mode without `w` (read-only mount), uid/gid of the mounting user, size, allocated size (`st_blocks`), nlink, all four times, `UF_HIDDEN` except on the root, file IDs (root → 2), generation = sequence number.
+- Directory offsets: the engine's cookies are index positions (`pos + 1`). Stable while the volume is read-only; under writes, removing an earlier entry shifts later positions (see carry-over for Step 10).
+
+**Verify:**
+```sh
+F=build/DerivedData/Build/Products/Debug/unlatch-fuse
+$F build/c.img build/m && Tests/Fuse/check-readonly.sh build/c.img build/m; umount build/m    # 308 files, 0 failures
+log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'          # mounted / unmounted lines
+# Finder fixture: hidden.txt hidden, the rest visible, root not hidden (Finder confirmed by the owner)
+img=$(Scripts/make-image.sh build/finder 64m FINDER | tail -1)
+printf 'mkdir /Folder\nfile /visible.txt 2000 1\nfile /hidden.txt 100 2\nflags /hidden.txt hidden\n' | build/test-engine/mkfixture $img
+$F $img build/m && ls -laO build/m && qlmanage -t -s 128 -o /tmp build/m/visible.txt; umount build/m
+```
+
+**Read speed** (512 MiB random file, 1 GiB image, cold mount each time, image in the host cache, median of 5):
+
+| Path | Throughput |
+|---|---|
+| Raw `/dev/rdiskN`, `dd bs=1m` / `bs=4m` | 2.76 / 3.25 GB/s |
+| Mount from the image file, `dd bs=4m` | 3.92 GB/s |
+| Mount from `/dev/diskN` (opened as rdisk), `dd bs=4m` | 1.59 GB/s (58% of raw at 1 MiB) |
+| Same, before D-45 (16 KiB reads, buffered disk node) | 0.37–0.95 GB/s |
+| Cached re-read through the mount | 1.97 GB/s |
+
+`purge` needs root, so "cold" means a fresh FUSE mount; the image file itself stays in the host's cache.
+
+**Surprises:**
+- macFUSE's kext sizes reads from `st_blksize`, not `iosize` or `f_iosize`.
+- The NTFS root is hidden+system.
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Owner (blocks Step 07 "Done when"):** Windows-made golden images, once the Windows VM exists (`Tests/Images/README.md`).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
-- **Step 09:** the kext mount shows `synchronous`; check whether that comes from macFUSE defaults and what it costs.
-- **Step 12:** `unlatch-fuse` daemonizes after mounting with CoreFoundation not yet touched; if Step 12 launches it from the app, prefer `-f` under launchd instead of forking.
+- **Step 10/11:** the kext mount shows `synchronous`; check whether that comes from macFUSE defaults and what it costs for writes.
+- **Step 10:** readdir cookies are index positions; deleting an entry while a listing is in progress shifts later entries by one, so one existing entry can be skipped. Test `rm -rf` of a large directory, and switch the cookie to something stable (for example the last name returned) if it fails.
+- **Step 12:** when the app launches `unlatch-fuse`, it can use `-f` under launchd or the default `posix_spawn` backgrounding (D-45).
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
 - **Owner (blocks Step 06 "Done when"):** run the Windows chkdsk oracle once a Windows VM exists (see Step 06 "Left").
 - **Step 06 oracle:** names created by libntfs-3g are in the POSIX namespace. Confirm Windows `chkdsk` accepts fsx-made images with such names, plus ghost and rename-temp leftovers.
 - **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
 - **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
-- **Step 09:** route libntfs-3g logging (`ntfs_log_set_handler`) to OSLog category `engine` (D-16).
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
 - **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.
 - **Step 18:** `ENABLE_HARDENED_RUNTIME` is already on; Developer ID signing and notarization are not set up.

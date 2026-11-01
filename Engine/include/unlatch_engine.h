@@ -87,6 +87,13 @@ void ue_release(ue_engine_t *e, ue_ino_t ino); // FSKit reclaimed the item (defe
 // directory changes.
 // ue_read returns zeros past init_size and stops at EOF (*done < len, return 0).
 
+// Log sink for libntfs-3g's own messages (errors, warnings, info; debug is compiled out of
+// the release build). Global, like libntfs-3g's logging: set it before ue_probe/ue_open.
+// NULL (the default) keeps the engine silent. msg has no trailing newline.
+enum { UE_LOG_ERROR, UE_LOG_WARNING, UE_LOG_INFO, UE_LOG_DEBUG };
+typedef void (*ue_log_fn)(void *ctx, int level, const char *msg);
+void ue_set_log(ue_log_fn fn, void *ctx);
+
 // Debug counters (tests, benchmarks).
 typedef struct {
     uint64_t inode_opens;             // ntfs_inode_open calls made by the engine

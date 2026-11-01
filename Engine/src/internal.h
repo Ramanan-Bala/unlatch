@@ -9,6 +9,7 @@
 #include <ntfs-3g/types.h>
 #include <ntfs-3g/device.h>
 #include <ntfs-3g/volume.h>
+#include <ntfs-3g/logging.h>
 
 #include "unlatch_engine.h"
 

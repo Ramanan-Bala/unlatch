@@ -22,6 +22,8 @@ typedef struct {
     uid_t uid;
     gid_t gid;
     uf_node_t *nodes;                 // open addressing, power-of-two capacity
+    char *rbuf;                       // read buffer, reused (the loop is single-threaded)
+    size_t rbuf_cap;
     size_t cap, count;
 } uf_fs_t;
 

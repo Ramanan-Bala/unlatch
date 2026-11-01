@@ -21,6 +21,7 @@ Each step updates this list.
 | Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
 | Mount an image read-only through macFUSE (kext backend; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
+| Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
 | Compare a mounted volume with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |

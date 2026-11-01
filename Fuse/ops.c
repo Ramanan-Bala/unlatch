@@ -170,8 +170,9 @@ static void fill_attr(const uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_
     st->btimespec = a->birth;
     st->size = (off_t)a->size;
     st->blocks = (blkcnt_t)((a->alloc_size + 511) / 512);
-    st->blksize = 4096;
-    if (a->flags & UE_F_HIDDEN)
+    st->blksize = 1 << 20;            // macFUSE's kext sizes its reads from this: 4 KiB -> 16 KiB reads
+    // Windows marks the root hidden+system; passed through, Finder would hide the volume.
+    if ((a->flags & UE_F_HIDDEN) && a->ino != fs->root)
         st->flags |= UF_HIDDEN;
 }
 
@@ -343,15 +344,19 @@ static void uf_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, stru
         fuse_reply_err(req, EINVAL);
         return;
     }
-    if (!(buf = malloc(size ? size : 1))) {
-        fuse_reply_err(req, ENOMEM);
-        return;
+    if (size > fs->rbuf_cap) {
+        if (!(buf = realloc(fs->rbuf, size))) {
+            fuse_reply_err(req, ENOMEM);
+            return;
+        }
+        fs->rbuf = buf;
+        fs->rbuf_cap = size;
     }
+    buf = fs->rbuf;
     if ((err = ue_read(fs->engine, to_engine(fs, ino), (uint64_t)off, buf, size, &done)))
         fuse_reply_err(req, err);
     else
         fuse_reply_buf(req, buf, done);
-    free(buf);
 }
 
 static void uf_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
