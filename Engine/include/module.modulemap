@@ -1,0 +1,5 @@
+// Lets Swift `import UnlatchEngineC` (SWIFT_INCLUDE_PATHS = Engine/include).
+module UnlatchEngineC {
+    header "unlatch_engine.h"
+    export *
+}

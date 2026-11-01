@@ -1,0 +1,7 @@
+// Copy to Config/Local.xcconfig (git-ignored) and set your team ID (Xcode > Settings > Accounts,
+// or developer.apple.com > Membership). Then run Scripts/bootstrap.sh and build.
+DEVELOPMENT_TEAM = ABCDE12345
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+UNLATCH_APP_ENTITLEMENTS = App/Resources/Unlatch.entitlements
+UNLATCH_EXT_ENTITLEMENTS = Extension/Resources/UnlatchFSModule.entitlements

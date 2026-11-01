@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Signing defaults for every target. Without Config/Local.xcconfig, builds are ad-hoc signed
+// and carry no entitlements, so they build anywhere but the FSKit extension cannot load (D-06).
+// To sign for real, copy Config/Local.xcconfig.example to Config/Local.xcconfig (git-ignored).
+CODE_SIGN_IDENTITY = -
+CODE_SIGN_STYLE = Manual
+DEVELOPMENT_TEAM =
+UNLATCH_APP_ENTITLEMENTS =
+UNLATCH_EXT_ENTITLEMENTS =
+
+#include? "Local.xcconfig"

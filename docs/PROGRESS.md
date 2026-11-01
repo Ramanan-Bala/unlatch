@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Current phase | 1 Engine on host |
-| Last completed step | 06 fsx model test (2026-11-01); Windows chkdsk oracle **blocked: needs a Windows VM** |
-| Next step | 07 Fuzzing, golden images, CI |
-| libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patch 0001 |
+| Current phase | 2 FSKit module |
+| Last completed step | 08 FSKit module, read-only: code builds (2026-11-01); **mount untested: needs signing**. 07 done except Windows-made images; 06 oracle blocked on a Windows VM |
+| Next step | 08 mount checks once signed, then 09 |
+| libntfs-3g | 2026.9.28 (`Engine/vendor/VERSION`) + patches 0001, 0002 |
 | Tested on | macOS 27 (arm64), Xcode 27.2 (27B52), Swift 6.4.2, XcodeGen 2.46.0, Git LFS 3.8.1 |
 
 ### Risk register
@@ -227,20 +227,67 @@ Scripts/chkdsk-vm.sh --fsx 42                 # builds build/oracle/fsx-seed42-2
 - fsx found the ghost-placement bug within five seeds; after the fix, 2 million random ops ran clean.
 - Speed: about 2 seeds per second on 8 cores (debug build).
 
+### Step 07: Fuzzing, golden images, CI — done 2026-11-01, except Windows-made images
+
+**Done:**
+- Fuzzing (D-32, D-33): `Tests/Fuzz/fuzz_probe.c` and `fuzz_open_ls.c`, libFuzzer with ASan and UBSan, against `Scripts/build-ntfs3g.sh --fuzz`. The input format is a sector list over a seed image (`Tests/Fuzz/README.md`, `mkseed.c`). `Scripts/fuzz.sh --time N` and `--regress`.
+- **Upstream bug found by fuzzing:** an unchecked boot-sector sector count overflowed (UB). Fixed in `Engine/vendor/patches/0002-bootsect-reject-overflowing-sector-count.patch`; the input is kept in `Tests/Fuzz/crashes/`.
+- Golden images (D-34): 7 images under Git LFS (`Tests/Images/*.img.zst`), each with a hand-written `.expect` (60 checks). They include synthetic `$LogFile` restart pages for clean, unclean and Fast Startup, which give the UNCLEAN_LOG and HIBERNATED probe paths their first fixtures. `Scripts/test-golden.sh`; `Tests/Images/make-golden.sh` regenerates.
+- CI (D-35): `.github/workflows/engine.yml` on the `xcode-27` runner, with ntfs-3g cached.
+
+**Verify:**
+```sh
+Scripts/fuzz.sh --time 120      # ~900k inputs per target, PASSED
+Scripts/fuzz.sh --regress
+Scripts/test-golden.sh          # 60 of 60
+gh run list --workflow engine
+```
+
+**Left:** Windows-made golden images (NTFS formatted by Windows, a real Fast Startup hibernation, compressed and EFS files). They need the Windows VM (Step 06 "Left"); `Tests/Images/README.md` lists them.
+
+**Surprises:**
+- The first CI run hung for an hour in the fuzz build's `configure`: an ASan-built test program never exited on the runner. Sanitizer flags now go only to `make`, and the build step has a 15-minute timeout.
+- The CI-fix commit also carried a staged deletion of the Step 08 placeholder, so CI built with no extension sources until Step 08 was committed.
+
+### Step 08: FSKit module, read-only — code done 2026-11-01; mount UNTESTED (needs signing)
+
+**Done:**
+- `Extension/Sources/` (D-36):
+  - `UnlatchFSExtension.swift`: the `@main` entry.
+  - `UnlatchFileSystem.swift`: probe (clean → usable, dirty, hibernated or unclean log → usable-but-limited, corrupt → recognized), load (read-only unless CLEAN, writable and not `rdonly`), unload, `startCheck` (the safety probe), `startFormat` → ENOTSUP.
+  - `NTFSVolume.swift`: the item table, attributes, lookup, enumerate with `.` and `..`, read; every write op → EROFS.
+  - `BlockIO.swift`: `ue_io_t` over `FSBlockDeviceResource`, aligned bounce through one scratch block.
+  - `Support.swift`: `posixError`, `engineName` (NFC), `EngineQueue`, probe helpers.
+- `Shared/Sources/UnlatchCore/VolumeStatus.swift`: the App Group record `status/<serial>.json`, written at check and load.
+- `project.yml`: the full `EXAppExtensionAttributes` (short name `unlatch`, media types `Windows_NTFS`, the GPT basic-data GUID, `Partitionless`), the engine linked through `module UnlatchEngineC`.
+- Signing (D-37): `Config/Base.xcconfig` (ad-hoc, for CI) plus a git-ignored `Config/Local.xcconfig`.
+- `docs/dev-setup.md`: signing, enabling, mounting, logs, and the Step 08 check table.
+
+**Verify (now):**
+```sh
+Scripts/bootstrap.sh && xcodebuild -quiet -scheme Unlatch -derivedDataPath build/DerivedData build   # no warnings under Swift 6 strict concurrency
+```
+
+**Left:** every "Done when" item that needs a mount, listed in `docs/dev-setup.md` §5: listing, times, `df`, content hashes, and the Fast Startup image mounting read-only. Blocked on the owner:
+1. Sign in to Xcode with an Apple ID, and put the team ID in `Config/Local.xcconfig` (it still has the placeholder `ABCDE12345`).
+2. Enable the extension in System Settings after the first signed install.
+3. Whether a free Personal Team can carry `com.apple.developer.fskit.fsmodule` is unknown; record the answer in DECISIONS.
+
+**Surprises:**
+- `FSDirectoryVerifier` is a plain `UInt64` in Swift, not a wrapper type.
+- With no attributes requested, FSKit still expects `.` and `..` to be packed.
+
 ## Carry-overs
 
-- **Step 08:** set a development team and reference `Extension/Resources/UnlatchFSModule.entitlements` and `App/Resources/Unlatch.entitlements` from `project.yml` (D-06). The extension cannot load without `com.apple.developer.fskit.fsmodule`. Keep an ad-hoc build path for CI (Step 07), for example an xcconfig override.
-- **Step 08:** `Extension/Sources/UnlatchFSModule.swift` is a placeholder with no `@main`; the appex builds but is not a working extension.
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
-- **Step 07:** add fixtures for UNCLEAN_LOG and Fast Startup (`$LogFile` restart page 2.0), from Windows-made images. The probe code paths exist but are untested.
-- **Step 07 (CI):** run `Scripts/test-engine.sh`. It needs `leaks`, which comes with Xcode command-line tools.
-- **Upstream:** send patch 0001 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
+- **Owner (blocks Step 07 "Done when"):** Windows-made golden images, once the Windows VM exists (`Tests/Images/README.md`).
+- **Owner (blocks Step 08 "Done when"):** signing and enabling the extension (Step 08 "Left").
+- **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
 - **Owner (blocks Step 06 "Done when"):** run the Windows chkdsk oracle once a Windows VM exists (see Step 06 "Left").
 - **Step 06 oracle:** names created by libntfs-3g are in the POSIX namespace. Confirm Windows `chkdsk` accepts fsx-made images with such names, plus ghost and rename-temp leftovers.
 - **Step 11/15:** `ue_write` updates times and syncs the MFT record on every call, one MFT write per `ue_write`. Measure it at the M0 gate; lowntfs-3g's `dmtime` throttle is the model if needed.
 - **Step 17:** a crash can leave `.unlatch-ghost-*` names (always in the root, D-30) or `.unlatch-rename-*` names, or both names of a rename in progress (D-25, D-26). Sweep root ghosts on read-write open; document the rename case.
-- **Step 08:** route libntfs-3g logging (`ntfs_log_set_handler`) to OSLog category `engine` (D-16).
-- **Step 07 (CI):** cache `build/ntfs3g`, keyed on `Engine/vendor/VERSION` plus `Engine/vendor/patches/*` plus `Scripts/build-ntfs3g.sh`.
+- **Step 09:** route libntfs-3g logging (`ntfs_log_set_handler`) to OSLog category `engine` (D-16).
 - **Step 18:** the notice bundle must include `Engine/vendor/ntfs-3g/COPYING`, `COPYING.LIB`, `AUTHORS` and `CREDITS`.
 - **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.
 - **Step 18:** `ENABLE_HARDENED_RUNTIME` is already on; Developer ID signing and notarization are not set up.

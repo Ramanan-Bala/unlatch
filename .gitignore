@@ -20,3 +20,4 @@ build/
 
 # Benchmark raw output
 Bench/results/raw/
+Config/Local.xcconfig

@@ -45,7 +45,7 @@ ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster nt
 
 `Unlatch.xcodeproj` is generated from `project.yml` and is not committed. After changing `project.yml`, run `Scripts/bootstrap.sh` again.
 
-Builds are ad-hoc signed (`CODE_SIGN_IDENTITY = -`). The entitlements files in `App/Resources/` and `Extension/Resources/` exist but are not applied yet, because restricted entitlements need a provisioning profile (D-06).
+Builds are ad-hoc signed by default (`Config/Base.xcconfig`). To build an extension that macOS will load, create `Config/Local.xcconfig` from the `.example` with your team ID: it turns on Automatic signing and the entitlements (D-37). `docs/dev-setup.md` covers signing, enabling the extension, mounting and logs.
 
 ## Layout
 
@@ -54,7 +54,8 @@ Engine/      C engine: include/unlatch_engine.h (public seam), src/*.c,
              vendor/ntfs-3g (pinned in vendor/VERSION), vendor/patches/
 EngineTool/  unlatch-engine host harness (works on image files); file_io.c is the file-backed
              ue_io_t, walk.c the host-side path walk
-Extension/   Swift FSKit module
+Extension/   Swift FSKit module (UnlatchFileSystem, NTFSVolume, BlockIO); imports the engine as
+             module UnlatchEngineC (Engine/include/module.modulemap)
 Shared/      Swift package UnlatchCore
 CLI/         Swift package, the `unlatch` executable
 App/         SwiftUI menu-bar app (LSUIElement), embeds the extension
@@ -65,6 +66,7 @@ Scripts/     build and release scripts
 
 ## Code conventions
 
+- **FSKit:** check signatures in the SDK headers (`FSKit.framework/Headers`) or Apple's docs before writing FSKit code. Every engine call goes through the volume's `EngineQueue`, and replies are sent from there. Names from FSKit go through `engineName()` (NFC), and errno goes through `posixError()`.
 - **Swift:** Swift 6 language mode with strict concurrency (`SWIFT_STRICT_CONCURRENCY = complete` in Xcode; `swift-tools-version: 6.0` in packages).
 - **C:** C11, compiled with `-Wall -Wextra -Werror` in `Engine/` and `EngineTool/`.
 - **Engine boundary:** no ntfs-3g headers outside `Engine/src`. Everything else includes only `Engine/include/unlatch_engine.h` (prefix `ue_`). Only the `UnlatchEngine` target has `build/ntfs3g/include` on its header search path.
