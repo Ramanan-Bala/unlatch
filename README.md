@@ -13,16 +13,61 @@ Unlatch lets your Mac write to NTFS disks: Windows-formatted USB drives, externa
 
 ## Requirements
 
-- macOS 27 or later on Apple Silicon.
-- [macFUSE](https://macfuse.github.io) 5.4 or later, with its system extension allowed (on Apple Silicon this needs Reduced Security, set once in Recovery). Unlatch does not include macFUSE; install it first.
+| What | Why | Who installs it |
+|---|---|---|
+| A Mac with Apple Silicon (M1 or later) | Unlatch is built for arm64 only | – |
+| macOS 27 or later | the macFUSE and system APIs Unlatch uses | – |
+| [macFUSE](https://macfuse.github.io) 5.4 or later | Unlatch mounts disks through it. Its license does not allow bundling it, so it is installed separately | **Unlatch does it for you** (setup window, `unlatch setup`, or the Homebrew cask), from macFUSE's own releases |
+| An administrator password | installing macFUSE and the disk helper | you, when macOS asks |
+
+Everything else ships inside Unlatch: libntfs-3g (the NTFS engine) and swift-argument-parser are built into its programs, and the rest is part of macOS. Nothing else needs to be installed.
 
 ## Install
+
+Pick one.
+
+**Homebrew** (recommended; installs macFUSE too):
 
 ```sh
 brew install --cask ramanan-bala/unlatch/unlatch
 ```
 
-or download the DMG from [Releases](https://github.com/Ramanan-Bala/unlatch/releases). Unlatch is **not signed with an Apple Developer ID**, so the first time macOS asks: right-click Unlatch in Applications and choose **Open**. [docs/install.md](docs/install.md) walks through all of it, including the helper that real disks need.
+**DMG:** download `Unlatch-<version>.dmg` from [Releases](https://github.com/Ramanan-Bala/unlatch/releases), optionally check it (`shasum -a 256 -c SHA256SUMS`), open it and drag **Unlatch** to **Applications**. Unlatch installs macFUSE for you during setup.
+
+**Command-line tools only** (no app; built from source, needs Xcode 27):
+
+```sh
+brew install --cask macfuse
+brew install ramanan-bala/unlatch/unlatch
+unlatch setup
+```
+
+## One-time setup
+
+The first time, Unlatch's setup window opens and checks each step; most of them it does for you. From a terminal, `unlatch setup` runs the same steps, and `unlatch doctor` checks them at any time.
+
+1. **Open Unlatch.** It is not signed with an Apple Developer ID (the project has no paid Apple membership), so macOS asks first. In Applications, right-click **Unlatch** > **Open** > **Open**. If there is no Open button: System Settings > Privacy & Security > **Open Anyway**. Needed once per version.
+
+2. **macFUSE.** In the setup window, click **Install macFUSE**. Unlatch downloads the latest release from macFUSE's GitHub page, checks it against the checksum macFUSE publishes, checks that the installer is signed by macFUSE's developer (Benjamin Fleischer, team 3T5GSNBU6W) and notarized by Apple, and then installs it. macOS asks for your password. If macFUSE is older than 5.4, the button says **Update macFUSE**. Homebrew users already have it.
+
+3. **Allow macFUSE's kernel extension.** Apple Silicon Macs only load extensions from other developers after you allow it, once. Unlatch cannot do this for you:
+   1. Shut down the Mac. Press and hold the power button until "Loading startup options" appears, then choose **Options** > **Continue**.
+   2. In Recovery: **Utilities** > **Startup Security Utility** > select your startup disk > **Security Policy** > **Reduced Security**, and turn on **"Allow user management of kernel extensions from identified developers"**. Click OK, enter your password, and restart.
+   3. Back in macOS, run the setup window's self-test (or mount any disk). macOS reports a blocked system extension: open System Settings > **Privacy & Security**, click **Allow** next to "Benjamin Fleischer", and restart when asked.
+
+   If you used macFUSE before, this is already done. Reduced Security only lets you approve extensions yourself; FileVault and other protections stay on.
+
+4. **The helper, for real disks.** Disk images work without it. For USB drives and internal disks, click **Install…** in the setup window (or answer yes in `unlatch setup`); macOS asks for your password. Then allow the helper in System Settings > Privacy & Security > **Full Disk Access**: click **+**, press ⌘⇧G, enter `/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper`, and turn it on. Without Full Disk Access macOS keeps it from opening removable disks. (The helper only opens NTFS disks for you; Unlatch itself runs as you, not as root.)
+
+5. **Self-test.** The setup window mounts a tiny built-in NTFS volume and reads it back. When it shows a green check, you are done. Optional: **Open Unlatch at login**, and **Copy install command** to put `unlatch` on your PATH (Homebrew does that already).
+
+Check it all again any time:
+
+```sh
+unlatch doctor
+```
+
+[docs/install.md](docs/install.md) has more detail, and [docs/troubleshooting.md](docs/troubleshooting.md) covers what to do when a step fails.
 
 ## Use
 

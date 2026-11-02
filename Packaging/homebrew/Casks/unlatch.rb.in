@@ -44,7 +44,9 @@ cask "unlatch" do
     with a right-click on Unlatch in Applications > Open, or allow it in System Settings >
     Privacy & Security > "Open Anyway".
 
-    macFUSE's system extension must be allowed once; Unlatch's setup window checks it.
+    macFUSE's kernel extension must be allowed once (Recovery > Reduced Security, then Allow in
+    System Settings > Privacy & Security); Unlatch's setup window walks through it:
+    https://github.com/Ramanan-Bala/unlatch#one-time-setup
     Uninstalling Unlatch leaves macFUSE installed (brew uninstall --cask macfuse removes it).
   EOS
 end

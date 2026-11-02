@@ -29,10 +29,10 @@ class Unlatch < Formula
 
   def caveats
     <<~EOS
-      Disk images you attach work at once. Real disks need the privileged helper, once:
-        sudo #{opt_bin}/unlatch install-helper
-      and Full Disk Access for it (System Settings > Privacy & Security > Full Disk Access).
-      `unlatch uninstall-helper` removes it again.
+      Finish the one-time setup (macFUSE's kernel extension approval, the helper for real disks):
+        unlatch setup
+      Steps: https://github.com/Ramanan-Bala/unlatch#one-time-setup
+      `sudo unlatch uninstall-helper` removes the helper again.
     EOS
   end
 

@@ -29,8 +29,16 @@ final class Checks {
     func run(model: AppModel) async {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         macOS = v.majorVersion >= 27 ? .ok : .failed("Unlatch needs macOS 27 or later; this Mac has \(v.majorVersion).\(v.minorVersion).")
-        macFUSE = MountService.macFUSEInstalled ? .ok : .failed("Install macFUSE, then come back here.")
-        kext = Self.kextLoaded() ? .ok : .failed("It loads on the first mount; macOS may ask you to allow it in Privacy & Security.")
+        if !MacFUSE.needsInstall {
+            macFUSE = .ok
+        } else if case .running = macFUSE {
+            // an install is in progress
+        } else if let v = MacFUSE.installedVersion {
+            macFUSE = .failed("macFUSE \(v) is too old; Unlatch needs \(MacFUSE.minimumVersion) or later.")
+        } else {
+            macFUSE = .failed("Unlatch mounts disks through macFUSE (free, installed separately).")
+        }
+        kext = Self.kextLoaded() ? .ok : .failed("If you allowed macFUSE before, it loads at the first mount. Otherwise, allow it once:")
         helper = HelperOpener.installed ? .ok : .failed("Needed for real disks, not for disk images.")
         if macFUSE == .ok, selfTest != .ok { await runSelfTest() }
     }
@@ -47,6 +55,36 @@ final class Checks {
         p.waitUntilExit()
         return String(decoding: data, as: UTF8.self).contains("io.macfuse.filesystems.macfuse")
     }
+
+    /// Downloads macFUSE from its GitHub releases, checks the checksum, signature and
+    /// notarization (MacFUSE.prepare), and runs Apple's installer with an administrator prompt.
+    func installMacFUSE(model: AppModel) async {
+        macFUSE = .running
+        do {
+            let r = try await MacFUSE.latestRelease()
+            let p = try await MacFUSE.prepare(r)
+            defer { p.cleanup() }
+            let cmd = p.installCommand.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
+            let script = "do shell script \"\(cmd.replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
+            var err: NSDictionary?
+            _ = NSAppleScript(source: script)?.executeAndReturnError(&err)
+            if MacFUSE.needsInstall {
+                macFUSE = .failed("macFUSE was not installed (\(err?[NSAppleScript.errorMessage] as? String ?? "cancelled")).")
+                return
+            }
+            macFUSE = .ok
+        } catch {
+            macFUSE = .failed(error.localizedDescription)
+            return
+        }
+        await run(model: model)
+    }
+
+    static func openPrivacySecurity() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+    }
+
+    static let approvalHelp = URL(string: "https://github.com/Ramanan-Bala/unlatch#one-time-setup")!
 
     /// Mounts the bundled tiny NTFS image read-only, reads its marker file, and ejects it.
     func runSelfTest() async {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import SwiftUI
+import UnlatchCore
 
 struct OnboardingView: View {
     var model: AppModel
@@ -15,10 +16,19 @@ struct OnboardingView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             CheckRow(title: "macOS 27 or later", state: checks.macOS)
-            CheckRow(title: "macFUSE installed", state: checks.macFUSE) {
-                Button("Get macFUSE") { NSWorkspace.shared.open(URL(string: "https://macfuse.github.io")!) }
+            CheckRow(title: "macFUSE installed", state: checks.macFUSE,
+                     note: "Unlatch downloads it from macFUSE's own releases, checks that it is signed by its developer and notarized by Apple, then installs it (macOS asks for your password).") {
+                Button(MacFUSE.installedVersion == nil ? "Install macFUSE" : "Update macFUSE") {
+                    Task { await checks.installMacFUSE(model: model) }
+                }
             }
-            CheckRow(title: "macFUSE allowed to load", state: checks.kext)
+            CheckRow(title: "macFUSE allowed to load", state: checks.kext,
+                     note: MacFUSE.approvalSteps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")) {
+                HStack {
+                    Button("Open Privacy & Security") { Checks.openPrivacySecurity() }
+                    Button("Step-by-step guide") { NSWorkspace.shared.open(Checks.approvalHelp) }
+                }
+            }
             CheckRow(title: "Self-test: mount a test disk", state: checks.selfTest) {
                 Button("Run again") { Task { await checks.runSelfTest() } }
             }

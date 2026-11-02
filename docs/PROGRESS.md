@@ -677,6 +677,19 @@ WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 Tests/Images/windows/make.sh
 - The owner removed `/Volumes/HelloFS` and the dormant extension's sandbox container (`~/Library/Containers/io.github.ramanan-bala.Unlatch.FSModule`), 2026-11-02. No FSKit-experiment leftovers remain.
 - CI (`gh run list --workflow engine`): green on every pushed step; two runs were cancelled only because a newer push superseded them.
 
+### Follow-up: setup installs macFUSE; README install and one-time setup — done 2026-11-02
+
+- `UnlatchCore.MacFUSE` (D-73): finds the latest macFUSE release on GitHub, downloads it, checks the published SHA-256, the package's Developer ID Installer signature (team 3T5GSNBU6W) and notarization, then hands it to Apple's `installer`. Tests: parsing and version gating, a real download and verification (integration), and an unsigned package refused.
+- App setup window: "Install macFUSE" / "Update macFUSE" (administrator prompt), the kernel-extension approval steps with "Open Privacy & Security" and a link to the README's steps.
+- `unlatch setup [--yes] [--no-helper]`: macFUSE, the extension approval, the helper and Full Disk Access, in order; `doctor` now also requires macFUSE 5.4 or later.
+- README: requirements table (macFUSE is the only thing not bundled), install options, and a numbered one-time setup; install.md, cli.md, the DMG's Read Me First, the release-notes footer and the Homebrew caveats point to it.
+- Not run on this Mac: an actual macFUSE install (it would replace the owner's macFUSE 5.4.0 with 5.5.0). `installer -pkginfo` accepts the verified package, and the admin command's quoting was checked.
+
+```sh
+UNLATCH_INTEGRATION=1 swift test --package-path Shared     # macFUSERelease, macFUSEDownloadVerifies, macFUSEUnsignedPackageRefused
+CLI/.build/debug/unlatch setup --no-helper                   # on a Mac that has everything: three "ok" steps
+```
+
 ## Carry-overs
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).

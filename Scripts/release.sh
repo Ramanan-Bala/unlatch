@@ -63,15 +63,15 @@ Scripts/make-notices.sh "$stage/Notices" "$version" > /dev/null
 cat > "$stage/Read Me First.txt" <<README
 Unlatch $version: read-write NTFS for macOS 27+ on Apple Silicon.
 
-1. Install macFUSE first (https://macfuse.github.io, or: brew install --cask macfuse) and allow
-   its system extension when macOS asks. Unlatch does not include macFUSE.
-2. Drag Unlatch to Applications.
-3. This build is not signed with an Apple Developer ID. The first time, open it with a
-   right-click on Unlatch in Applications > Open, then confirm; or allow it in System Settings >
-   Privacy & Security > "Open Anyway".
-4. Unlatch's setup window walks through the rest (the helper for real disks, Full Disk Access).
+1. Drag Unlatch to Applications.
+2. Open it: right-click Unlatch in Applications > Open > Open (it is not signed with an Apple
+   Developer ID). If there is no Open button: System Settings > Privacy & Security > Open Anyway.
+3. The setup window installs macFUSE for you (from macFUSE's own releases, signature checked),
+   explains the one-time approval of macFUSE's kernel extension (Recovery > Reduced Security,
+   then Allow in Privacy & Security), and installs the helper real disks need.
 
-Licenses and the source offer are in the Notices folder. Source: https://github.com/Ramanan-Bala/unlatch
+Step by step: https://github.com/Ramanan-Bala/unlatch#one-time-setup
+Licenses and the source offer are in the Notices folder. Unlatch does not include macFUSE.
 README
 dmg="$out/Unlatch-$version.dmg"
 hdiutil create -quiet -fs HFS+ -format UDZO -volname "Unlatch $version" -srcfolder "$stage" "$dmg"

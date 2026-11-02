@@ -8,6 +8,8 @@ unlatch unmount --all [--force]            every volume Unlatch has mounted (bef
 unlatch eject <disk> [--force]             unmount, then eject the whole disk
 unlatch status [<disk>] [--json]           Unlatch's verdict per volume (clean, dirty, hibernated, ...)
 unlatch doctor                             check macOS, macFUSE, unlatch-fuse, the helper
+unlatch setup [--yes] [--no-helper]        install or update macFUSE (verified download), explain its
+                                           one-time approval, install the helper
 sudo unlatch install-helper                once, for real disks (not needed for disk images)
 sudo unlatch uninstall-helper
 ```
@@ -72,3 +74,11 @@ Real disks' device nodes are readable only by root. `sudo unlatch install-helper
 macOS's privacy protection (TCC) also requires the helper to have **Full Disk Access**: System Settings → Privacy & Security → Full Disk Access → **+** → ⌘⇧G → `/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper`. Without it, macOS refuses the helper's open of a removable disk, even as root, and `unlatch mount` says so (D-60).
 
 Finding the other binaries: `$UNLATCH_FUSE` and `$UNLATCH_HELPER`, else next to `unlatch`, else the repository's Debug build.
+
+## `unlatch setup`
+
+Runs the one-time setup in order, asking before each change (`--yes` skips the questions):
+
+1. macFUSE: if it is missing or older than 5.4, downloads the newest release from github.com/macfuse/macfuse, checks the published SHA-256, the package signature (Developer ID Installer, team 3T5GSNBU6W) and Apple's notarization, and runs `sudo installer -pkg … -target /`.
+2. macFUSE's kernel extension: reports whether it is loaded, and prints the approval steps when it is not (Recovery and System Settings; cannot be automated).
+3. The helper: `sudo unlatch install-helper`, then opens Full Disk Access in System Settings.

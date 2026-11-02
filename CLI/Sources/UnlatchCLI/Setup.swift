@@ -120,7 +120,8 @@ struct Doctor: AsyncParsableCommand {
         let fuse = MountService.macFUSEInstalled
         let info = NSDictionary(contentsOfFile: "/Library/Filesystems/macfuse.fs/Contents/Info.plist")
         let fuseVersion = (info?["CFBundleShortVersionString"] ?? info?["CFBundleVersion"]) as? String ?? "?"
-        check(fuse, "macFUSE installed\(fuse ? " (\(fuseVersion))" : "")", "brew install --cask macfuse", .macFUSE)
+        check(fuse && !MacFUSE.needsInstall, "macFUSE installed\(fuse ? " (\(fuseVersion))" : "")",
+              fuse ? "macFUSE \(MacFUSE.minimumVersion) or later is needed: unlatch setup" : "unlatch setup (or brew install --cask macfuse)", .macFUSE)
         // The loaded bundle carries a macOS-major suffix (io.macfuse.filesystems.macfuse.25).
         let kext = shell(["/usr/bin/kmutil", "showloaded", "--list-only"]).1.contains("io.macfuse.filesystems.macfuse")
         check(kext || !fuse, "macFUSE kernel extension loaded",
@@ -135,5 +136,89 @@ struct Doctor: AsyncParsableCommand {
         check(FileManager.default.isWritableFile(atPath: status.path), "status directory \(status.path)",
               "Make it writable by you.")
         if worst != .success { throw CLIExit(code: worst) }
+    }
+}
+
+/// Runs a command attached to this terminal (so sudo can ask for the password); its exit status.
+@discardableResult
+func interactive(_ args: [String]) -> Int32 {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: args[0])
+    p.arguments = Array(args.dropFirst())
+    do { try p.run() } catch { return 127 }
+    p.waitUntilExit()
+    return p.terminationStatus
+}
+
+/// `unlatch setup`: everything a new Mac needs, in order (D-73). It installs or updates macFUSE
+/// (downloaded from macFUSE's GitHub releases, checksum, signature and notarization checked),
+/// explains the one-time approval of macFUSE's kernel extension, installs the helper, and points
+/// at Full Disk Access. Each step that changes the system asks first, unless --yes.
+struct SetupCmd: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "setup",
+        abstract: "Install and check everything Unlatch needs (macFUSE, the helper), step by step.")
+    @Flag(name: [.short, .long], help: "Do every step without asking.") var yes = false
+    @Flag(help: "Skip the helper (only disk images will be mounted).") var noHelper = false
+
+    private func confirm(_ question: String) -> Bool {
+        if yes { return true }
+        print("\(question) [Y/n] ", terminator: "")
+        guard let a = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() else { return false }
+        return a.isEmpty || a == "y" || a == "yes"
+    }
+
+    private func sudo(_ args: [String]) -> Int32 {
+        interactive(getuid() == 0 ? args : ["/usr/bin/sudo"] + args)
+    }
+
+    func run() async throws {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        guard v.majorVersion >= 27 else { throw fail("Unlatch needs macOS 27 or later (this Mac: \(v.majorVersion).\(v.minorVersion)).") }
+
+        // 1. macFUSE.
+        if MacFUSE.needsInstall {
+            let have = MacFUSE.installedVersion.map { "macFUSE \($0) is older than \(MacFUSE.minimumVersion)" } ?? "macFUSE is not installed"
+            print("1. \(have). Unlatch mounts through macFUSE (free; installed separately, never bundled).")
+            let r: MacFUSE.Release
+            do { r = try await MacFUSE.latestRelease() } catch { throw fail(error.localizedDescription) }
+            guard confirm("   Download macFUSE \(r.version) from github.com/macfuse/macfuse and install it?") else {
+                throw fail("macFUSE is required. Install it from https://macfuse.github.io, then run unlatch setup again.", .macFUSE)
+            }
+            print("   Downloading and checking macFUSE \(r.version)...")
+            let p: MacFUSE.Prepared
+            do { p = try await MacFUSE.prepare(r) } catch { throw fail(error.localizedDescription) }
+            defer { p.cleanup() }
+            print("   Checked: SHA-256 as published, signed by macFUSE's developer (team \(MacFUSE.teamID)), notarized by Apple.")
+            print("   Installing (macOS asks for your password)...")
+            guard sudo(p.installCommand) == 0 else { throw fail("macFUSE's installer failed; run it by hand: open '\(p.package.path)'") }
+            print("   macFUSE \(MacFUSE.installedVersion ?? r.version) installed.")
+        } else {
+            print("1. macFUSE \(MacFUSE.installedVersion ?? "") is installed.")
+        }
+
+        // 2. macFUSE's kernel extension: approval cannot be automated (Recovery and System Settings).
+        if shell(["/usr/bin/kmutil", "showloaded", "--list-only"]).1.contains("io.macfuse.filesystems.macfuse") {
+            print("2. macFUSE's kernel extension is allowed and loaded.")
+        } else {
+            print("2. macFUSE's kernel extension has to be allowed once. If it already is, it simply loads at the first mount.")
+            print("   On Apple Silicon, if you have not done this before:")
+            for (i, s) in MacFUSE.approvalSteps.enumerated() { print("   \(Character(UnicodeScalar(UInt8(97 + i))))) \(s)") }
+        }
+
+        // 3. The helper, for real disks.
+        if noHelper {
+            print("3. Helper skipped: disk images work; real disks need `sudo unlatch install-helper` later.")
+        } else if HelperOpener.installed {
+            print("3. The helper for real disks is installed.")
+        } else if confirm("3. Install the helper that opens real disks for you (needs your password)?") {
+            let me = Unlatch.executableDirectory.appendingPathComponent("unlatch").path
+            guard sudo([me, "install-helper"]) == 0 else { throw fail("installing the helper failed") }
+            print("   Opening Full Disk Access in System Settings: click +, press ⌘⇧G, enter \(HelperOpener.installedPath).")
+            interactive(["/usr/bin/open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
+        } else {
+            print("3. Helper skipped: disk images work; real disks need `sudo unlatch install-helper` later.")
+        }
+        print("\nDone. `unlatch doctor` checks everything again; plug in an NTFS disk, or `unlatch mount <disk>`.")
     }
 }

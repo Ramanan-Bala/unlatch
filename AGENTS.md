@@ -36,6 +36,7 @@ Each step updates this list.
 | Build CLI | `swift build --package-path CLI` |
 | Run CLI | `swift run --package-path CLI unlatch --help`; commands in `docs/cli.md` |
 | Test CLI | `swift test --package-path CLI` |
+| One-time setup: install or update macFUSE (verified download), approval steps, the helper | `CLI/.build/debug/unlatch setup [--yes] [--no-helper]` |
 | Install the privileged helper (real disks only) | `sudo CLI/.build/debug/unlatch install-helper` |
 | Engine tests (unit, harness, leaks, written-image checks, include boundary; ~2 min, ~18 GB of sparse images, ~8 GB really written) | `Scripts/test-engine.sh` |
 | Engine tests without the 4 GiB `cat` and `put`/`get` checks (~40 s) | `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` |

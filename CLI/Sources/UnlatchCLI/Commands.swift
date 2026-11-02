@@ -64,7 +64,7 @@ public struct UnlatchCommand: AsyncParsableCommand {
         """,
         version: Unlatch.version,
         subcommands: [List.self, MountCmd.self, Unmount.self, Eject.self, Status.self, Doctor.self,
-                      InstallHelper.self, UninstallHelper.self]
+                      SetupCmd.self, InstallHelper.self, UninstallHelper.self]
     )
 
     public init() {}

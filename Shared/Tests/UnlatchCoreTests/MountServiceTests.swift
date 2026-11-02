@@ -143,6 +143,10 @@ func deadDaemonMountIsReaped() async throws {
     // macFUSE keeps the dead mount listed until it is force-unmounted; list() does that.
     let disks = await service.list()
     #expect(disks.first { $0.bsdName == bsd }?.owner == DiskInfo.Owner.none)
+    // macOS removes the /Volumes folder shortly after the forced unmount.
+    for _ in 0..<30 where FileManager.default.fileExists(atPath: r.mountPoint) {
+        try await Task.sleep(nanoseconds: 100_000_000)
+    }
     #expect(!FileManager.default.fileExists(atPath: r.mountPoint))
     #expect(await service.status(bsd)?.mounted == false)
     try await service.eject(bsd)

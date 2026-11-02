@@ -11,7 +11,8 @@ The first public beta. Not signed with an Apple Developer ID; see docs/install.m
 ### Added
 - Read-write NTFS on macOS 27+ (Apple Silicon) through macFUSE: the `unlatch-fuse` mount daemon over libntfs-3g 2026.9.28 (plus two patches), safe by default: read-write only when Windows left the volume clean, read-only with the reason otherwise (hibernated, Fast Startup, unfinished journal, dirty).
 - Menu-bar app: mounts NTFS disks as they are connected (claiming them from Apple's read-only driver), per-disk choices, eject, notifications, onboarding with a self-test, log export, update notices, uninstall.
-- `unlatch` command: `list`, `mount`, `unmount` (`--all`), `eject`, `status` (JSON, schema 1), `doctor`, `install-helper`, `uninstall-helper`.
+- Setup that installs macFUSE for you (downloaded from macFUSE's releases; checksum, signature and notarization checked) and walks through the one-time approvals, in the app and as `unlatch setup`.
+- `unlatch` command: `list`, `mount`, `unmount` (`--all`), `eject`, `status` (JSON, schema 1), `doctor`, `setup`, `install-helper`, `uninstall-helper`.
 - A privileged helper that only opens NTFS disk devices for the logged-in user; the daemon itself runs as the user.
 - Extended attributes and Finder tags as NTFS named streams (no `._` files); symlinks (native Windows symlinks within the disk, WSL symlinks otherwise; reads Windows symlinks and junctions); hard links; hidden and read-only attributes.
 - A write-back page cache in the engine: large copies on real disks several times faster than through the block device's cache.
