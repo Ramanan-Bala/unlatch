@@ -49,6 +49,9 @@ jobs:
           awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
           cat docs/release-notes-footer.md >> notes.md
           pre=""; case "$v" in *-*) pre="--prerelease" ;; esac
+          # Release assets need distinct names; in the tap both files are unlatch.rb.
+          cp "$out/homebrew/Casks/unlatch.rb" "$out/homebrew-cask-unlatch.rb"
+          cp "$out/homebrew/Formula/unlatch.rb" "$out/homebrew-formula-unlatch.rb"
           gh release create "$GITHUB_REF_NAME" --draft $pre --title "Unlatch $v" --notes-file notes.md \
             "$out/Unlatch-$v.dmg" "$out/unlatch-$v.tar.gz" "$out/SHA256SUMS" \
-            "$out/homebrew/Casks/unlatch.rb" "$out/homebrew/Formula/unlatch.rb"
+            "$out/homebrew-cask-unlatch.rb" "$out/homebrew-formula-unlatch.rb"

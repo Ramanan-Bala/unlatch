@@ -25,7 +25,7 @@ The script signs inside out (the three helpers, then the app) ad hoc with the ha
 1. `git push` and wait for CI to pass.
 2. `git tag -s v1.0.0 -m "Unlatch 1.0.0"` and `git push origin v1.0.0`. The `release` workflow builds everything again on GitHub's runner and creates a **draft** release with the files and the changelog section as notes.
 3. Read the draft, compare its `SHA256SUMS` with your local build if you like (they differ: the build is not bit-for-bit reproducible), then **Publish**. A version with a `-` (for example `1.0.0-beta.1`) is marked pre-release.
-4. Tap: the repository `Ramanan-Bala/homebrew-unlatch` holds `Casks/unlatch.rb` and `Formula/unlatch.rb`. Copy the two files from the release (or `build/release/<v>/homebrew/`) into it, commit and push. Users then get it with `brew upgrade`.
+4. Tap: the repository `Ramanan-Bala/homebrew-unlatch` holds `Casks/unlatch.rb` and `Formula/unlatch.rb`. Copy the release's `homebrew-cask-unlatch.rb` to `Casks/unlatch.rb` and `homebrew-formula-unlatch.rb` to `Formula/unlatch.rb` (or take them from `build/release/<v>/homebrew/`), commit and push. Users then get it with `brew upgrade`.
 
 ## Checklist for the release notes
 
