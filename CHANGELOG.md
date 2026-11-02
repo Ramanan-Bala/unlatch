@@ -4,6 +4,19 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.7] - 2026-11-02
+
+### Fixed
+- **A disk unplugged or a Mac that crashed while writing is no longer reported as healthy.** Unlatch now marks a disk "in use" while it is mounted for writing, as Windows does, and clears the mark only after everything is safely written at eject. A disk cut off mid-write mounts read-only next time and asks for a Windows check (chkdsk), instead of being written to again and risking damage to files.
+- **A disk pulled out without ejecting can be mounted again right away.** Before, plugging it back in within about half a minute failed with "already mounted" or an I/O error.
+- **A disk Unlatch cannot mount no longer disappears.** If macFUSE or the helper is missing or not allowed, Unlatch leaves the disk to macOS (read-only) instead of hiding it; after a failed automatic mount it hands the disk back to macOS.
+- A mount that took too long to start could carry on in the background after reporting failure; it is now stopped.
+- The helper gives write access only to volumes macOS recognises as NTFS, never to other partitions (exFAT, FAT32, BitLocker) that share NTFS's partition type.
+- `unlatch mount` on a disk already mounted read-only reports read-only, not read-write.
+- `unlatch-fuse` run by name (as Homebrew installs it) without `-f` starts its background daemon.
+- The menu stays responsive while a slow disk mounts.
+- A read that hits a bad sector part-way returns the data read before it.
+
 ## [1.0.0-beta.6] - 2026-11-02
 
 ### Fixed
