@@ -224,20 +224,25 @@ unlatch setup</code></pre>
     <p>Speed depends on the disk. Numbers from the project's test Mac (Apple M2, 8 GiB, macOS 27.0.1); the method and raw results are in <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/Bench/README.md">Bench/README.md</a>.</p>
 
     <h3>Real drive: USB 2.0 stick</h3>
-    <p>SanDisk Cruzer Blade 16 GB (USB 2.0), one 15.8 GB NTFS partition, Unlatch 1.0.0-beta.3. The device's own speed is <code>sudo dd</code> of 512 MiB in 4 MiB blocks on the raw partition; both are medians of 3.</p>
-    <div class="bars" role="img" aria-label="Sequential read: device 32.9 MB/s, Unlatch 33.1 MB/s. Sequential write: device 6.7 MB/s, Unlatch 5.5 MB/s.">
-      <div class="bar-group">
-        <h4>Sequential read (cold) <span class="muted">· 100% of the device</span></h4>
-        <div class="bar-row"><span class="label">Device</span><span class="track"><span class="fill device" style="width:99.4%;display:block"></span></span><span class="value">32.9 MB/s</span></div>
-        <div class="bar-row"><span class="label">Unlatch</span><span class="track"><span class="fill" style="width:100%;display:block"></span></span><span class="value">33.1 MB/s</span></div>
-      </div>
-      <div class="bar-group">
-        <h4>Sequential write <span class="muted">· 82% of the device</span></h4>
-        <div class="bar-row"><span class="label">Device</span><span class="track"><span class="fill device" style="width:100%;display:block"></span></span><span class="value">6.7 MB/s</span></div>
-        <div class="bar-row"><span class="label">Unlatch</span><span class="track"><span class="fill" style="width:82%;display:block"></span></span><span class="value">5.5 MB/s</span></div>
-      </div>
+    <p>SanDisk Cruzer Blade 16 GB (USB 2.0), one 15.8 GB NTFS partition, Unlatch 1.0.0-beta.3, next to the stick's own speed (<code>sudo dd</code> on the raw partition) and Apple's exFAT driver on the same stick. Median of 3 runs, 512 MiB files.</p>
+    <figure class="chart">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="bench/usb-dark.svg">
+        <img src="bench/usb.svg" width="800" height="266" alt="Bar charts: cold sequential read 32.9 MB/s raw, 33.1 Unlatch, 32.5 exFAT; sequential write 6.7 MB/s raw, 5.5 Unlatch, 6.2 exFAT; small files 94 per second Unlatch, 61 exFAT; metadata 1,405 operations per second Unlatch, 122 exFAT">
+      </picture>
+    </figure>
+    <div class="table">
+      <table>
+        <thead><tr><th>Test</th><th class="num">Stick (raw <code>dd</code>)</th><th class="num">Unlatch</th><th class="num">exFAT</th></tr></thead>
+        <tbody>
+          <tr><td>Sequential read, cold</td><td class="num">32.9 MB/s</td><td class="num">33.1 MB/s</td><td class="num">32.5 MB/s</td></tr>
+          <tr><td>Sequential write</td><td class="num">6.7 MB/s</td><td class="num">5.5 MB/s</td><td class="num">6.2 MB/s</td></tr>
+          <tr><td>Small files (1–16 KiB, create + delete)</td><td class="num"></td><td class="num">94 files/s</td><td class="num">61 files/s</td></tr>
+          <tr><td>Metadata (create, rename, delete)</td><td class="num"></td><td class="num">1,405 ops/s</td><td class="num">122 ops/s</td></tr>
+        </tbody>
+      </table>
     </div>
-    <p class="muted">Also on the stick: small files (1–16 KiB, create + delete) 94 files/s; metadata (create, rename, delete) 1,405 ops/s. Reads run at the stick's full speed. Writes lose about a fifth, most likely to NTFS's own writes (MFT records, bitmap, log) on a device this slow.</p>
+    <p>Reads run at the stick's full speed; sequential writes reach 82% of it (exFAT 93%); small files and metadata are faster than exFAT, helped by the engine's write-back cache for NTFS's small metadata writes.</p>
 
     <h3>SSD image</h3>
     <p>On a fast SSD image, sequential copies run at about 1.5–2.7 GB/s. Every file system below gets its own 4 GiB image on the internal SSD; image-backed volumes live in the host's page cache, so these compare file system stacks, not drives. <code>ntfs3g</code> (stock ntfs-3g on macFUSE) and <code>unlatch-file</code> both mount the image file, like for like.</p>
