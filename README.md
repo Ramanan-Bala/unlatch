@@ -97,7 +97,7 @@ unlatch doctor
 - **No journal replay.** Like ntfs-3g, Unlatch does not replay the NTFS journal. Always eject before unplugging; if a disk was pulled out mid-write, run `chkdsk` on Windows before relying on it.
 - **Not indexed by Spotlight**, and not usable for Time Machine.
 - Permissions: files belong to the user who mounted the disk; NTFS access lists are not mapped.
-- Speed depends on the disk; on this project's test Mac, sequential copies run at about 1.5–2.7 GB/s on a fast SSD image ([docs/M0-gate.md](docs/M0-gate.md)).
+- Speed depends on the disk; on this project's test Mac, sequential copies run at about 1.5–2.7 GB/s on a fast SSD image ([docs/M0-gate.md](docs/M0-gate.md)). On a real USB 2.0 stick (SanDisk Cruzer Blade), reads run at the stick's full 33 MB/s and writes at 5.5 MB/s of its 6.7 MB/s ([Bench/README.md](Bench/README.md#real-drive-usb-20-stick)).
 
 When something goes wrong: [docs/troubleshooting.md](docs/troubleshooting.md). Security issues: [SECURITY.md](SECURITY.md).
 
