@@ -61,7 +61,9 @@ The first time, Unlatch's setup window opens and checks each step; most of them 
 
    If you used macFUSE before, this is already done. Reduced Security only lets you approve extensions yourself; FileVault and other protections stay on.
 
-4. **The helper, for real disks.** Disk images work without it. For USB drives and internal disks, click **Install…** in the setup window (or answer yes in `unlatch setup`); macOS asks for your password. Then allow the helper in System Settings > Privacy & Security > **Full Disk Access**: click **+**, press ⌘⇧G, enter `/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper`, and turn it on. Without Full Disk Access macOS keeps it from opening removable disks. (The helper only opens NTFS disks for you; Unlatch itself runs as you, not as root.)
+4. **The helper, for real disks.** Disk images work without it. For USB drives and internal disks, click **Install…** in the setup window (or answer yes in `unlatch setup`); macOS asks for your password. Then click **Allow in Full Disk Access**: System Settings opens at Privacy & Security > **Full Disk Access**, and a Finder window shows the helper (`io.github.ramanan-bala.unlatch.helper`). Drag it into the list and turn it on. Without it, macOS keeps the helper from opening removable disks.
+
+   Why the helper and not the app? Disk devices can only be opened by root, so the small root helper opens them and hands them to Unlatch, which runs as you. macOS checks Full Disk Access for the program that opens the disk, which is the helper. In Login Items it appears under Unlatch.
 
 5. **Self-test.** The setup window mounts a tiny built-in NTFS volume and reads it back. When it shows a green check, you are done. Optional: **Open Unlatch at login**, and **Copy install command** to put `unlatch` on your PATH (Homebrew does that already).
 

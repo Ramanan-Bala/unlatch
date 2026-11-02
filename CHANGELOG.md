@@ -4,6 +4,9 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+- The helper is listed under Unlatch in Login Items, and "Allow in Full Disk Access" (setup window, `unlatch setup`) opens the right list and shows the helper in Finder to drag in.
+
 ## [1.0.0-beta.1] - 2026-11-01
 
 The first public beta. Not signed with an Apple Developer ID; see docs/install.md.

@@ -79,3 +79,11 @@ private func disk(_ bsd: String, label: String, mount: String? = nil) -> DiskInf
     }
     """)
 }
+
+/// The launchd job `install-helper` writes parses, and Login Items shows it under the app (D-74).
+@Test func helperPlistIsValid() throws {
+    let p = try #require(try PropertyListSerialization.propertyList(from: Data(helperPlist.utf8), format: nil) as? [String: Any])
+    #expect(p["Label"] as? String == HelperOpener.label)
+    #expect(p["AssociatedBundleIdentifiers"] as? String == "io.github.ramanan-bala.Unlatch")
+    #expect(p["Program"] as? String == HelperOpener.installedPath)
+}

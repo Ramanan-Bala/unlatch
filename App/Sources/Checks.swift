@@ -140,8 +140,13 @@ final class Checks {
         helper = HelperOpener.installed ? .ok : .failed(err?[NSAppleScript.errorMessage] as? String ?? "The helper was not installed.")
     }
 
+    /// Opens Full Disk Access and shows the helper in Finder, so it is one drag into the list.
+    /// The permission is checked for the helper, which opens the disks, not for the app (D-74).
     static func openFullDiskAccess() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+        if FileManager.default.fileExists(atPath: HelperOpener.installedPath) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: HelperOpener.installedPath)])
+        }
     }
 
     var launchAtLogin: Bool {

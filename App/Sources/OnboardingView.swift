@@ -33,10 +33,10 @@ struct OnboardingView: View {
                 Button("Run again") { Task { await checks.runSelfTest() } }
             }
             CheckRow(title: "Helper for real disks", state: checks.helper,
-                     note: "After installing, allow it in Full Disk Access, or macOS keeps it from opening disks.") {
+                     note: "After installing, give the helper Full Disk Access: \"Allow in Full Disk Access\" opens the list and shows the helper in Finder; drag it into the list and turn it on. macOS asks this of the helper because it is what opens the disks.") {
                 HStack {
                     Button("Install…") { Task { await checks.installHelper() } }
-                    Button("Open Full Disk Access") { Checks.openFullDiskAccess() }
+                    Button("Allow in Full Disk Access") { Checks.openFullDiskAccess() }
                 }
             }
 

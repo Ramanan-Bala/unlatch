@@ -31,6 +31,8 @@ let helperPlist = """
 <dict>
     <key>Label</key>
     <string>\(HelperOpener.label)</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <string>\(Unlatch.bundlePrefix).Unlatch</string>
     <key>Program</key>
     <string>\(Paths.installedHelper)</string>
     <key>Sockets</key>
@@ -86,7 +88,8 @@ struct InstallHelper: ParsableCommand {
         guard rc == 0 else { throw fail("launchctl bootstrap failed: \(out)") }
         print("""
             Installed the Unlatch helper (\(Paths.installedHelper)).
-            Allow it once in System Settings > Privacy & Security > Full Disk Access (+, then that path):
+            Allow it once in System Settings > Privacy & Security > Full Disk Access: drag it there from
+            Finder (open -R \(Paths.installedHelper)), or click +, press ⌘⇧G and enter that path.
             macOS does not let a background helper open removable disks otherwise.
             """)
     }
@@ -214,8 +217,13 @@ struct SetupCmd: AsyncParsableCommand {
         } else if confirm("3. Install the helper that opens real disks for you (needs your password)?") {
             let me = Unlatch.executableDirectory.appendingPathComponent("unlatch").path
             guard sudo([me, "install-helper"]) == 0 else { throw fail("installing the helper failed") }
-            print("   Opening Full Disk Access in System Settings: click +, press ⌘⇧G, enter \(HelperOpener.installedPath).")
+            print("""
+                   Last step: give the helper Full Disk Access. System Settings opens at Full Disk Access, and a
+                   Finder window shows the helper: drag it into the list and turn it on. (macOS checks this
+                   permission for the helper, which opens the disks, not for the app; D-74.)
+                """)
             interactive(["/usr/bin/open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
+            interactive(["/usr/bin/open", "-R", HelperOpener.installedPath])
         } else {
             print("3. Helper skipped: disk images work; real disks need `sudo unlatch install-helper` later.")
         }

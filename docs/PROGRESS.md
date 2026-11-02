@@ -692,6 +692,8 @@ CLI/.build/debug/unlatch setup --no-helper                   # on a Mac that has
 
 ## Carry-overs
 
+- **Helper Full Disk Access on the app (owner's request, D-74):** try registering the helper as an `SMAppService` daemon, a bare executable in `Unlatch.app/Contents/MacOS` with its plist in `Contents/Library/LaunchDaemons`, so that the grant given to "Unlatch" covers it. Undocumented; check that SMAppService registers an ad-hoc-signed app at all; test with a disposable USB stick (the only removable disk here holds real data). Keep the current helper as the fallback.
+
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07:** Windows-made Fast Startup, dirty and fragmented-MFT images are still wanted (`Tests/Images/README.md`).
 - **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
