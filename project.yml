@@ -197,6 +197,8 @@ targets:
       - Fuse
       - path: EngineTool/file_io.c
       - path: EngineTool/file_io.h
+      - path: EngineTool/check_report.c
+      - path: EngineTool/check_report.h
     settings:
       base:
         PRODUCT_NAME: unlatch-fuse

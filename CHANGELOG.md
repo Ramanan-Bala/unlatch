@@ -4,6 +4,9 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+- **Check Disk** for a disk marked as needing a check, so you no longer need a Windows PC to find out whether it is damaged: in the disk's ⋯ menu, or `unlatch check <disk>`. Unlatch reads the disk's file table, allocation maps and every folder, and says what it found. When nothing is wrong it clears the mark, and the disk mounts read-write. When files use space marked free, it can repair that safely (it marks the space used; nothing is overwritten). Anything else (an unreadable folder, files no folder lists, a damaged file record) it reports and leaves for Windows' chkdsk, with what to do. See "Without Windows" in docs/read-only.md.
+
 ## [1.0.0-beta.10] - 2026-11-02
 
 ### Fixed

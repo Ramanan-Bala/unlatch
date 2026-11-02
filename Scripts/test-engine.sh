@@ -91,6 +91,34 @@ mkdir /sub
 file /.unlatch-rename-7 3000 3
 file /sub/.unlatch-rename-9 10 4
 FIXTURE
+# Check Disk (D-93): one kind of planted damage per image, and two for the repair.
+"$root/Scripts/make-image.sh" chk-base 32m CHK >/dev/null
+"$out/mkfixture" chk-base.img <<'FIXTURE'
+mkdir /d
+file /d/a.bin 20000 1
+file /d/b.bin 20000 2
+file /d/c.bin 20000 3
+file /d/small.txt 10 4
+mkdir /big
+many /big 300
+FIXTURE
+while read -r name damage; do
+    cp -c chk-base.img "$name.img"
+    printf '%b\n' "$damage" | "$out/mkfixture" "$name.img"
+done <<'DAMAGE'
+chk-record-bit clear-record-bit /d/a.bin
+chk-cluster-bits clear-cluster-bits /d/c.bin
+chk-shared share-clusters /d/a.bin /d/b.bin
+chk-run-past run-past /d/a.bin
+chk-seq bump-seq /d/a.bin
+chk-torn tear-record /d/a.bin
+chk-index zero-index /big
+chk-repairable clear-record-bit /d/a.bin\nclear-cluster-bits /d/c.bin\nclear-record-bit /big/f00010
+chk-mix clear-record-bit /d/a.bin\nbump-seq /d/b.bin
+DAMAGE
+"$out/set_dirty" chk-repairable.img
+"$out/set_dirty" chk-mix.img
+rm chk-base.img
 if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
     "$root/Scripts/make-image.sh" big 5g BIG >/dev/null
     echo "file /4g.bin 4294967296 9" | "$out/mkfixture" big.img
@@ -109,6 +137,14 @@ grep -q '^total_bytes: *[1-9]' probe.txt
 "$products/unlatch-engine" probe zeroboot.img | grep -q '^state: *not_ntfs$'
 "$products/unlatch-engine" info --rw clean.img | grep -q '^mode: *read-write$'
 echo "ok   harness probe/info"
+"$products/unlatch-engine" check clean.img > check.txt
+grep -q '^found: *0 ' check.txt
+set +e
+"$products/unlatch-engine" check --json chk-index.img > check.json; rc=$?
+set -e
+[ $rc = 4 ] || { echo "FAIL check chk-index.img exited $rc, want 4" >&2; exit 1; }
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["schema"]==1 and d["remaining"]>0 and d["problems"][0]["kind"]=="index_unreadable", d' check.json
+echo "ok   harness check (text, JSON, exit codes)"
 eng="$products/unlatch-engine"
 "$eng" ls read.img / | grep -q ' ReadMe.TXT$'
 "$eng" stat read.img /readme.txt | grep -q '^size: *5000$'
@@ -166,6 +202,15 @@ else
     echo "FAIL leaks" >&2
     exit 1
 fi
+
+echo "== leaks (check and repair)"
+cp -c chk-repairable.img leak-check.img
+for args in "check chk-index.img" "check chk-shared.img" "check --repair leak-check.img"; do
+    leaks --atExit -- "$products/unlatch-engine" $args > leaks-check.txt 2>&1 \
+        || { cat leaks-check.txt >&2; echo "FAIL leaks: $args" >&2; exit 1; }
+done
+rm leak-check.img
+echo "ok   no leaks"
 
 echo "== written images: probe CLEAN, ntfsinfo, ntfsfix -n, no internal names left"
 for w in w-*.img; do

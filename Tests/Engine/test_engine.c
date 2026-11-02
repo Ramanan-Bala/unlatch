@@ -1526,6 +1526,276 @@ static void test_device_failure(void)
     unlink(w.path);                    // not a clean-unmount image; keep it out of the w-*.img checks
 }
 
+// Check Disk (D-93). The chk-*.img fixtures (Scripts/test-engine.sh) each carry one kind of
+// planted damage; clean images and the read fixture must check clean.
+typedef struct {
+    ue_check_problem_t first[UE_CHK_KINDS];   // the first problem of each kind
+} check_seen_t;
+
+static void on_check(void *ctx, const ue_check_problem_t *p)
+{
+    check_seen_t *s = ctx;
+    if (!s->first[p->kind].kind)
+        s->first[p->kind] = *p;
+}
+
+static int check_path(const char *path, uint32_t flags, ue_check_result_t *r, check_seen_t *seen)
+{
+    file_io_t f;
+    int err = file_io_open(&f, path, (flags & UE_CHECK_REPAIR) != 0);
+    if (err)
+        return err;
+    memset(seen, 0, sizeof(*seen));
+    err = ue_check(&f.io, flags, on_check, seen, r);
+    file_io_close(&f);
+    return err;
+}
+
+static void test_check_clean(void)
+{
+    const char *clean[] = { "clean", "read", "small", "leftover", "dirty" };
+    ue_check_result_t r;
+    check_seen_t seen;
+
+    for (size_t i = 0; i < sizeof(clean) / sizeof(clean[0]); i++) {
+        int err = check_path(img(clean[i]), 0, &r, &seen);
+        CHECK(err == 0 && r.problems == 0 && r.lost_records == 0 && r.lost_clusters == 0,
+              "%s: %s, %llu problems, lost %llu/%llu", clean[i], strerror(err), (unsigned long long)r.problems,
+              (unsigned long long)r.lost_records, (unsigned long long)r.lost_clusters);
+        CHECK(r.records_in_use > 16 && r.directories >= 2 && r.clusters_in_use > 0, "%s: counted nothing", clean[i]);
+    }
+    CHECK(check_path(img("read"), 0, &r, &seen) == 0 && r.entries > 10000, "read: %llu entries",
+          (unsigned long long)r.entries);
+    // The fixture made from a real disk's damage (zero-record): one entry left behind.
+    CHECK(check_path(img("reparse"), 0, &r, &seen) == 0 && r.problems == 1 &&
+          r.by_kind[UE_CHK_ENTRY_FREE_RECORD] == 1, "reparse: %llu problems", (unsigned long long)r.problems);
+    CHECK(!strcmp(seen.first[UE_CHK_ENTRY_FREE_RECORD].path, "/damaged/broken.txt"), "path %s",
+          seen.first[UE_CHK_ENTRY_FREE_RECORD].path);
+    CHECK(check_path(img("zeroboot"), 0, &r, &seen) == EINVAL, "not NTFS");
+    CHECK(check_path(img("hiber"), UE_CHECK_REPAIR, &r, &seen) == EPERM, "repair of a hibernated volume");
+}
+
+static void test_check_kinds(void)
+{
+    static const struct {
+        const char *name;
+        ue_check_kind_t kind, also;   // also: a kind that follows from the same damage
+        const char *path;
+        bool repairable;
+    } cases[] = {
+        { "chk-record-bit", UE_CHK_RECORD_UNMARKED, 0, "/d/a.bin", true },
+        { "chk-cluster-bits", UE_CHK_CLUSTERS_UNMARKED, 0, "/d/c.bin", true },
+        { "chk-shared", UE_CHK_CLUSTERS_SHARED, 0, "/d/b.bin", false },
+        { "chk-run-past", UE_CHK_BAD_RUNLIST, 0, "/d/a.bin", false },
+        { "chk-seq", UE_CHK_ENTRY_WRONG_SEQ, UE_CHK_ORPHAN, "/d/a.bin", false },
+        { "chk-torn", UE_CHK_BAD_RECORD, 0, "/d/a.bin", false },
+        { "chk-index", UE_CHK_INDEX_UNREADABLE, UE_CHK_ORPHAN, "/big", false },
+    };
+    ue_check_result_t r;
+    check_seen_t seen;
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int err = check_path(img(cases[i].name), 0, &r, &seen);
+        CHECK(err == 0, "%s: %s", cases[i].name, strerror(err));
+        CHECK(r.by_kind[cases[i].kind] == 1, "%s: %llu of %s", cases[i].name,
+              (unsigned long long)r.by_kind[cases[i].kind], ue_check_kind_name(cases[i].kind));
+        CHECK(r.problems == 1 + (cases[i].also ? r.by_kind[cases[i].also] : 0), "%s: %llu problems",
+              cases[i].name, (unsigned long long)r.problems);
+        CHECK(!cases[i].also || r.by_kind[cases[i].also] > 0, "%s: no %s", cases[i].name,
+              ue_check_kind_name(cases[i].also));
+        const ue_check_problem_t *p = &seen.first[cases[i].kind];
+        CHECK(!strcmp(p->path, cases[i].path), "%s: path %s", cases[i].name, p->path);
+        CHECK(p->repairable == cases[i].repairable && r.repairable == (cases[i].repairable ? 1u : 0u),
+              "%s: repairable %d", cases[i].name, p->repairable);
+        CHECK(r.state == UE_VOL_CLEAN && r.remaining == r.problems && !r.repair_ran, "%s: state", cases[i].name);
+    }
+    // Shared clusters name both files.
+    CHECK(check_path(img("chk-shared"), 0, &r, &seen) == 0 && seen.first[UE_CHK_CLUSTERS_SHARED].other > 0 &&
+          seen.first[UE_CHK_CLUSTERS_SHARED].other != UINT64_MAX, "no first owner");
+}
+
+static uint64_t file_sum(const char *path)
+{
+    uint64_t h = 1469598103934665603ull;
+    unsigned char b[65536];
+    ssize_t n;
+    int fd = open(path, O_RDONLY);
+    while (fd >= 0 && (n = read(fd, b, sizeof(b))) > 0)
+        for (ssize_t i = 0; i < n; i++)
+            h = (h ^ b[i]) * 1099511628211ull;
+    if (fd >= 0)
+        close(fd);
+    return h;
+}
+
+static void test_check_repair(void)
+{
+    char path[2048];
+    ue_check_result_t r;
+    check_seen_t seen;
+    ue_probe_t p;
+
+    // Bitmap bits only, on a volume marked dirty: repaired, checked clean, mark cleared.
+    snprintf(path, sizeof(path), "%s/x-chk-repair.img", dir);
+    CHECK(copyfile(img("chk-repairable"), path, NULL, COPYFILE_CLONE | COPYFILE_DATA) == 0, "copy");
+    int err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0, "repair: %s", strerror(err));
+    CHECK(r.state == UE_VOL_DIRTY && r.problems == 3 && r.repairable == 3 && r.repair_ran && r.repaired > 3 &&
+          r.remaining == 0 && r.dirty_cleared, "problems %llu repaired %llu remaining %llu cleared %d",
+          (unsigned long long)r.problems, (unsigned long long)r.repaired, (unsigned long long)r.remaining,
+          r.dirty_cleared);
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CLEAN, "after repair: %s", ue_vol_state_name(p.state));
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    unlink(path);
+
+    // One problem that is not a bitmap bit: nothing is written, the mark stays.
+    snprintf(path, sizeof(path), "%s/x-chk-mix.img", dir);
+    CHECK(copyfile(img("chk-mix"), path, NULL, COPYFILE_CLONE | COPYFILE_DATA) == 0, "copy");
+    uint64_t before = file_sum(path);
+    CHECK(check_path(path, UE_CHECK_REPAIR, &r, &seen) == 0, "check of the mix");
+    CHECK(!r.repair_ran && r.repaired == 0 && r.remaining == r.problems && r.problems > r.repairable &&
+          r.repairable > 0 && !r.dirty_cleared, "mix: ran %d repaired %llu", r.repair_ran,
+          (unsigned long long)r.repaired);
+    CHECK(file_sum(path) == before, "the mix was written to");
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_DIRTY, "mix: %s", ue_vol_state_name(p.state));
+    unlink(path);
+
+    // Nothing found on a dirty volume: only the mark is cleared. Read-only io: EROFS.
+    snprintf(path, sizeof(path), "%s/x-chk-dirty.img", dir);
+    CHECK(copyfile(img("dirty"), path, NULL, COPYFILE_CLONE | COPYFILE_DATA) == 0, "copy");
+    file_io_t f;
+    CHECK(file_io_open(&f, path, false) == 0, "open");
+    err = ue_check(&f.io, UE_CHECK_REPAIR, NULL, NULL, &r);
+    file_io_close(&f);
+    CHECK(err == EROFS, "repair on a read-only device: %s", strerror(err));
+    CHECK(check_path(path, UE_CHECK_REPAIR, &r, &seen) == 0 && r.problems == 0 && !r.repair_ran && r.dirty_cleared,
+          "dirty, nothing found: cleared %d", r.dirty_cleared);
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CLEAN, "still %s", ue_vol_state_name(p.state));
+    unlink(path);
+}
+
+// A copy cut off mid-way, as a kill or a pull leaves it (Tests/Fuse/interrupt.sh): the
+// engine writes through its page cache to a device that stops taking writes after `limit`
+// of them, at many cut points. The check must run on every result, must find damage on some,
+// and its repair must leave a clean volume whenever it runs.
+typedef struct {
+    uint8_t *mem;
+    uint64_t size;
+    long writes, limit;               // limit < 0: no limit; after it every write fails (gone)
+} cutdev_t;
+
+static int cut_pread(void *ctx, void *buf, size_t len, uint64_t off)
+{
+    cutdev_t *d = ctx;
+    if (off + len > d->size)
+        return EIO;
+    memcpy(buf, d->mem + off, len);
+    return 0;
+}
+
+static int cut_pwrite(void *ctx, const void *buf, size_t len, uint64_t off)
+{
+    cutdev_t *d = ctx;
+    if (off + len > d->size)
+        return EIO;
+    if (d->limit >= 0 && d->writes >= d->limit)
+        return ENXIO;
+    d->writes++;
+    memcpy(d->mem + off, buf, len);
+    return 0;
+}
+
+// cp -R of a tree with a write-back every few files, as the daemon's 1 s timer does.
+// Returns the writes that reached the device.
+static long cut_copy(cutdev_t *d)
+{
+    ue_io_t io = { .ctx = d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d->size, .block_size = 512,
+                   .writable = true };
+    ue_engine_t *e;
+    ue_attr_t root, sub, a;
+
+    d->writes = 0;
+    if (ue_open(&io, UE_OPEN_CACHE | UE_OPEN_GHOST_OPEN_ONLY, &e, NULL))
+        return -1;
+    if (ue_getattr(e, UE_ROOT_INO, &root) == 0 && ue_create(e, root.ino, "copy", UE_T_DIR, 0755, &sub) == 0) {
+        for (int i = 0; i < 4; i++) {
+            char name[32];
+            ue_attr_t dd;
+            snprintf(name, sizeof(name), "dir%d", i);
+            if (ue_create(e, sub.ino, name, UE_T_DIR, 0755, &dd))
+                break;
+            for (int j = 0; j < 120; j++) {
+                snprintf(name, sizeof(name), "file-with-a-long-name-%03d.bin", j);
+                if (ue_create(e, dd.ino, name, UE_T_REG, 0644, &a) ||
+                    write_gen(e, a.ino, 0, 1000 + (uint64_t)((i * 120 + j) * 997) % 30000, (uint64_t)j))
+                    break;
+                if (j % 25 == 24)
+                    ue_writeback(e, 0);
+            }
+        }
+    }
+    ue_close(e);
+    return d->writes;
+}
+
+static void test_check_cut_copy(void)
+{
+    cutdev_t d = { 0 };
+    int fd = open(img("small"), O_RDONLY);
+    CHECK(fd >= 0, "open small");
+    d.size = (uint64_t)lseek(fd, 0, SEEK_END);
+    uint8_t *orig = malloc(d.size);
+    d.mem = malloc(d.size);
+    CHECK(orig && d.mem && pread(fd, orig, d.size, 0) == (ssize_t)d.size, "read small");
+    close(fd);
+
+    memcpy(d.mem, orig, d.size);
+    d.limit = -1;
+    long total = cut_copy(&d);
+    CHECK(total > 20, "the copy made %ld writes", total);
+    int cuts = 0, damaged = 0, repaired = 0, mirror = 0;
+    for (long n = 3; n < total; n += total / 23 + 1, cuts++) {
+        memcpy(d.mem, orig, d.size);
+        d.limit = n;
+        cut_copy(&d);
+        d.limit = -1;
+        ue_io_t io = { .ctx = &d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d.size, .block_size = 512,
+                       .writable = true };
+        ue_check_result_t r, r2;
+        int err = ue_check(&io, 0, NULL, NULL, &r);
+        if (err) {                    // kept for a look: unlatch-engine probe/check
+            char path[2048];
+            snprintf(path, sizeof(path), "%s/x-cut-%ld.img", dir, n);
+            int out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (out >= 0 && write(out, d.mem, d.size) != (ssize_t)d.size)
+                fprintf(stderr, "  cannot save %s\n", path);
+            if (out >= 0)
+                close(out);
+        }
+        CHECK(err == 0, "cut at %ld of %ld: check failed: %s", n, total, strerror(err));
+        if (r.state == UE_VOL_CORRUPT) {   // cut between $MFT and $MFTMirr: chkdsk's to repair
+            CHECK(r.by_kind[UE_CHK_MFT_MIRROR] == 1 && r.problems == 1, "cut at %ld: corrupt, not the mirror", n);
+            mirror++;
+        } else
+            CHECK(r.state == UE_VOL_DIRTY, "cut at %ld: %s, not dirty", n, ue_vol_state_name(r.state));
+        if (r.problems)
+            damaged++;
+        if (r.problems && r.problems == r.repairable) {
+            CHECK(ue_check(&io, UE_CHECK_REPAIR, NULL, NULL, &r) == 0 && r.remaining == 0 && r.dirty_cleared,
+                  "cut at %ld: repair left %llu", n, (unsigned long long)r.remaining);
+            CHECK(ue_check(&io, 0, NULL, NULL, &r2) == 0 && r2.problems == 0 && r2.state == UE_VOL_CLEAN,
+                  "cut at %ld: %llu problems after repair", n, (unsigned long long)r2.problems);
+            repaired++;
+        }
+    }
+    printf("     %d cuts of %ld writes: %d damaged (%d $MFTMirr), %d repaired by setting bitmap bits\n", cuts, total,
+           damaged, mirror, repaired);
+    CHECK(damaged > 0, "no cut left damage the check found");
+    free(orig);
+    free(d.mem);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "readloop") == 0) {
@@ -1585,6 +1855,10 @@ int main(int argc, char **argv)
     }
     file_io_close(&rd_file);
 
+    RUN(test_check_clean);
+    RUN(test_check_kinds);
+    RUN(test_check_repair);
+    RUN(test_check_cut_copy);
     RUN(test_cache_model);
     RUN(test_cache_engine);
     RUN(test_dirty_mark);

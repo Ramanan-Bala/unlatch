@@ -199,3 +199,75 @@ func deadDaemonMountIsReaped() async throws {
     #expect(await service.status(bsd)?.mounted == false)
     try await service.eject(bsd)
 }
+
+// MARK: Check Disk (D-93)
+
+@Test func checkReportDecodesAndJudges() throws {
+    // unlatch-fuse --check output for chk-index.img (Scripts/test-engine.sh), cut to three problems.
+    let json = """
+        {"schema": 1, "problems": [{"kind": "index_unreadable", "repairable": false, "record": 69, "path": "/big", \
+        "detail": "the directory's index cannot be read"}, {"kind": "orphan", "repairable": false, "record": 70, \
+        "path": "/big/f00000", "detail": "x"}, {"kind": "orphan", "repairable": false, "record": 71, "path": \
+        "/big/f00001", "detail": "y"}], "state": "clean", "records": 370, "recordsInUse": 325, "directories": 4, \
+        "entries": 20, "clusters": 8191, "clustersInUse": 743, "lostRecords": 0, "lostClusters": 0, "found": 3, \
+        "repairable": 0, "repaired": 0, "remaining": 3, "repairRan": false, "dirtyCleared": false, "exitCode": 4}
+        """
+    let r = try JSONDecoder().decode(CheckReport.self, from: Data(json.utf8))
+    #expect(r.verdict == .needsWindows && r.problems.count == 3 && r.problems[0].other == nil)
+    #expect(r.kinds.map(\.kind) == ["index_unreadable", "orphan"] && r.kinds[1].count == 2)
+    #expect(CheckReport.describe("orphan", count: 2) == "2 files no folder lists")
+
+    func report(found: UInt64, repairable: UInt64, remaining: UInt64, ran: Bool) throws -> CheckReport {
+        let j = """
+            {"schema": 1, "problems": [], "state": "dirty", "records": 1, "recordsInUse": 1, "directories": 1, \
+            "entries": 1, "clusters": 1, "clustersInUse": 1, "lostRecords": 0, "lostClusters": 0, "found": \(found), \
+            "repairable": \(repairable), "repaired": 0, "remaining": \(remaining), "repairRan": \(ran), \
+            "dirtyCleared": false, "exitCode": 0}
+            """
+        return try JSONDecoder().decode(CheckReport.self, from: Data(j.utf8))
+    }
+    #expect(try report(found: 0, repairable: 0, remaining: 0, ran: false).verdict == .clean)
+    #expect(try report(found: 2, repairable: 2, remaining: 2, ran: false).verdict == .repairable)
+    #expect(try report(found: 2, repairable: 2, remaining: 0, ran: true).verdict == .repaired)
+    #expect(try report(found: 3, repairable: 2, remaining: 3, ran: false).verdict == .needsWindows)
+}
+
+@Test(.enabled(if: integration), .timeLimit(.minutes(2)))
+func checkUnmountsChecksAndRemounts() async throws {
+    let service = try MountService(daemon: root.appendingPathComponent("build/DerivedData/Build/Products/Debug/unlatch-fuse"))
+    let bsd = try attachFreshImage("corecheck", mount: false)
+    let r = try await service.mount(bsd)
+    try "hello".write(toFile: r.mountPoint + "/hello.txt", atomically: false, encoding: .utf8)
+    let report = try await service.check(bsd)
+    #expect(report.verdict == .clean && report.found == 0 && report.recordsInUse > 16)
+    #expect(try await service.disk(bsd).owner == .unlatch)          // mounted again
+    try await service.eject(bsd)
+}
+
+@Test(.enabled(if: integration), .timeLimit(.minutes(2)))
+func checkRepairsBitmapsAndClearsTheMark() async throws {
+    let mkfixture = root.appendingPathComponent("build/test-engine/mkfixture"), setDirty = root.appendingPathComponent("build/test-engine/set_dirty")
+    try #require(FileManager.default.isExecutableFile(atPath: mkfixture.path), "run Scripts/test-engine.sh first")
+    let service = try MountService(daemon: root.appendingPathComponent("build/DerivedData/Build/Products/Debug/unlatch-fuse"))
+    let bsd = try attachFreshImage("corerepair", mount: false)
+    try await service.eject(bsd)
+    let img = root.appendingPathComponent("build/core-test/corerepair.img").path
+    let p = Process()
+    p.executableURL = mkfixture
+    p.arguments = [img]
+    let input = Pipe()
+    p.standardInput = input
+    try p.run()
+    input.fileHandleForWriting.write(Data("file /a.bin 20000 1\nclear-record-bit /a.bin\nclear-cluster-bits /a.bin\n".utf8))
+    input.fileHandleForWriting.closeFile()
+    p.waitUntilExit()
+    _ = try run([setDirty.path, img])
+    let out = try run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-nomount", img])
+    let dev = String(try #require(out.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).first).dropFirst(5))
+    let found = try await service.check(dev)
+    #expect(found.verdict == .repairable && found.found == 2 && found.state == "dirty")
+    let fixed = try await service.check(dev, repair: true)
+    #expect(fixed.verdict == .repaired && fixed.dirtyCleared && fixed.remaining == 0)
+    #expect(try await service.check(dev).verdict == .clean)
+    try await service.eject(dev)
+}

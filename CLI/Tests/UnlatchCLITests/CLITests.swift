@@ -13,10 +13,11 @@ private func disk(_ bsd: String, label: String, mount: String? = nil) -> DiskInf
 @Test func parsesEverySubcommand() {
     for args in [["list"], ["list", "--json"], ["mount", "disk6s1"], ["mount", "-r", "disk6s1"], ["mount", "--read-only", "X"],
                  ["unmount", "disk6s1", "--force"], ["eject", "/dev/disk6"], ["status"], ["status", "disk6s1", "--json"],
+                 ["check", "disk6s1"], ["check", "--repair", "--json", "disk6s1"], ["check", "X", "--no-remount"],
                  ["doctor"], ["install-helper"], ["uninstall-helper"]] {
         #expect(UnlatchCLI.parseExit(args) == .success, "\(args)")
     }
-    for args in [["mount"], ["frobnicate"], ["list", "--nope"], ["unmount"]] {
+    for args in [["mount"], ["frobnicate"], ["list", "--nope"], ["unmount"], ["check"], ["check", "--fix", "X"]] {
         #expect(UnlatchCLI.parseExit(args) == .usage, "\(args)")
     }
 }

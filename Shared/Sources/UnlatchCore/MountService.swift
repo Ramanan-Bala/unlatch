@@ -239,44 +239,98 @@ public actor MountService {
         if readOnly { args.append("-r") }
         if markChecked { args.append("--mark-checked") } else if dirtyReadWrite { args.append("--dirty-rw") }
         args += [device, mountPoint]
-        var errPipe: [Int32] = [0, 0]
-        guard pipe(&errPipe) == 0 else { throw MountError.daemonFailed("pipe: \(String(cString: strerror(errno)))") }
+        let (st, _, errText) = try spawn(daemon, args: args, fd: fd, captureStdout: false)
+        guard (st & 0x7f) == 0 && ((st >> 8) & 0xff) == 0 else {
+            let why = errText.split(separator: "\n").last.map { $0.replacingOccurrences(of: "unlatch-fuse: ", with: "") }
+            throw MountError.daemonFailed(why ?? "unlatch-fuse exited with status \(st)")
+        }
+    }
+
+    /// Runs `args` with the device on fd 3 and waits for it. Returns its wait status, its
+    /// stdout (when captured) and its stderr.
+    private static func spawn(_ tool: URL, args: [String], fd: Int32, captureStdout: Bool) throws -> (Int32, Data, String) {
+        var errPipe: [Int32] = [0, 0], outPipe: [Int32] = [-1, -1]
+        guard pipe(&errPipe) == 0, !captureStdout || pipe(&outPipe) == 0 else {
+            throw MountError.daemonFailed("pipe: \(String(cString: strerror(errno)))")
+        }
         // Move every descriptor the spawn juggles above 9 first. Otherwise one of them can be
         // 2 or 3 itself (the helper's socket just freed fd 3, and the pipe took it), and the
         // dup2/close actions below would close the device they had just put on fd 3.
         let dev = fcntl(fd, F_DUPFD_CLOEXEC, 10)
         let errRead = fcntl(errPipe[0], F_DUPFD_CLOEXEC, 10)
         let errWrite = fcntl(errPipe[1], F_DUPFD_CLOEXEC, 10)
-        close(errPipe[0])
-        close(errPipe[1])
+        let outRead = captureStdout ? fcntl(outPipe[0], F_DUPFD_CLOEXEC, 10) : -1
+        let outWrite = captureStdout ? fcntl(outPipe[1], F_DUPFD_CLOEXEC, 10) : -1
+        for p in errPipe + outPipe where p >= 0 { close(p) }
         defer { close(dev) }
-        guard dev >= 0, errRead >= 0, errWrite >= 0 else {
+        guard dev >= 0, errRead >= 0, errWrite >= 0, !captureStdout || (outRead >= 0 && outWrite >= 0) else {
             throw MountError.daemonFailed("descriptors: \(String(cString: strerror(errno)))")
         }
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
-        // dup2 clears close-on-exec on the copies, so only fds 2 and 3 reach the daemon
-        // (plus 0 and 1); a stray copy of the pipe's write end would keep the read below open.
+        // dup2 clears close-on-exec on the copies, so only fds 1 (when captured), 2 and 3 reach
+        // the tool (plus 0); a stray copy of a pipe's write end would keep the reads below open.
         posix_spawn_file_actions_adddup2(&actions, dev, 3)
         posix_spawn_file_actions_adddup2(&actions, errWrite, 2)
+        if captureStdout { posix_spawn_file_actions_adddup2(&actions, outWrite, 1) }
         var pid: pid_t = 0
         let cargs = args.map { strdup($0) } + [nil]
         defer { cargs.forEach { free($0) } }
-        let rc = posix_spawn(&pid, daemon.path, &actions, nil, cargs, environ)
+        let rc = posix_spawn(&pid, tool.path, &actions, nil, cargs, environ)
         close(errWrite)
+        if outWrite >= 0 { close(outWrite) }
         guard rc == 0 else {
             close(errRead)
-            throw MountError.daemonFailed("\(daemon.path): \(String(cString: strerror(rc)))")
+            if outRead >= 0 { close(outRead) }
+            throw MountError.daemonFailed("\(tool.path): \(String(cString: strerror(rc)))")
         }
+        // stdout first: the report can be large; stderr carries a few lines at most.
+        let out = outRead >= 0 ? FileHandle(fileDescriptor: outRead, closeOnDealloc: true).readDataToEndOfFile() : Data()
         let errText = String(decoding: FileHandle(fileDescriptor: errRead, closeOnDealloc: true).readDataToEndOfFile(),
                              as: UTF8.self)
         var st: Int32 = 0
         waitpid(pid, &st, 0)
-        guard (st & 0x7f) == 0 && ((st >> 8) & 0xff) == 0 else {
-            let why = errText.split(separator: "\n").last.map { $0.replacingOccurrences(of: "unlatch-fuse: ", with: "") }
-            throw MountError.daemonFailed(why ?? "unlatch-fuse exited with status \(st)")
+        return (st, out, errText)
+    }
+
+    // MARK: check
+
+    /// Check Disk (D-93): unmounts the volume (whoever has it), opens its device as a mount
+    /// does (through the helper for real disks; writable only to repair) and runs
+    /// `unlatch-fuse --check [--repair]`. A volume that was mounted is mounted again by Unlatch
+    /// afterwards, unless `remount` is false.
+    public func check(_ bsdName: String, repair: Bool = false, remount: Bool = true) async throws -> CheckReport {
+        var info = try disk(bsdName)
+        let wasMounted = info.owner != .none
+        if wasMounted {
+            try await unmount(info.bsdName)
+            info = try disk(bsdName)
         }
+        let report: CheckReport
+        do {
+            let fd = try opener.open(Self.rawPath(info.devicePath), writable: repair)
+            defer { close(fd) }
+            let daemon = self.daemon, device = info.devicePath
+            report = try await Task.detached { try Self.spawnCheck(daemon, fd: fd, device: device, repair: repair) }.value
+            log.notice("checked \(info.bsdName, privacy: .public): \(report.found, privacy: .public) found, \(report.remaining, privacy: .public) left")
+        } catch {
+            if wasMounted, remount { _ = try? await mount(info.bsdName) }
+            throw error
+        }
+        if wasMounted, remount { _ = try? await mount(info.bsdName) }
+        return report
+    }
+
+    static func spawnCheck(_ daemon: URL, fd: Int32, device: String, repair: Bool) throws -> CheckReport {
+        let args = [daemon.path, "--check"] + (repair ? ["--repair"] : []) + ["--fd", "3", device]
+        let (status, out, errText) = try spawn(daemon, args: args, fd: fd, captureStdout: true)
+        if let r = try? JSONDecoder().decode(CheckReport.self, from: out) {
+            if let e = r.error { throw MountError.refused("The check could not run: \(e).") }
+            return r
+        }
+        let why = errText.split(separator: "\n").last.map { $0.replacingOccurrences(of: "unlatch-fuse: ", with: "") }
+        throw MountError.refused("The check could not run: \(why ?? "unlatch-fuse exited with status \(status)").")
     }
 
     // MARK: unmount / eject

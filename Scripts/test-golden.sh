@@ -62,6 +62,9 @@ for z in "${images[@]}"; do
             *) echo "  $name: unknown expectation '$kind'" >&2; bad=1 ;;
         esac
     done < "$exp"
+    # Check Disk (D-93) finds nothing on any golden image, Windows-made ones included.
+    checks=$((checks + 1))
+    "$eng" check "$img" > "$out/$name.check" 2>&1 || { echo "  $name: check: $(grep -v '^[a-z ]*: ' "$out/$name.check" | head -3)" >&2; bad=1; }
     if [ "$bad" = 0 ]; then echo "ok   $name"; else echo "FAIL $name" >&2; fails=$((fails + 1)); fi
 done
 echo "test-golden: ${#images[@]} images, $checks checks, $fails failed"

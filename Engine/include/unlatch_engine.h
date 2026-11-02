@@ -161,6 +161,63 @@ typedef struct {
 int  ue_writeback(ue_engine_t *e, uint32_t min_age_ms);
 void ue_get_cache_stats(const ue_engine_t *e, ue_cache_stats_t *out);
 
+// Check Disk (D-93). ue_check opens the volume itself, read-only, and checks that every MFT
+// record in use is marked in $MFT's bitmap, every cluster a file's runlist uses is marked in
+// $Bitmap and belongs to that file only, every directory index can be read and points at
+// records in use with matching sequence numbers, and every named file is in some directory.
+// Each problem goes to fn (may be NULL) as it is found. The problem's path names the file (or
+// the directory and entry) when one can be found, "" otherwise.
+//
+// UE_CHECK_REPAIR (needs io->writable) does the one safe repair: it sets the bitmap bits of
+// records and clusters in use, so at worst space is lost and nothing is overwritten. It runs
+// only when every problem found is of that kind; anything else is reported and nothing is
+// written. Then the volume is checked again, and its dirty mark (D-86) is cleared only when
+// that check finds nothing. A volume with nothing found that is marked dirty is only unmarked.
+// Hibernated and unclean-journal volumes hold Windows' unfinished changes: REPAIR returns
+// EPERM for them. Returns 0 when the check ran (problems or not), or an errno: EINVAL for a
+// volume that is not NTFS, EIO for one too damaged to open (other than UE_CHK_MFT_MIRROR,
+// which is reported with state CORRUPT), EROFS, EPERM.
+enum { UE_CHECK_REPAIR = 1 };
+typedef enum {
+    UE_CHK_RECORD_UNMARKED = 1,       // a record in use is free in $MFT's bitmap (repairable)
+    UE_CHK_CLUSTERS_UNMARKED,         // clusters a file uses are free in $Bitmap (repairable)
+    UE_CHK_CLUSTERS_SHARED,           // clusters claimed by two files (other: the first owner)
+    UE_CHK_BAD_RUNLIST,               // a runlist that cannot be read or runs past the volume
+    UE_CHK_BAD_RECORD,                // a record in use that cannot be read (torn or damaged)
+    UE_CHK_INDEX_UNREADABLE,          // a directory whose index cannot be read
+    UE_CHK_ENTRY_FREE_RECORD,         // a directory entry points at a record not in use
+    UE_CHK_ENTRY_WRONG_SEQ,           // a directory entry's sequence number does not match
+    UE_CHK_ORPHAN,                    // a named file that no directory lists
+    UE_CHK_MFT_MIRROR,                // $MFTMirr does not match $MFT: libntfs-3g cannot open
+                                      // the volume at all, so this is the only problem reported
+    UE_CHK_KINDS
+} ue_check_kind_t;
+typedef struct {
+    ue_check_kind_t kind;
+    bool repairable;
+    uint64_t rec;                     // the record concerned (the directory, for entries)
+    uint64_t other;                   // the record an entry points at; the first owner of shared clusters
+    uint64_t lcn, count;              // first cluster and number of clusters, for cluster kinds
+    char path[1024];                  // UTF-8, "" when none could be found
+    char detail[256];                 // one line, for people
+} ue_check_problem_t;
+typedef void (*ue_check_fn)(void *ctx, const ue_check_problem_t *p);
+typedef struct {
+    ue_vol_state_t state;             // the volume's state before the check
+    uint64_t records, records_in_use, directories, entries;
+    uint64_t clusters, clusters_in_use;
+    uint64_t lost_records, lost_clusters;   // marked in a bitmap, used by nothing: space only
+    uint64_t problems, repairable;    // what the check found (by_kind counts each kind)
+    uint64_t by_kind[UE_CHK_KINDS];
+    uint64_t repaired;                // bitmap bits set by the repair
+    uint64_t remaining;               // problems the last check found (after any repair)
+    bool repair_ran;
+    bool dirty_cleared;               // the volume was marked dirty and is not any more
+} ue_check_result_t;
+int  ue_check(const ue_io_t *io, uint32_t flags, ue_check_fn fn, void *ctx, ue_check_result_t *out);
+/// Short lowercase name of a kind: "record_unmarked", "clusters_shared", ...
+const char *ue_check_kind_name(ue_check_kind_t kind);
+
 #ifdef __cplusplus
 }
 #endif

@@ -60,10 +60,10 @@ public struct UnlatchCommand: AsyncParsableCommand {
         <disk> is a BSD name (disk6s1), a device path (/dev/disk6s1), a mount path or a volume label.
 
         Exit codes: 0 success, 1 error, 2 usage, 3 mounted but forced read-only (the reason is printed),
-        4 macFUSE missing or not allowed. JSON output is versioned ("schema": 1); see docs/cli.md.
+        4 macFUSE missing or not allowed, 5 check found problems it did not repair. JSON output is versioned ("schema": 1); see docs/cli.md.
         """,
         version: Unlatch.version,
-        subcommands: [List.self, MountCmd.self, Unmount.self, Eject.self, Status.self, Doctor.self,
+        subcommands: [List.self, MountCmd.self, Unmount.self, Eject.self, Status.self, Check.self, Doctor.self,
                       SetupCmd.self, InstallHelper.self, UninstallHelper.self]
     )
 
@@ -232,5 +232,55 @@ struct Status: AsyncParsableCommand {
                 print("  not checked by Unlatch yet")
             }
         }
+    }
+}
+
+struct Check: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Check a volume for damage (Check Disk), and repair what is safe to repair.",
+        discussion: """
+        The volume is unmounted first and mounted again afterwards. The check reads only. --repair sets the \
+        bitmap bits of records and clusters in use (nothing is overwritten) when that is all that is wrong, and \
+        clears the volume's dirty mark when nothing is left. Anything else needs Windows' chkdsk.
+        """)
+    @Argument(help: "The volume.") var disk: String
+    @Flag(help: "Repair what is safe to repair, and clear the dirty mark when nothing is left.") var repair = false
+    @Flag(help: "JSON output (schema 1).") var json = false
+    @Flag(help: "Leave the volume unmounted afterwards.") var noRemount = false
+
+    func run() async throws {
+        let s = try service()
+        let d = try resolve(disk, in: await s.list())
+        let r: CheckReport
+        do { r = try await s.check(d.bsdName, repair: repair, remount: !noRemount) } catch {
+            throw fail(error.localizedDescription, Exit.of(error))
+        }
+        let left: Exit = r.remaining > 0 ? .problems : .success
+        if json {
+            print(JSONOut.encode(JSONOut.Checked(bsdName: d.bsdName, verdict: JSONOut.verdict(r.verdict), advice: r.advice,
+                                                 report: r)))
+            if left != .success { throw CLIExit(code: left) }
+            return
+        }
+        let name = d.label.isEmpty ? d.bsdName : "\(d.label) (\(d.bsdName))"
+        print("Checked \(name): \(r.recordsInUse) records in use, \(r.directories) folders, \(r.entries) folder entries.")
+        if r.found == 0 {
+            print("No problems found.")
+        } else {
+            print("Found \(r.found) problem\(r.found == 1 ? "" : "s"):")
+            for k in r.kinds { print("  \(CheckReport.describe(k.kind, count: k.count))") }
+            let shown = 20
+            for p in r.problems.prefix(shown) {
+                print("    \(p.path.isEmpty ? "record \(p.record)" : p.path): \(p.detail)")
+            }
+            if r.problems.count > shown { print("    ... and \(r.problems.count - shown) more (--json lists them all)") }
+        }
+        if r.repairRan { print("Repaired \(r.repaired) bitmap bit\(r.repaired == 1 ? "" : "s").") }
+        print(r.advice)
+        if r.verdict == .repairable && !repair { print("To repair: unlatch check --repair \(d.bsdName)") }
+        if r.lostClusters > 0 || r.lostRecords > 0 {
+            print("(\(r.lostClusters) clusters and \(r.lostRecords) records are marked used but belong to nothing: space only.)")
+        }
+        if left != .success { throw CLIExit(code: left) }
     }
 }

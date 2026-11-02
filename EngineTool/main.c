@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "check_report.h"
 #include "file_io.h"
 #include "fsx.h"
 #include "unlatch_engine.h"
@@ -24,6 +25,8 @@ static void usage(FILE *out)
             "  probe <img>          safety probe: state, reason, label, sizes\n"
             "  info [--rw] <img>    open the volume (read-only unless --rw) and print it\n"
             "  mark-clean <img>     clear the dirty mark of a volume that was checked (D-86)\n"
+            "  check [--repair] [--json] <img>   Check Disk (D-93): exit 0 nothing found, 1 all\n"
+            "                       repaired, 4 problems left, 8 the check could not run\n"
             "  ls [--stats] <img> [path]   list a directory (type, size, name)\n"
             "  stat <img> <path>    print a file's attributes\n"
             "  cat <img> <path>     write a file's contents to stdout\n"
@@ -79,6 +82,33 @@ static int cmd_probe(const char *path)
 // clear_dirty: open read-write with UE_OPEN_CLEAR_DIRTY, so the close clears the dirty mark.
 // Only for a volume that was checked (Scripts/test-real-disk.sh: snapshot, ntfsfix -n,
 // check-readonly); Windows' chkdsk is the real check.
+static int cmd_check(int argc, char **argv)
+{
+    bool repair = false, json = false;
+    file_io_t f;
+    int i, err, code;
+
+    for (i = 2; i < argc - 1; i++) {
+        if (!strcmp(argv[i], "--repair"))
+            repair = true;
+        else if (!strcmp(argv[i], "--json"))
+            json = true;
+        else
+            break;
+    }
+    if (i != argc - 1) {
+        usage(stderr);
+        return EX_USAGE;
+    }
+    if ((err = file_io_open(&f, argv[i], repair))) {
+        fprintf(stderr, "unlatch-engine: %s: %s\n", argv[i], strerror(err));
+        return CHECK_FAILED;
+    }
+    code = check_report(&f.io, repair, json, stdout);
+    file_io_close(&f);
+    return code;
+}
+
 static int cmd_info(const char *path, bool rw, bool clear_dirty)
 {
     file_io_t f;
@@ -552,6 +582,8 @@ int main(int argc, char **argv)
         return cmd_info(argv[2], false, false);
     if (argc == 4 && strcmp(argv[1], "info") == 0 && strcmp(argv[2], "--rw") == 0)
         return cmd_info(argv[3], true, false);
+    if (argc >= 3 && strcmp(argv[1], "check") == 0)
+        return cmd_check(argc, argv);
     if (argc == 3 && strcmp(argv[1], "mark-clean") == 0)
         return cmd_info(argv[2], true, true);
     if (argc >= 3 && strcmp(argv[1], "ls") == 0) {

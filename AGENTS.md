@@ -30,6 +30,7 @@ Each step updates this list.
 | Build unlatch-fuse and the helper with clang only (the Homebrew formula's path) | `Scripts/build-tools.sh <outdir>` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
 | Test on a real, disposable NTFS disk (both backends, big and small files, kill, snapshot check; prompts for replug, pull and sleep) | `Scripts/test-real-disk.sh <disk> [--quick] [--no-physical] [--fill] [--bench] [--cut] [--only s1,s2]` → `build/real-disk/` |
+| Check Disk (D-93): check an image or device; `--repair` sets missing bitmap bits and clears the dirty mark when nothing is left. Exit 0 clean, 1 repaired, 4 problems left, 8 could not check | `unlatch-engine check [--repair] [--json] <img\|/dev/fd/N>`; through the helper: `unlatch-fuse --check [--repair] --fd N <dev>`; `unlatch check <disk> [--repair] [--json]` |
 | Clear the dirty mark of a checked volume (D-86, D-89) | `unlatch-engine mark-clean <img\|/dev/fd/N>` |
 | Run a command on a real disk through the helper (fd 3), or snapshot it | `Tests/Fuse/with-device.py <diskNsM> ro\|rw <cmd> {}`; `... ro --snapshot <out.img>` |
 | Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
@@ -59,7 +60,7 @@ Each step updates this list.
 | Inspect an image | `build/ntfs3g/bin/ntfsinfo -m t1.img`, `build/ntfs3g/bin/ntfsls -s t1.img` |
 | Attach an image as a block device, unmounted (prints `diskN`) | `Scripts/attach-image.sh t1.img`; detach with `hdiutil detach diskN` |
 
-Fixture reparse points: `mkfixture` `reparse PATH symlink-rel|symlink-abs|junction TARGET`.
+Fixture reparse points: `mkfixture` `reparse PATH symlink-rel|symlink-abs|junction TARGET`. Planted damage for Check Disk: `clear-record-bit`, `clear-cluster-bits`, `share-clusters PATH OTHER`, `run-past`, `bump-seq`, `tear-record`, `zero-index DIR`, `zero-record` (header of `mkfixture.c`).
 
 ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster ntfscmp ntfscp ntfsfix ntfsinfo ntfslabel ntfsls ntfsresize ntfsundelete`. Put images under `build/` (ignored) or anywhere else outside the repo; `*.img` is ignored everywhere.
 

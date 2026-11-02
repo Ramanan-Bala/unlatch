@@ -2,6 +2,7 @@
 // unlatch-fuse: mounts an NTFS image or device through macFUSE (plan Step 08, D-40).
 //
 //   unlatch-fuse [-f] [-d] [-r] [--backend auto|fskit|kext] [-o opt,...] <image-or-device> <mountpoint>
+//   unlatch-fuse --check [--repair] [--fd N] <image-or-device>     Check Disk, JSON on stdout (D-93)
 //
 // The default backend is macFUSE's FSKit backend, which needs no kernel extension and so no
 // trip to Recovery. It mounts only directly under /Volumes, so other mount points (tests,
@@ -33,6 +34,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "check_report.h"
 #include "file_io.h"
 #include "log.h"
 #include "ops.h"
@@ -56,7 +58,13 @@ static void usage(void)
             "                state; hibernated, unclean or damaged volumes stay read-only). The\n"
             "                mark stays, so Windows still checks the disk (D-90)\n"
             "  --mark-checked like --dirty-rw, and a clean unmount clears the mark: the user has\n"
-            "                decided the volume is fine, and it mounts read-write from then on (D-92)\n");
+            "                decided the volume is fine, and it mounts read-write from then on (D-92)\n"
+            "\n"
+            "       unlatch-fuse --check [--repair] [--fd N] <image-or-device>\n"
+            "  --check       check the volume instead of mounting it; a JSON report on stdout (D-93).\n"
+            "                Exit 0 nothing found, 1 all repaired, 4 problems left, 8 could not check\n"
+            "  --repair      with --check: set the bitmap bits of what is in use, when that is all\n"
+            "                that is wrong, and clear the dirty mark when nothing is left\n");
 }
 
 // Dirty cached pages older than this are written back, so a crash or unplug loses at most
@@ -383,6 +391,45 @@ static void escape_opt(const char *in, char *out, size_t cap)
     out[o] = 0;
 }
 
+// --check: the volume is locked like a mount (D-81: shared to check, exclusive to repair), so
+// no Unlatch mount can write to it meanwhile, then checked (D-93). The report goes to stdout.
+static int check_volume(const char *path, int dev_fd, bool repair)
+{
+    char source[PATH_MAX];
+    file_io_t f;
+    ue_probe_t p;
+    int err, lock_fd = -1;
+
+    uf_log_init();
+    raw_path(path, source, sizeof(source));
+    bool fd_writable = dev_fd >= 0 && (fcntl(dev_fd, F_GETFL) & O_ACCMODE) == O_RDWR;
+    if (repair && dev_fd >= 0 && !fd_writable) {
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s was handed over read-only; it cannot be repaired", source);
+        close(dev_fd);
+        return CHECK_FAILED;
+    }
+    if ((err = dev_fd >= 0 ? file_io_from_fd(&f, dev_fd, fd_writable) : file_io_open(&f, source, repair))) {
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", source, strerror(err));
+        return CHECK_FAILED;
+    }
+    if (ue_probe(&f.io, &p) == 0 && p.state != UE_VOL_NOT_NTFS && (err = lock_volume(p.serial, repair, &lock_fd))) {
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", source,
+               err == EBUSY ? "this volume is mounted; unmount it first" : strerror(err));
+        file_io_close(&f);
+        return CHECK_FAILED;
+    }
+    uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "checking %s%s", source, repair ? " (repair)" : "");
+    int code = check_report(&f.io, repair, true, stdout);
+    fflush(stdout);
+    uf_log(UF_LOG_MOUNT, code >= CHECK_PROBLEMS ? OS_LOG_TYPE_ERROR : OS_LOG_TYPE_DEFAULT, "checked %s: %s", source,
+           code == CHECK_CLEAN ? "nothing found" : code == CHECK_REPAIRED ? "repaired"
+           : code == CHECK_PROBLEMS ? "problems left" : "the check could not run");
+    file_io_close(&f);
+    if (lock_fd >= 0)
+        close(lock_fd);
+    return code;
+}
+
 int main(int argc, char **argv)
 {
     static const struct option longopts[] = {
@@ -393,11 +440,14 @@ int main(int argc, char **argv)
         { "no-cache", no_argument, NULL, 'C' },
         { "dirty-rw", no_argument, NULL, 'W' },
         { "mark-checked", no_argument, NULL, 'K' },
+        { "check", no_argument, NULL, 'X' },
+        { "repair", no_argument, NULL, 'P' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     const char *backend = "auto", *extra = NULL;
     bool foreground = false, debug = false, want_ro = false, cache = true, dirty_rw = false, mark_checked = false;
+    bool check = false, repair = false;
     int ch, ready_fd = -1, dev_fd = -1;
 
     while ((ch = getopt_long(argc, argv, "fdro:h", longopts, NULL)) != -1) {
@@ -412,8 +462,17 @@ int main(int argc, char **argv)
         case 'C': cache = false; break;
         case 'W': dirty_rw = true; break;
         case 'K': dirty_rw = mark_checked = true; break;
+        case 'X': check = true; break;
+        case 'P': repair = true; break;
         default: usage(); return ch == 'h' ? 0 : 2;
         }
+    }
+    if (check || repair) {
+        if (!check || argc - optind != 1) {
+            usage();
+            return 2;
+        }
+        return check_volume(argv[optind], dev_fd, repair);
     }
     if (argc - optind != 2 || (strcmp(backend, "auto") && strcmp(backend, "fskit") && strcmp(backend, "kext"))) {
         usage();

@@ -8,7 +8,8 @@
 #   kill     SIGKILL the daemon mid-copy (a crash): the mount must go away, the next probe
 #            must say DIRTY (D-86), ntfsfix -n must accept the volume, the next mount must be
 #            read-only and see the files that were complete before the last write-back, and
-#            once the mark is cleared (ntfsfix -d, standing in for chkdsk) a read-write mount
+#            once Check Disk has cleared the mark (D-93; when it finds damage, that is reported
+#            and nothing more is written) a read-write mount
 #            must work and leave the volume clean.
 #   detach   force-eject the disk mid-copy (a surprise unplug): the daemon must exit without
 #            hanging, and the same checks apply after re-attaching the image.
@@ -52,8 +53,17 @@ check_after() {         # scenario, disk; the image is attached as disk, nothing
     else
         note "$name" "FAIL: read-only remount"; rc=1
     fi
-    # Stands in for chkdsk on Windows: the checks above found nothing wrong.
-    "$ntfsfix" -d "/dev/$disk" > "$work/fix.txt" 2>&1 || { note "$name" "FAIL: ntfsfix -d: $(tail -1 "$work/fix.txt")"; return 1; }
+    # Check Disk (D-93) clears the mark only when it finds nothing left after its safe repair.
+    # A cut-off write-back can leave damage only chkdsk repairs (a folder whose index block was
+    # never written, $MFTMirr behind $MFT): reported, and the volume is not written to.
+    local crc=0
+    "$fuse" --check --repair "/dev/$disk" > "$work/check.json" 2> "$work/check.err" || crc=$?
+    case $crc in
+        0|1) note "$name" "check disk: $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%d found, %d repaired, mark cleared: %s" % (d["found"], d["repaired"], d["dirtyCleared"]))' "$work/check.json")" ;;
+        4) note "$name" "check disk found damage for chkdsk: $(python3 -c 'import json,sys,collections; d=json.load(open(sys.argv[1])); print(dict(collections.Counter(p["kind"] for p in d["problems"])))' "$work/check.json")"
+           return $rc ;;
+        *) note "$name" "FAIL: check disk: $(tail -1 "$work/check.err")"; return 1 ;;
+    esac
     if "$fuse" --backend "$backend" "/dev/$disk" "$mnt" 2>/dev/null; then
         mount | grep " on $mnt " | grep -q read-only && { note "$name" "FAIL: read-only after the mark was cleared"; rc=1; }
         cp -R "$src/include" "$mnt/after" && diff -r "$src/include" "$mnt/after" > /dev/null \

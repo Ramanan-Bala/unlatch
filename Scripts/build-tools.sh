@@ -25,7 +25,7 @@ for c in Engine/src/*.c; do
     objs+=("$o")
 done
 clang "${cflags[@]}" -IEngine/include -IEngineTool -isystem "$fuse/include/fuse3" \
-    Fuse/*.c EngineTool/file_io.c "${objs[@]}" build/ntfs3g/lib/libntfs-3g.a \
+    Fuse/*.c EngineTool/file_io.c EngineTool/check_report.c "${objs[@]}" build/ntfs3g/lib/libntfs-3g.a \
     -L"$fuse/lib" -lfuse3 -framework CoreFoundation -framework DiskArbitration -o "$out/unlatch-fuse"
 clang "${cflags[@]}" Helper/main.c Helper/policy.c -framework CoreFoundation -framework DiskArbitration \
     -o "$out/io.github.ramanan-bala.unlatch.helper"

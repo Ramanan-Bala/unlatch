@@ -883,7 +883,31 @@ Resolved: the app "found not running" twice during the real-disk tests had been 
 
 Owner's report after beta.9: right after Mark as Checked the badge said "Read-write, unchecked" and the menu offered it again (the status record kept the probe's DIRTY). The daemon now records the mount as CLEAN, "marked as checked"; `unlatch status` shows it at once, and the disk probes clean after the eject.
 
+### Follow-up: Check Disk (D-93) — done 2026-11-02
+
+- Engine: `ue_check` and `ue_check_kind_name` in `Engine/src/check.c` (additive; ABI stays 1). Harness `unlatch-engine check [--repair] [--json]`; shared output in `EngineTool/check_report.c` (exit 0 clean, 1 repaired, 4 problems left, 8 could not check). `unlatch-fuse --check [--repair] [--fd N] <dev>`. `CheckReport` and `MountService.check(_:repair:remount:)` in UnlatchCore; `unlatch check <disk> [--repair] [--json] [--no-remount]` (exit 5 when problems are left); "Check Disk…" first in the ⋯ menu of a dirty or corrupt disk, with Repair / Clear Mark / Copy Report alerts.
+- `mkfixture` plants damage: `clear-record-bit`, `clear-cluster-bits`, `share-clusters`, `run-past`, `bump-seq`, `tear-record`, `zero-index`. `Scripts/test-engine.sh` builds `chk-*.img`; `test_engine` has `test_check_clean`, `test_check_kinds`, `test_check_repair`, `test_check_cut_copy`. `Scripts/test-golden.sh` checks every golden image (all clean, the Windows-made one included). `Tests/Fuse/interrupt.sh` uses Check Disk instead of `ntfsfix -d` as its stand-in for chkdsk.
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh      # PASSED; check, kinds, repair, cut copy, leaks of check/repair
+Scripts/test-golden.sh                          # 8 images, every one checks clean
+swift test --package-path Shared; swift test --package-path CLI
+UNLATCH_INTEGRATION=1 swift test --package-path Shared --no-parallel --filter check   # attached images: check, remount, repair
+Tests/Fuse/interrupt.sh kill kill kill          # kext backend; each kill: check found nothing, mark cleared, read-write after
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+build/DerivedData/Build/Products/Debug/unlatch-engine check build/test-engine/chk-index.img   # index_unreadable + 300 orphans
+```
+
+Findings:
+- `test_check_cut_copy` cuts a cached copy (4 folders, 480 files) after N of its 192 device writes, at 21 points: 12 leave `$MFTMirr` behind `$MFT` (record 0), which libntfs-3g refuses to open at all, so the disk would not even mount read-only (carry-over below); 1 leaves a folder whose index block was never written and its 35 files orphaned, the SanDisk stick's damage; the rest check clean. None was bitmap-only, so the safe repair has not yet met a real cut; it is tested on fixtures.
+- Three SIGKILLs mid-`cp -R` through a kext mount (`interrupt.sh`) left consistent volumes: the kill lands between write-backs, losing the cache whole.
+- `ntfsfix -n` passes all seven damaged fixtures; it checks the boot sector, `$MFTMirr` and the flags only.
+
+Not checked: the app's alerts by hand (built only; a second Unlatch app beside the installed one would race its auto-mount), `--repair` through the helper on a real disk, the owner's SanDisk snapshot.
+
 ## Carry-overs
+
+- **$MFTMirr after a cut-off write-back (D-93, 2026-11-02):** in `test_check_cut_copy`, 12 of 21 cuts mid-write-back leave `$MFTMirr` older than `$MFT`'s first records. libntfs-3g's mount compares the two and refuses the volume, so `ue_probe` says CORRUPT and Unlatch cannot mount it even read-only; Check Disk reports `mft_mirror` and sends the user to chkdsk. Options: write the mirror's pages in the same write-back right after `$MFT`'s (bcache, D-62), or let read-only opens skip the comparison (a patch in `Engine/vendor/patches/`). Either needs a decision; the read-only one also makes the files reachable for copying off.
 
 - **Write-back order after a crash:** a SIGKILL mid-`cp -R` left directories whose MFT records point at index blocks that were never written. The page cache writes dirty pages back sorted by offset (D-62). Writing index and data blocks before the MFT records that point at them would shrink the damage. The dirty mark (D-86) already makes it safe (read-only until chkdsk).
 

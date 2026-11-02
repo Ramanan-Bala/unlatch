@@ -18,6 +18,15 @@
 //                                    symlink-abs or junction (TARGET like C:\\Users)
 //     zero-record PATH               overwrite PATH's MFT record with zeros, leaving its index
 //                                    entry behind (a damaged entry, as seen on a real disk)
+//   Damage for Check Disk (D-93):
+//     clear-record-bit PATH          mark PATH's MFT record free in $MFT's bitmap
+//     clear-cluster-bits PATH        mark the clusters of PATH's $DATA free in $Bitmap
+//     share-clusters PATH OTHER      point PATH's first data run at OTHER's first cluster
+//     run-past PATH                  point PATH's first data run (2+ clusters) at the last
+//                                    cluster, so it runs past the end of the volume
+//     bump-seq PATH                  add one to the record's sequence number, not the entry's
+//     tear-record PATH               break one update sequence number of PATH's record (a torn write)
+//     zero-index DIR                 zero DIR's first index block, as a cut-off write leaves it
 //   mkfixture gen SIZE SEED [OFF] write SIZE bytes of the stream, from offset OFF, to stdout
 #include "config.h"
 
@@ -30,6 +39,7 @@
 
 #include <ntfs-3g/types.h>
 #include <ntfs-3g/attrib.h>
+#include <ntfs-3g/bitmap.h>
 #include <ntfs-3g/dir.h>
 #include <ntfs-3g/inode.h>
 #include <ntfs-3g/logfile.h>
@@ -333,14 +343,116 @@ static int cmd_zero_record(ntfs_volume *vol, const char *path)
     return rc;
 }
 
+static int open_data(ntfs_volume *vol, const char *path, ntfs_inode **ni, ntfs_attr **na)
+{
+    if (!(*ni = ntfs_pathname_to_inode(vol, NULL, path)))
+        return die("open", path);
+    *na = ntfs_attr_open(*ni, AT_DATA, AT_UNNAMED, 0);
+    if (!*na || !NAttrNonResident(*na) || ntfs_attr_map_whole_runlist(*na)) {
+        if (*na)
+            ntfs_attr_close(*na);
+        ntfs_inode_close(*ni);
+        errno = errno ? errno : EINVAL;
+        return die("non-resident $DATA", path);
+    }
+    return 0;
+}
+
+static int close_data(const char *path, ntfs_inode *ni, ntfs_attr *na, bool update)
+{
+    int rc = update && ntfs_attr_update_mapping_pairs(na, 0) ? die("mapping pairs", path) : 0;
+
+    ntfs_attr_close(na);
+    if (update)
+        ntfs_inode_mark_dirty(ni);
+    return ntfs_inode_close(ni) && !rc ? die("close", path) : rc;
+}
+
+static int record_of(ntfs_volume *vol, const char *path, u64 *rec)
+{
+    ntfs_inode *ni = ntfs_pathname_to_inode(vol, NULL, path);
+
+    if (!ni)
+        return die("open", path);
+    *rec = ni->mft_no;
+    return ntfs_inode_close(ni) ? die("close", path) : 0;
+}
+
+static int cmd_damage(ntfs_volume *vol, const char *cmd, const char *path, const char *other)
+{
+    ntfs_inode *ni, *oni;
+    ntfs_attr *na, *ona;
+    u64 rec;
+    int rc;
+
+    if (!strcmp(cmd, "clear-record-bit")) {
+        if ((rc = record_of(vol, path, &rec)))
+            return rc;
+        return ntfs_bitmap_clear_run(vol->mftbmp_na, (s64)rec, 1) ? die("clear bit", path) : 0;
+    }
+    if (!strcmp(cmd, "clear-cluster-bits")) {
+        if ((rc = open_data(vol, path, &ni, &na)))
+            return rc;
+        for (runlist_element *r = na->rl; r->length && !rc; r++)
+            if (r->lcn >= 0 && ntfs_bitmap_clear_run(vol->lcnbmp_na, r->lcn, r->length))
+                rc = die("clear bits", path);
+        return close_data(path, ni, na, false) || rc;
+    }
+    if (!strcmp(cmd, "share-clusters") || !strcmp(cmd, "run-past")) {
+        LCN lcn = vol->nr_clusters - 1;
+        if (other) {
+            if ((rc = open_data(vol, other, &oni, &ona)))
+                return rc;
+            lcn = ona->rl[0].lcn;
+            close_data(other, oni, ona, false);
+        }
+        if ((rc = open_data(vol, path, &ni, &na)))
+            return rc;
+        na->rl[0].lcn = lcn;          // its own clusters stay marked: lost space only
+        return close_data(path, ni, na, true);
+    }
+    if (!strcmp(cmd, "bump-seq")) {
+        if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
+            return die("open", path);
+        ni->mrec->sequence_number = cpu_to_le16(le16_to_cpu(ni->mrec->sequence_number) + 1);
+        ntfs_inode_mark_dirty(ni);
+        return ntfs_inode_close(ni) ? die("close", path) : 0;
+    }
+    if (!strcmp(cmd, "tear-record")) {
+        u8 *b = malloc(vol->mft_record_size);
+        if (!b || (rc = record_of(vol, path, &rec)))
+            return free(b), b ? rc : die("alloc", path);
+        s64 off = (s64)(rec << vol->mft_record_size_bits);
+        rc = ntfs_attr_pread(vol->mft_na, off, vol->mft_record_size, b) != vol->mft_record_size;
+        b[NTFS_BLOCK_SIZE - 2] ^= 0xFF;   // the first sector's copy of the update sequence number
+        rc = rc || ntfs_attr_pwrite(vol->mft_na, off, vol->mft_record_size, b) != vol->mft_record_size;
+        free(b);
+        return rc ? die("tear", path) : 0;
+    }
+    if (!strcmp(cmd, "zero-index")) {
+        if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
+            return die("open", path);
+        na = ntfs_attr_open(ni, AT_INDEX_ALLOCATION, NTFS_INDEX_I30, 4);
+        memset(buf, 0, 4096);
+        rc = !na || ntfs_attr_pwrite(na, 0, 4096, buf) != 4096;
+        if (na)
+            ntfs_attr_close(na);
+        if (ntfs_inode_close(ni))
+            rc = 1;
+        return rc ? die("zero index", path) : 0;
+    }
+    fprintf(stderr, "mkfixture: bad damage command %s\n", cmd);
+    return 1;
+}
+
 static int run(ntfs_volume *vol, char *line)
 {
-    char cmd[16], path[4096], word[32];
+    char cmd[24], path[4096], word[32];
     unsigned long long a, b, c, d;
 
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\0')
         return 0;
-    if (sscanf(line, "%15s %4095s", cmd, path) != 2)
+    if (sscanf(line, "%23s %4095s", cmd, path) != 2)
         return fprintf(stderr, "mkfixture: bad line: %s", line), 1;
     if (!strcmp(cmd, "mkdir")) {
         ntfs_inode *ni = create(vol, path, S_IFDIR);
@@ -363,6 +475,11 @@ static int run(ntfs_volume *vol, char *line)
     if (!strcmp(cmd, "zero-record"))
         return cmd_zero_record(vol, path);
     char target[4096];
+    if (!strcmp(cmd, "share-clusters") && sscanf(line, "%*s %*s %4095s", target) == 1)
+        return cmd_damage(vol, cmd, path, target);
+    if (!strcmp(cmd, "clear-record-bit") || !strcmp(cmd, "clear-cluster-bits") || !strcmp(cmd, "run-past") ||
+        !strcmp(cmd, "bump-seq") || !strcmp(cmd, "tear-record") || !strcmp(cmd, "zero-index"))
+        return cmd_damage(vol, cmd, path, NULL);
     if (!strcmp(cmd, "reparse") && sscanf(line, "%*s %*s %31s %4095s", word, target) == 2)
         return cmd_reparse(vol, path, word, target);
     fprintf(stderr, "mkfixture: bad line: %s", line);

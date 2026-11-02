@@ -184,6 +184,94 @@ final class AppModel {
         await mount(v.disk.bsdName, readOnly: false, markChecked: true)
     }
 
+    /// Check Disk (D-93): unmounts the disk, checks it (read-only), mounts it again, and says
+    /// what was found. When everything found is safe to repair, or nothing was found on a disk
+    /// marked dirty, it offers the repair, which also clears the mark when nothing is left.
+    func checkDisk(_ v: Volume) async {
+        let name = v.disk.label.isEmpty ? v.disk.bsdName : v.disk.label
+        guard let r = await runCheck(v.disk.bsdName, repair: false) else { return }
+        let dirty = r.state == "dirty"
+        let alert = NSAlert()
+        alert.informativeText = Self.summary(r)
+        switch r.verdict {
+        case .clean, .repaired:
+            alert.messageText = "No problems found on \(name)"
+            if dirty {
+                alert.informativeText = """
+                    \(r.recordsInUse) records and \(r.directories) folders were checked. The disk is still marked as \
+                    needing a check, so it mounts read-only. Unlatch can clear the mark; it then mounts read-write.
+                    """
+                alert.addButton(withTitle: "Clear Mark")
+                alert.addButton(withTitle: "Not Now")
+            }
+        case .repairable:
+            alert.messageText = "\(name) has problems Unlatch can repair"
+            alert.addButton(withTitle: "Repair")
+            alert.addButton(withTitle: "Not Now")
+        case .needsWindows:
+            alert.alertStyle = .critical
+            alert.messageText = r.problems.contains { $0.kind == "mft_mirror" }
+                ? "\(name) cannot be opened until Windows repairs it" : "\(name) needs Windows to repair it"
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Copy Report")
+        }
+        NSApp.activate()
+        let answer = alert.runModal()
+        if r.verdict == .needsWindows {
+            if answer == .alertSecondButtonReturn {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Self.fullReport(r, name: name), forType: .string)
+            }
+            return
+        }
+        guard answer == .alertFirstButtonReturn, r.verdict == .repairable || ((r.verdict == .clean || r.verdict == .repaired) && dirty)
+        else { return }
+        log.notice("\(v.disk.bsdName, privacy: .public): repairing, as confirmed")
+        guard let fixed = await runCheck(v.disk.bsdName, repair: true) else { return }
+        let done = NSAlert()
+        done.messageText = fixed.remaining == 0 ? "\(name) is repaired" : "\(name) still has problems"
+        done.informativeText = fixed.remaining == 0 ? fixed.advice : Self.summary(fixed)
+        if fixed.remaining > 0 { done.alertStyle = .critical }
+        NSApp.activate()
+        done.runModal()
+    }
+
+    private func runCheck(_ bsdName: String, repair: Bool) async -> CheckReport? {
+        guard let service, !busy.contains(bsdName) else { return nil }
+        busy.insert(bsdName)
+        defer { busy.remove(bsdName) }
+        do {
+            let r = try await service.check(bsdName, repair: repair)
+            lastError = nil
+            await refresh()
+            return r
+        } catch {
+            lastError = error.localizedDescription
+            log.error("check \(bsdName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            await refresh()
+            return nil
+        }
+    }
+
+    /// What was found, by kind, then a few paths and the advice.
+    static func summary(_ r: CheckReport) -> String {
+        guard r.found > 0 else { return r.advice }
+        var lines = r.kinds.map { "• " + CheckReport.describe($0.kind, count: $0.count) }
+        let paths = r.problems.compactMap { $0.path.isEmpty ? nil : $0.path }
+        if !paths.isEmpty {
+            lines.append("")
+            lines += paths.prefix(5).map { "  \($0)" }
+            if paths.count > 5 { lines.append("  and \(paths.count - 5) more") }
+        }
+        lines += ["", r.advice]
+        return lines.joined(separator: "\n")
+    }
+
+    static func fullReport(_ r: CheckReport, name: String) -> String {
+        (["Unlatch Check Disk: \(name) (\(r.state)), \(r.found) problem(s), \(r.remaining) left"]
+            + r.problems.map { "\($0.kind)\t\($0.path)\t\($0.detail)" } + [r.advice]).joined(separator: "\n")
+    }
+
     func unmount(_ bsdName: String) async {
         await run(bsdName) { try await $0.unmount(bsdName) }
     }

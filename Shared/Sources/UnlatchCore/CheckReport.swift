@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
+
+/// What Check Disk found on a volume (D-93): the JSON `unlatch-fuse --check` prints, schema 1.
+public struct CheckReport: Codable, Equatable, Sendable {
+    public struct Problem: Codable, Equatable, Sendable {
+        /// record_unmarked, clusters_unmarked, clusters_shared, bad_runlist, bad_record,
+        /// index_unreadable, entry_free_record, entry_wrong_seq, orphan, mft_mirror.
+        public let kind: String
+        public let repairable: Bool
+        public let record: UInt64
+        public let other: UInt64?
+        public let lcn: UInt64?
+        public let count: UInt64?
+        public let path: String
+        public let detail: String
+    }
+
+    public let schema: Int
+    public let problems: [Problem]
+    public let state: String
+    public let records, recordsInUse, directories, entries: UInt64
+    public let clusters, clustersInUse: UInt64
+    public let lostRecords, lostClusters: UInt64
+    public let found, repairable, repaired, remaining: UInt64
+    public let repairRan, dirtyCleared: Bool
+    public let exitCode: Int32
+    public let error: String?
+
+    /// What the user can do next.
+    public enum Verdict: Equatable, Sendable {
+        case clean              // nothing found (the mark was cleared, if a repair ran)
+        case repaired           // everything found was repaired
+        case repairable         // everything found can be repaired safely (bitmap bits)
+        case needsWindows       // something only Windows' chkdsk (or a reformat) can fix
+    }
+
+    public var verdict: Verdict {
+        if remaining == 0 { return found == 0 ? .clean : .repaired }
+        return found > 0 && found == repairable && !repairRan ? .repairable : .needsWindows
+    }
+
+    /// Counts by kind, in a fixed order, for summaries.
+    public var kinds: [(kind: String, count: Int)] {
+        let order = ["mft_mirror", "bad_record", "index_unreadable", "entry_free_record", "entry_wrong_seq", "orphan",
+                     "clusters_shared", "bad_runlist", "record_unmarked", "clusters_unmarked"]
+        let counts = Dictionary(grouping: problems, by: \.kind).mapValues(\.count)
+        return (order + counts.keys.filter { !order.contains($0) }.sorted()).compactMap { k in counts[k].map { (k, $0) } }
+    }
+
+    /// One line per kind, for people.
+    public static func describe(_ kind: String, count n: Int) -> String {
+        let s = n == 1 ? "" : "s"
+        switch kind {
+        case "record_unmarked": return "\(n) file record\(s) in use but marked free (repairable)"
+        case "clusters_unmarked": return "\(n) file\(s) using space marked free (repairable)"
+        case "clusters_shared": return "\(n) file\(s) sharing space with another file"
+        case "bad_runlist": return "\(n) file\(s) whose list of clusters is damaged"
+        case "bad_record": return "\(n) file record\(s) that cannot be read"
+        case "index_unreadable": return "\(n) folder\(s) that cannot be read"
+        case "entry_free_record", "entry_wrong_seq": return "\(n) folder entr\(n == 1 ? "y" : "ies") pointing at a missing file"
+        case "orphan": return "\(n) file\(s) no folder lists"
+        case "mft_mirror": return "the backup copy of the file table does not match it"
+        default: return "\(n) problem\(s) of kind \(kind)"
+        }
+    }
+
+    /// Plain advice for the verdict.
+    public var advice: String {
+        switch verdict {
+        case .clean:
+            return dirtyCleared ? "Nothing is wrong. The disk is no longer marked as needing a check."
+                                : "Nothing is wrong."
+        case .repaired:
+            return "Repaired: space in use is marked as used again\(dirtyCleared ? ", and the disk is no longer marked as needing a check" : ""). Nothing was overwritten."
+        case .repairable:
+            return "Unlatch can repair this safely: it marks space that files use as used, so nothing gets overwritten. Some free space may stay lost until Windows checks the disk."
+        case .needsWindows:
+            return "Unlatch cannot repair this safely. Copy anything important off the disk (read-only), then either run chkdsk on it in Windows (chkdsk X: /f) or reformat it."
+        }
+    }
+}
