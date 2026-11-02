@@ -126,17 +126,21 @@ struct MountCmd: AsyncParsableCommand {
     @Flag(help: ArgumentHelp("Mount read-write even though the volume is marked dirty (risky; see docs/read-only.md).",
                              discussion: "Writing to a disk that was cut off mid-write can damage files on it."))
     var dirtyRw = false
+    @Flag(help: ArgumentHelp("Like --dirty-rw, and a clean unmount or eject clears the mark: the volume mounts read-write from then on.",
+                             discussion: "Use only for a disk you have decided to trust, for example after copying its files off."))
+    var markChecked = false
     @Flag(help: "JSON output (schema 1).") var json = false
 
     func run() async throws {
         let s = try service()
         let d = try resolve(disk, in: await s.list())
-        if dirtyRw && !readOnly {
+        if (dirtyRw || markChecked) && !readOnly {
             FileHandle.standardError.write(Data(("unlatch: warning: writing to a disk marked dirty can damage files on it. "
-                + "It stays marked, so Windows still checks it.\n").utf8))
+                + (markChecked ? "Ejecting it cleanly marks it as checked; Windows will no longer offer to check it.\n"
+                           : "It stays marked, so Windows still checks it.\n")).utf8))
         }
         let r: MountService.Result
-        do { r = try await s.mount(d.bsdName, readOnly: readOnly, dirtyReadWrite: dirtyRw) } catch {
+        do { r = try await s.mount(d.bsdName, readOnly: readOnly, dirtyReadWrite: dirtyRw, markChecked: markChecked) } catch {
             throw fail(error.localizedDescription, Exit.of(error))
         }
         let forced = r.readOnly && !readOnly
@@ -150,7 +154,7 @@ struct MountCmd: AsyncParsableCommand {
             fflush(stdout)
             let why = r.status.map { "\($0.state.rawValue): \($0.reason)" } ?? "the volume could not be opened for writing"
             FileHandle.standardError.write(Data("unlatch: read-only because \(why)\n".utf8))
-            if r.status?.state == .dirty && !dirtyRw {
+            if r.status?.state == .dirty && !dirtyRw && !markChecked {
                 FileHandle.standardError.write(Data("unlatch: to write anyway (risky): unlatch mount --dirty-rw \(d.bsdName)\n".utf8))
             }
             throw CLIExit(code: .readOnly)

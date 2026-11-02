@@ -867,6 +867,18 @@ UNLATCH_FUSE=build/DerivedData/Build/Products/Debug/unlatch-fuse CLI/.build/debu
 
 Surprise: the installed app auto-mounted `interrupt.sh`'s test image while the gates ran (AGENTS.md says to turn auto-mount off for tests); the test then deleted the image under the app's mount.
 
+### Follow-up: Mark as Checked (D-92) — done 2026-11-02
+
+- `unlatch-fuse --mark-checked`, `MountService.mount(markChecked:)`, `unlatch mount --mark-checked`, the app's "Mark as Checked…" (critical alert). "Check Disk" is in TODO.md.
+
+```sh
+build/test-engine/set_dirty k.img; unlatch-fuse --mark-checked k.img m; umount m   # probe: clean; next mount read-write
+# SIGKILL the daemon during a --mark-checked mount: probe stays dirty
+UNLATCH_FUSE=... unlatch mount diskN; unlatch mount --mark-checked diskN; unlatch eject diskN   # replaces the read-only mount; clean after
+```
+
+Not checked: the app's alert and menu item by hand (built only).
+
 ## Carry-overs
 
 - **The Unlatch app stops (2026-11-02):** twice during the real-disk tests the app was not running, with no crash report (started again at 18:29, gone before 18:56). Find out why: `/usr/bin/log show --predicate 'process == "Unlatch"'`, launchd, or a quit from the menu.

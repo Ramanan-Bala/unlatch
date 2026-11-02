@@ -54,7 +54,9 @@ static void usage(void)
             "  --no-cache    no engine page cache (for comparisons)\n"
             "  --dirty-rw    mount read-write even though the volume is marked dirty (only that\n"
             "                state; hibernated, unclean or damaged volumes stay read-only). The\n"
-            "                mark stays, so Windows still checks the disk (D-90)\n");
+            "                mark stays, so Windows still checks the disk (D-90)\n"
+            "  --mark-checked like --dirty-rw, and a clean unmount clears the mark: the user has\n"
+            "                decided the volume is fine, and it mounts read-write from then on (D-92)\n");
 }
 
 // Dirty cached pages older than this are written back, so a crash or unplug loses at most
@@ -390,11 +392,12 @@ int main(int argc, char **argv)
         { "ready-fd", required_argument, NULL, 'F' },
         { "no-cache", no_argument, NULL, 'C' },
         { "dirty-rw", no_argument, NULL, 'W' },
+        { "mark-checked", no_argument, NULL, 'K' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     const char *backend = "auto", *extra = NULL;
-    bool foreground = false, debug = false, want_ro = false, cache = true, dirty_rw = false;
+    bool foreground = false, debug = false, want_ro = false, cache = true, dirty_rw = false, mark_checked = false;
     int ch, ready_fd = -1, dev_fd = -1;
 
     while ((ch = getopt_long(argc, argv, "fdro:h", longopts, NULL)) != -1) {
@@ -408,6 +411,7 @@ int main(int argc, char **argv)
         case 'D': dev_fd = atoi(optarg); break;
         case 'C': cache = false; break;
         case 'W': dirty_rw = true; break;
+        case 'K': dirty_rw = mark_checked = true; break;
         default: usage(); return ch == 'h' ? 0 : 2;
         }
     }
@@ -481,8 +485,8 @@ int main(int argc, char **argv)
     // hibernated volume or an unfinished journal holds Windows' own changes, which writing loses.
     bool forced = p.state == UE_VOL_DIRTY && dirty_rw && !want_ro;
     if (forced)
-        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s (%s); read-write anyway, as asked (--dirty-rw)", source,
-               ue_vol_state_name(p.state), p.reason);
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s (%s); read-write anyway, as asked (%s)", source,
+               ue_vol_state_name(p.state), p.reason, mark_checked ? "--mark-checked: cleared at a clean unmount" : "--dirty-rw");
     if (p.state != UE_VOL_CLEAN && !forced) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
     } else if (!want_ro && dev_fd >= 0) {
@@ -517,6 +521,8 @@ int main(int argc, char **argv)
     ue_probe_t info;
     ue_attr_t root;
     uint32_t cflag = (cache ? UE_OPEN_CACHE : 0) | UE_OPEN_GHOST_OPEN_ONLY;   // D-82
+    if (forced && mark_checked)
+        cflag |= UE_OPEN_CLEAR_DIRTY;    // D-92
     err = ue_open(&f.io, (fs.read_only ? UE_OPEN_RDONLY : 0) | cflag, &fs.engine, &info);
     if (err == EROFS && !fs.read_only) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s is write-protected, read-only", source);

@@ -164,6 +164,10 @@ struct VolumeRow: View {
             if v.status?.state == .dirty, d.owner != .unlatch || v.status?.readOnly == true {
                 Button("Mount Read-Write Anyway…") { Task { await model.mountDirtyReadWrite(v) } }
             }
+            // The user decides the disk is fine: the next clean eject clears the mark (D-92).
+            if v.status?.state == .dirty {
+                Button("Mark as Checked…") { Task { await model.markChecked(v) } }
+            }
             if d.isEjectable || d.isRemovable || !d.isInternal {
                 Button("Eject") { Task { await model.eject(d.bsdName) } }
             }

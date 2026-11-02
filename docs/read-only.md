@@ -25,7 +25,9 @@ macOS has no tool that checks and repairs NTFS, so a disk marked dirty stays rea
 
    This is a risk. A disk cut off mid-write can have space that files use recorded as free, or folders whose listings were never written. Writing to it can then put new files over old ones or damage folders, including files you do not touch. Copy anything important off first. The disk stays marked as needing a check, so Windows still offers to check it the next time, and Unlatch keeps mounting it read-only until you choose this again.
 
-   Only a disk marked dirty can be forced. Hibernated disks and disks with unfinished transactions always stay read-only, because writing to them loses what Windows has not finished.
+4. **Mark it as checked.** When you have decided the disk is fine, for example after copying your files off: choose **Mark as Checked…** in its ⋯ menu, or run `unlatch mount --mark-checked <disk>`. Unlatch mounts it read-write, and when you eject it from Unlatch the mark is cleared, so it mounts read-write every time after that. This repairs nothing: whatever was half-written stays so, and Windows no longer offers to check it. If a write is cut off again, the disk is marked again.
+
+   Only a disk marked dirty can be forced or marked checked. Hibernated disks and disks with unfinished transactions always stay read-only, because writing to them loses what Windows has not finished.
 
 ## After fixing it
 

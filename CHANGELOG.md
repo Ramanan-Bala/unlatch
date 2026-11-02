@@ -4,6 +4,9 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+- **Mark as Checked** for a disk marked as needing a check that you have decided to trust, for example after copying its files off: in the disk's ⋯ menu, after a warning, or `unlatch mount --mark-checked <disk>`. Unlatch mounts it read-write, and ejecting it from Unlatch clears the mark, so it mounts read-write from then on. It repairs nothing, and Windows no longer offers to check the disk.
+
 ## [1.0.0-beta.8] - 2026-11-02
 
 ### Fixed
