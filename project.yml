@@ -29,8 +29,8 @@ settings:
     GCC_C_LANGUAGE_STANDARD: c11
     # Signing comes from Config/Base.xcconfig (+ optional Config/Local.xcconfig), D-37.
     ENABLE_HARDENED_RUNTIME: YES
-    MARKETING_VERSION: "1.0.0-beta.3"
-    CURRENT_PROJECT_VERSION: "4"
+    MARKETING_VERSION: "1.0.0-beta.4"
+    CURRENT_PROJECT_VERSION: "5"
 
 targets:
   Unlatch:
