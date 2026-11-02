@@ -64,6 +64,9 @@ import Testing
     #expect(!MountService.isLeftover("/"))                                              // a mount point
     #expect(MountService.isFSKitRefusal("macFUSE's file system extension did not take the mount; try again in a minute"))
     #expect(!MountService.isFSKitRefusal("this volume (serial 1) is already mounted; unmount it first"))
+    #expect(MountService.isTransientRefusal("/dev/rdisk6s2: this volume (serial 1) is already mounted; unmount it first"))
+    #expect(MountService.isTransientRefusal("/Volumes/SANDISK: Input/output error"))
+    #expect(!MountService.isTransientRefusal("/dev/rdisk6s2: not mounting, corrupt"))
 }
 
 // MARK: integration (attached images; needs macFUSE's file system extension on and a built unlatch-fuse)

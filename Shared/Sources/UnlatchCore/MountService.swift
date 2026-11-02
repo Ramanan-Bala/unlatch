@@ -127,14 +127,16 @@ public actor MountService {
             let fd = try opener.open(Self.rawPath(info.devicePath), writable: !readOnly)
             defer { close(fd) }
             var point = Self.mountPoint(for: info)
-            // macFUSE's FSKit backend can refuse a mount for a moment: right after an unmount,
-            // and for about a minute after its background service restarts (D-78). Try again
-            // after a pause; a failed try's mount point is empty and is used again (D-84).
+            // Some refusals pass: macFUSE's FSKit backend right after an unmount or for about a
+            // minute after its background service restarts (D-78), and the daemon of a disk that
+            // was just pulled out, which still holds the volume's lock and mount point until it
+            // notices (D-85). Try again after a pause; a failed try's mount point is empty and is
+            // used again (D-84).
             for (attempt, pause) in Self.fskitRetryPauses.enumerated() {
                 do {
                     try runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly)
                     break
-                } catch MountError.daemonFailed(let why) where Self.isFSKitRefusal(why) && attempt < Self.fskitRetryPauses.count - 1 {
+                } catch MountError.daemonFailed(let why) where Self.isTransientRefusal(why) && attempt < Self.fskitRetryPauses.count - 1 {
                     log.notice("macFUSE did not take \(info.bsdName, privacy: .public); trying again in \(pause, privacy: .public) s")
                     try await Task.sleep(for: .seconds(pause))
                     point = Self.mountPoint(for: info)
@@ -158,6 +160,13 @@ public actor MountService {
     /// The daemon's last line when macFUSE's FSKit backend refused the mount (FSKIT_HINT).
     static func isFSKitRefusal(_ why: String) -> Bool {
         why.contains("file system extension did not take the mount")
+    }
+
+    /// A refusal worth another try: FSKit's, the volume's lock (D-81) or an I/O error on a
+    /// /Volumes mount point, both held by the daemon of a disk that was pulled out (D-85).
+    static func isTransientRefusal(_ why: String) -> Bool {
+        isFSKitRefusal(why) || why.contains("is already mounted; unmount it first")
+            || (why.hasPrefix("/Volumes/") && why.hasSuffix(": Input/output error"))
     }
 
     /// `/dev/diskN` → `/dev/rdiskN`; other paths unchanged.

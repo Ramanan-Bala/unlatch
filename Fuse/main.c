@@ -21,7 +21,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/disk.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -135,6 +137,41 @@ static void record_status(const char *bsd_name, const ue_probe_t *p, bool read_o
 
     if (err)
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "status record for %s: %s", bsd_name, strerror(err));
+}
+
+// A disk pulled out without ejecting: macOS tells the FUSE daemon nothing, and the mount and
+// its lock (D-81) stayed until something touched the volume, 20-40 s on a USB stick, so the
+// next mount of the same disk was refused. A thread asks the device for its size every
+// second; ENXIO/ENODEV means it is gone, and the daemon force-unmounts itself (D-85).
+typedef struct {
+    int fd;
+    const char *mountpoint;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    bool stop;
+} watchdog_t;
+
+static void *watchdog(void *arg)
+{
+    watchdog_t *w = arg;
+    uint64_t count;
+
+    pthread_mutex_lock(&w->lock);
+    while (!w->stop) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;
+        pthread_cond_timedwait(&w->cond, &w->lock, &ts);
+        if (w->stop)
+            break;
+        if (ioctl(w->fd, DKIOCGETBLOCKCOUNT, &count) < 0 && (errno == ENXIO || errno == ENODEV)) {
+            uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "the disk under %s went away; unmounting", w->mountpoint);
+            unmount(w->mountpoint, MNT_FORCE);   // the session loop then ends
+            break;
+        }
+    }
+    pthread_mutex_unlock(&w->lock);
+    return NULL;
 }
 
 // One mount per volume: a read-write mount holds an exclusive flock on a file named after the
@@ -446,7 +483,20 @@ int main(int argc, char **argv)
         }
         uf_log_set_stderr(0);
     }
+    watchdog_t wd = { .fd = f.fd, .mountpoint = mountpoint, .lock = PTHREAD_MUTEX_INITIALIZER,
+                      .cond = PTHREAD_COND_INITIALIZER };
+    struct stat dst;
+    pthread_t wd_thread = NULL;
+    bool have_wd = fstat(f.fd, &dst) == 0 && (S_ISBLK(dst.st_mode) || S_ISCHR(dst.st_mode)) &&
+                   pthread_create(&wd_thread, NULL, watchdog, &wd) == 0;
     rc = session_loop(se, &fs) == 0 ? 0 : 1;
+    if (have_wd) {
+        pthread_mutex_lock(&wd.lock);
+        wd.stop = true;
+        pthread_cond_signal(&wd.cond);
+        pthread_mutex_unlock(&wd.lock);
+        pthread_join(wd_thread, NULL);
+    }
     fuse_session_unmount(se);
     uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "unmounted %s", mountpoint);
 signals:
