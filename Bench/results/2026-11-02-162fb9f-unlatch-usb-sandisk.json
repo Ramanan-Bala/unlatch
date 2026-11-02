@@ -1,0 +1,22 @@
+{
+  "label": "unlatch-usb-sandisk",
+  "commit": "162fb9f",
+  "date": "2026-11-02T04:48:02Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "unlatch@disk6s2 on /Volumes/SANDISK (macfuse, nodev, nosuid, synchronous, mounted by ramanan)",
+  "runs": 3, "mib": 512, "small_files": 5000, "metadata_files": 5000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 97.622574,
+    "seq_read_cold": 16.202872,
+    "seq_read_warm": 0.037727,
+    "small_files": 53.372576,
+    "metadata": 10.677172
+  },
+  "mb_per_s": {
+    "seq_write": 5.5, "seq_read_cold": 33.1, "seq_read_warm": 14230.4
+  },
+  "small_files_per_s": 94,
+  "metadata_ops_per_s": 1405
+}
