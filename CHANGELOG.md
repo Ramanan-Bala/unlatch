@@ -4,6 +4,9 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Fixed
+- **A disk can no longer be mounted read-write twice at once** (for example by automatic mounting and `unlatch mount` at the same moment), which could have damaged it. The second mount is refused with "already mounted".
+
 ## [1.0.0-beta.5] - 2026-11-02
 
 ### Changed

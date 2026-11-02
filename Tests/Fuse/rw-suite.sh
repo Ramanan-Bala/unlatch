@@ -66,6 +66,16 @@ for run in $(seq 1 "$runs"); do
     mount_rw
     mount | grep " on $mnt " | grep -q read-only && die "mounted read-only"
 
+    # D-81: a second mount of the mounted volume, read-write or read-only, by the same path or
+    # (with --disk) the image behind the device, is refused.
+    say "second mount of the volume refused"
+    mkdir -p "$work/mnt2"
+    for args in "$vol" "-r $vol" "$img"; do
+        # shellcheck disable=SC2086
+        if "$fuse" --backend kext $args "$work/mnt2" 2>/dev/null; then umount "$work/mnt2"; die "second mount: $args"; fi
+    done
+    ok
+
     say "cp -R a source tree";    cp -R "$src" "$mnt/cp";                  expect_same "$src" "$mnt/cp" "cp -R"; ok
     say "rsync -a";               rsync -a "$src/" "$mnt/rsync/";          expect_same "$src" "$mnt/rsync" "rsync"; ok
     say "ditto";                  ditto "$src" "$mnt/ditto";               expect_same "$src" "$mnt/ditto" "ditto"; ok

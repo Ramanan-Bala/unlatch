@@ -21,7 +21,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -133,6 +135,45 @@ static void record_status(const char *bsd_name, const ue_probe_t *p, bool read_o
 
     if (err)
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "status record for %s: %s", bsd_name, strerror(err));
+}
+
+// One mount per volume: a read-write mount holds an exclusive flock on a file named after the
+// volume serial, a read-only one a shared lock, so a second read-write mount of the same volume
+// (the app's auto-mount racing `unlatch mount`, or an image and its attached device) is refused
+// (D-81). The serial, not the path, names the volume: /dev/diskN, /dev/rdiskN and an image file
+// all lead to it. The directory is shared by every user, since daemons run as the user (with the
+// helper's descriptor) or as root (sudo). The lock goes with the process, however it ends.
+#define LOCK_DIR "/private/tmp/io.github.ramanan-bala.unlatch.locks"
+
+static int lock_volume(uint64_t serial, bool exclusive, int *out_fd)
+{
+    char path[sizeof(LOCK_DIR) + 32];
+    struct stat st;
+    mode_t old = umask(0);
+    int fd;
+
+    if (mkdir(LOCK_DIR, 0777) == 0)
+        chmod(LOCK_DIR, 01777);       // sticky, like /tmp: nobody removes another user's lock file
+    else if (errno != EEXIST) {
+        int err = errno;
+        umask(old);
+        return err;
+    }
+    umask(old);
+    if (lstat(LOCK_DIR, &st) < 0)
+        return errno;
+    if (!S_ISDIR(st.st_mode))
+        return ENOTDIR;
+    snprintf(path, sizeof(path), LOCK_DIR "/%016llX", (unsigned long long)serial);
+    if ((fd = open(path, O_RDONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0444)) < 0)
+        return errno;
+    if (flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB) < 0) {
+        int err = errno == EWOULDBLOCK ? EBUSY : errno;
+        close(fd);
+        return err;
+    }
+    *out_fd = fd;
+    return 0;
 }
 
 // Backgrounding without fork(): OSLog and CoreFoundation are not safe in a child that forked
@@ -336,6 +377,18 @@ int main(int argc, char **argv)
             fs.read_only = false;
         }
     }
+    int lock_fd = -1;
+    if ((err = lock_volume(p.serial, !fs.read_only, &lock_fd))) {
+        if (err == EBUSY)
+            uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: this volume (serial %016llX) is already mounted%s; "
+                   "unmount it first", source, (unsigned long long)p.serial,
+                   fs.read_only ? " read-write" : "");
+        else
+            uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: cannot lock the volume (%s), not mounting", source,
+                   strerror(err));
+        file_io_close(&f);
+        return 1;
+    }
     ue_probe_t info;
     ue_attr_t root;
     uint32_t cflag = cache ? UE_OPEN_CACHE : 0;
@@ -408,5 +461,6 @@ close:
     free(fs.nodes);
     record_status(bsd_name, &p, fs.read_only, NULL);
     file_io_close(&f);
+    close(lock_fd);                   // after the volume is closed and the device released
     return rc;
 }

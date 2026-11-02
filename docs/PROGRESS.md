@@ -736,6 +736,19 @@ Release gates for beta.5: engine tests, fsx regressions, include boundary, rw-su
 
 Surprises: `appleMountComesBackAfterAFailure` failed once (eject "busy" right after Apple's driver got the disk back), then passed 9 of 9 with and without the change. Earlier runs had left `build/interrupt/kill.img` and a core-test image attached; detached.
 
+### Follow-up: one mount per volume (D-81) — done 2026-11-02
+
+- `unlatch-fuse` locks the volume by serial after probing (`lock_volume` in `Fuse/main.c`): exclusive for read-write, shared for read-only. A second read-write mount, or a read-only one beside it, exits 1 with "this volume (serial …) is already mounted; unmount it first". Fixes the carry-over where the app's auto-mount and `unlatch mount` both mounted a disk read-write.
+- rw-suite step "second mount of the volume refused": the same path read-write and read-only, and the image behind the device with `--disk`.
+
+```sh
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+Tests/Fuse/rw-suite.sh --runs 1 && Tests/Fuse/rw-suite.sh --runs 1 --disk && Tests/Fuse/rw-suite.sh --runs 1 --backend fskit
+UNLATCH_INTEGRATION=1 swift test --package-path Shared        # 14 passed
+```
+
+Checked by hand: two read-only mounts share; a SIGKILLed daemon's lock is gone and the volume mounts again. `mkdir` drops the sticky bit, hence the `chmod`.
+
 ## Carry-overs
 
 - **Failed FSKit mount leaves its mount point (2026-11-02, Seagate HDD):** `unlatch mount` through FSKit straight after `unlatch unmount` failed ("did not take the mount") and left an empty `/Volumes/seagate`; the next mount landed on `/Volumes/seagate disk6s1`, and the user cannot remove the leftover (`/Volumes` is root's). Remove the mount point on failure, and retry with a pause (see the FSKit transient failure below).
@@ -745,7 +758,6 @@ Surprises: `appleMountComesBackAfterAFailure` failed once (eject "busy" right af
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07:** Windows-made Fast Startup, dirty and fragmented-MFT images are still wanted (`Tests/Images/README.md`).
-- **Two mounts of one disk (data integrity):** the app's auto-mount and `unlatch mount` both mounted disk6 read-write within 0.1 s (2026-11-02). `unlatch-fuse` should take an exclusive lock on the device (or MountService a per-disk lock) and refuse a second mount.
 - **NFD name on the Windows-made image:** `names/éte-nfd.txt` in `windows-content.img` is missing from mount listings (kext and FSKit alike), so `check-readonly.sh` fails there.
 - **FSKit transient failure (D-78):** after macFUSE's background service restarts, mounts fail for about a minute ("not found"/"not enabled"). Consider a retry with backoff in `MountService.mount` for auto-mounts.
 - **macFUSE 5.6.0:** when released, rerun the FSKit suites; `reply_bytes()` can stay.
