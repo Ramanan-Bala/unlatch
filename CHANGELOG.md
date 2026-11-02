@@ -4,13 +4,16 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.5] - 2026-11-02
+
 ### Changed
-- **No more kernel extension, Recovery or restart.** Unlatch mounts through macFUSE's FSKit backend. The one-time setup step is now turning on macFUSE in System Settings > General > Login Items & Extensions > File System Extensions. If you allowed macFUSE's kernel extension for an earlier version, Unlatch no longer needs it.
+- **No kernel extension, Recovery or restart needed.** Without macFUSE's kernel extension, Unlatch mounts through macFUSE's FSKit backend: the one-time setup step is turning on macFUSE in System Settings > General > Login Items & Extensions > File System Extensions.
+- **If macFUSE's kernel extension is already allowed** (as for beta.4 and earlier), Unlatch keeps using it: FSKit is up to 8 times slower with many small files and at renames and deletes, and 20–40% slower with large files on a fast SSD (README, "What FSKit costs"). `unlatch doctor` says which one mounts use. The README's "Faster small files" explains how to allow it.
 - Needs macFUSE 5.5 or later; the setup window and `unlatch setup` offer the update.
-- In our tests, large reads and writes are faster than through the kernel extension.
 
 ### Fixed
 - Symbolic links report their target's length as their size, as POSIX expects.
+- A damaged or crafted disk whose bitmap claims to be larger than the volume no longer keeps Unlatch busy for minutes while it checks the disk; it is reported as corrupt.
 
 ## [1.0.0-beta.4] - 2026-11-02
 
