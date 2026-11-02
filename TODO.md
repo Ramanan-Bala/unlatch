@@ -1,0 +1,23 @@
+# TODO
+
+Open work, newest first. Details and history are in `docs/PROGRESS.md` and `docs/DECISIONS.md`.
+
+## Full Disk Access on the app instead of the helper (D-74)
+
+Today macOS asks for Full Disk Access for `io.github.ramanan-bala.unlatch.helper`, because the helper is what opens the root-only disk devices. Goal: the user grants it to **Unlatch** once.
+
+- [ ] Ship the helper inside the app as a bare executable in `Unlatch.app/Contents/MacOS/` (no bundle of its own), with its launchd plist in `Contents/Library/LaunchDaemons/` (`BundleProgram`, the socket, `AssociatedBundleIdentifiers`).
+- [ ] Register it with `SMAppService.daemon(plistName:)` from the app's setup window (and unregister it in Uninstall); the user approves it in Login Items. Check Apple's ServiceManagement docs first (AGENTS.md).
+- [ ] Find out whether SMAppService registers a daemon of an **ad-hoc signed** app at all.
+- [ ] Test with a **disposable USB stick**: grant Full Disk Access to Unlatch only, then mount the stick read-write. The only removable disk on the dev Mac holds real data and must not be used.
+- [ ] Check that the grant survives an update (ad-hoc signatures change every build).
+- [ ] If it works: replace `unlatch install-helper`'s `/Library/PrivilegedHelperTools` install, update `HelperOpener`, the README's one-time setup, the cask's uninstall step and D-57/D-60/D-74. If not: keep the current helper and record why.
+
+Background: Apple DTS says a daemon generally does not inherit its app's TCC grants, even via SMAppService ([forum 853725](https://developer.apple.com/forums/thread/853725)); the bare-executable layout is undocumented and was reported to work for Accessibility, not tested for Full Disk Access.
+
+## Other open items
+
+- [ ] Homebrew install: the bundled `unlatch` is killed (Gatekeeper, quarantine) when run from Terminal. Check whether approving the app once covers its bundled programs; otherwise decide between a cask step that clears quarantine and a documented manual step.
+- [ ] Full benchmark rerun (`Bench/baselines.sh`, all setups) and record it in `docs/M0-gate.md`.
+- [ ] Hardware tests in `docs/test-matrix.md`: USB stick pulled mid-copy, sleep and wake, a large real disk, the 24-hour soak, a clean-Mac install.
+- [ ] Windows-made images still wanted: Fast Startup, dirty, fragmented `$MFT` (`Tests/Images/README.md`).
