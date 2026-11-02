@@ -155,7 +155,7 @@ A Finder copy of a GoPro footage folder (364 files, 123 GB, mostly multi-GB clip
   </picture>
 </p>
 
-| | |
+| Measure | Result |
 |---|---|
 | Copied | 123.1 GB in 19 min 21 s |
 | Average write speed | **106 MB/s** |
