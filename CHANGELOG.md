@@ -4,6 +4,8 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.10] - 2026-11-02
+
 ### Fixed
 - After **Mark as Checked**, the disk shows as "Read-write" right away; it showed "Read-write, unchecked" and offered Mark as Checked again until it was ejected.
 
