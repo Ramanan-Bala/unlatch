@@ -1,0 +1,416 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Built by Scripts/build-site.sh; content follows README.md and docs/*.md. Keep them in step. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unlatch: NTFS read-write for macOS</title>
+  <meta name="description" content="Unlatch lets your Mac write to NTFS disks: Windows-formatted USB drives, external SSDs and internal partitions. Free software under the GPL.">
+  <meta name="color-scheme" content="light dark">
+  <meta property="og:title" content="Unlatch">
+  <meta property="og:description" content="Write to NTFS disks on your Mac. libntfs-3g on macFUSE, with a menu-bar app and a command-line tool.">
+  <meta property="og:image" content="brand/social-preview.png">
+  <link rel="icon" href="brand/app-icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="#" aria-label="Unlatch home">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="brand/wordmark-dark.svg">
+        <img src="brand/wordmark.svg" alt="Unlatch" width="77" height="30">
+      </picture>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#install">Install</a>
+      <a href="#setup">Setup</a>
+      <a href="#use">Use</a>
+      <a href="#features">Features</a>
+      <a href="#performance">Performance</a>
+      <a href="#cli">CLI</a>
+      <a href="#help">Help</a>
+      <a href="https://github.com/Ramanan-Bala/unlatch">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="hero">
+  <div class="wrap">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="brand/wordmark-dark.svg">
+      <img class="wordmark" src="brand/wordmark.svg" alt="Unlatch" width="368" height="144">
+    </picture>
+    <h1>Write to NTFS disks on your Mac</h1>
+    <p class="lead">Windows-formatted USB drives, external SSDs and internal partitions, read-write. Unlatch runs <a href="https://github.com/tuxera/ntfs-3g">libntfs-3g</a> behind a small mount daemon on <a href="https://macfuse.github.io">macFUSE</a>, with a menu-bar app that mounts disks as you plug them in and a command-line tool, <code>unlatch</code>.</p>
+    <div class="badges">
+      <span class="badge beta">Beta · @VERSION@</span>
+      <span class="badge">macOS 27+</span>
+      <span class="badge">Apple Silicon</span>
+      <span class="badge">GPL-3.0-or-later</span>
+    </div>
+    <div class="cta">
+      <a class="button primary" href="#install">Install</a>
+      <a class="button secondary" href="https://github.com/Ramanan-Bala/unlatch/releases">Download the DMG</a>
+      <a class="button secondary" href="https://github.com/Ramanan-Bala/unlatch">Source on GitHub</a>
+    </div>
+<pre><code>brew tap ramanan-bala/unlatch
+brew trust --tap ramanan-bala/unlatch
+brew install --cask ramanan-bala/unlatch/unlatch</code></pre>
+  </div>
+</div>
+
+<section id="status">
+  <div class="wrap">
+    <div class="note">
+      <strong>Status: beta.</strong> Unlatch is tested heavily on disk images (randomized model tests, fuzzing, Windows <code>chkdsk</code> of every kind of volume it writes; see the <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/docs/test-matrix.md">test matrix</a>) and has been used on real disks, but it is new. Keep a backup of anything that matters on the disks you use it with.
+    </div>
+  </div>
+</section>
+
+<section id="requirements">
+  <div class="wrap">
+    <h2>Requirements</h2>
+    <div class="table">
+      <table>
+        <thead><tr><th>What</th><th>Why</th><th>Who installs it</th></tr></thead>
+        <tbody>
+          <tr><td>A Mac with Apple Silicon (M1 or later)</td><td>Unlatch is built for arm64 only</td><td>–</td></tr>
+          <tr><td>macOS 27 or later</td><td>the macFUSE and system APIs Unlatch uses</td><td>–</td></tr>
+          <tr><td><a href="https://macfuse.github.io">macFUSE</a> 5.4 or later</td><td>Unlatch mounts disks through it. Its license does not allow bundling it, so it is installed separately</td><td><strong>Unlatch does it for you</strong> (setup window, <code>unlatch setup</code>, or the Homebrew cask), from macFUSE's own releases</td></tr>
+          <tr><td>An administrator password</td><td>installing macFUSE and the disk helper</td><td>you, when macOS asks</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Everything else ships inside Unlatch: libntfs-3g (the NTFS engine) and swift-argument-parser are built into its programs, and the rest is part of macOS.</p>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Install</h2>
+    <p>Pick one. Unlatch builds are <strong>not signed with an Apple Developer ID</strong> and are not notarized (there is no paid Apple membership behind the project), so macOS asks once before opening the app.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Homebrew <span class="tag">Recommended</span></h3>
+        <p>Installs macFUSE (the <code>macfuse</code> cask) if needed, puts Unlatch in Applications, and links the <code>unlatch</code> command.</p>
+<pre><code>brew tap ramanan-bala/unlatch
+brew trust --tap ramanan-bala/unlatch
+brew install --cask ramanan-bala/unlatch/unlatch</code></pre>
+        <p class="muted">Homebrew 7 loads casks from other taps only once trusted.</p>
+      </div>
+      <div class="card">
+        <h3>DMG</h3>
+        <ol>
+          <li>Download <code>Unlatch-&lt;version&gt;.dmg</code> and <code>SHA256SUMS</code> from <a href="https://github.com/Ramanan-Bala/unlatch/releases">Releases</a>.</li>
+          <li>Optionally check it: <code>shasum -a 256 -c SHA256SUMS</code></li>
+          <li>Open it and drag <strong>Unlatch</strong> to <strong>Applications</strong>.</li>
+        </ol>
+        <p>You do not need to install macFUSE first: the setup window does it.</p>
+      </div>
+      <div class="card">
+        <h3>Command-line tools only</h3>
+        <p>No app; built from source, needs Xcode 27. Homebrew formulae cannot install casks, so macFUSE comes first.</p>
+<pre><code>brew install --cask macfuse
+brew tap ramanan-bala/unlatch
+brew trust --tap ramanan-bala/unlatch
+brew install ramanan-bala/unlatch/unlatch
+unlatch setup</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="setup">
+  <div class="wrap">
+    <h2>One-time setup</h2>
+    <p>The first time, Unlatch's setup window opens and checks each step; most of them it does for you. From a terminal, <code>unlatch setup</code> runs the same steps, and <code>unlatch doctor</code> checks them at any time.</p>
+    <ol class="steps">
+      <li>
+        <strong>Open Unlatch</strong>
+        It is not signed with an Apple Developer ID, so macOS asks first. In Applications, right-click <strong>Unlatch</strong> &gt; <strong>Open</strong> &gt; <strong>Open</strong>. If there is no Open button: System Settings &gt; Privacy &amp; Security &gt; <strong>Open Anyway</strong>. Needed once per version. Do this before using <code>unlatch</code> in Terminal: until the app has been opened once, macOS stops its bundled programs without a message (<code>zsh: killed</code>).
+      </li>
+      <li>
+        <strong>macFUSE</strong>
+        In the setup window, click <strong>Install macFUSE</strong>. Unlatch downloads the latest release from macFUSE's GitHub page, checks it against the checksum macFUSE publishes, checks that the installer is signed by macFUSE's developer (Benjamin Fleischer, team 3T5GSNBU6W) and notarized by Apple, and then installs it. macOS asks for your password. If macFUSE is older than 5.4, the button says <strong>Update macFUSE</strong>. Homebrew users already have it. Prefer to do it yourself? Install it from <a href="https://macfuse.github.io">macfuse.github.io</a> or with <code>brew install --cask macfuse</code>; Unlatch then finds it.
+      </li>
+      <li>
+        <strong>Allow macFUSE's kernel extension</strong>
+        Apple Silicon Macs only load extensions from other developers after you allow it, once. Unlatch cannot do this for you:
+        <ol>
+          <li>Shut down the Mac. Press and hold the power button until "Loading startup options" appears, then choose <strong>Options</strong> &gt; <strong>Continue</strong>.</li>
+          <li>In Recovery: <strong>Utilities</strong> &gt; <strong>Startup Security Utility</strong> &gt; select your startup disk &gt; <strong>Security Policy</strong> &gt; <strong>Reduced Security</strong>, and turn on <strong>"Allow user management of kernel extensions from identified developers"</strong>. Click OK, enter your password, and restart.</li>
+          <li>Back in macOS, run the setup window's self-test (or mount any disk). macOS reports a blocked system extension: open System Settings &gt; <strong>Privacy &amp; Security</strong>, click <strong>Allow</strong> next to "Benjamin Fleischer", and restart when asked.</li>
+        </ol>
+        <p class="muted">If you used macFUSE before, this is already done. Reduced Security only lets you approve extensions yourself; FileVault and other protections stay on.</p>
+      </li>
+      <li>
+        <strong>The helper, for real disks</strong>
+        Disk images work without it. For USB drives and internal disks, click <strong>Install…</strong> in the setup window (or answer yes in <code>unlatch setup</code>); macOS asks for your password. Then click <strong>Allow in Full Disk Access</strong>: System Settings opens at Privacy &amp; Security &gt; <strong>Full Disk Access</strong>, and a Finder window shows <strong>Unlatch Helper</strong>. Drag it into the list and turn it on. Without it, macOS keeps the helper from opening removable disks.
+        <p class="muted">Why the helper and not the app? Disk devices can only be opened by root, so the small root helper opens them and hands them to Unlatch, which runs as you. macOS checks Full Disk Access for the program that opens the disk, which is the helper. In Login Items it appears under Unlatch.</p>
+      </li>
+      <li>
+        <strong>Self-test</strong>
+        The setup window mounts a tiny built-in NTFS volume and reads it back. When it shows a green check, you are done. Optional: <strong>Open Unlatch at login</strong>, and <strong>Copy install command</strong> to put <code>unlatch</code> on your PATH (Homebrew does that already).
+      </li>
+    </ol>
+    <p>Check it all again any time from the menu bar: <strong>Setup &amp; Health…</strong> opens the same window (its icon turns orange when something needs attention). From a terminal: <code>unlatch doctor</code>.</p>
+  </div>
+</section>
+
+<section id="use">
+  <div class="wrap">
+    <h2>Use</h2>
+    <ul>
+      <li><strong>Plug in a disk.</strong> Unlatch mounts NTFS disks in Finder, under <code>/Volumes</code>, read-write when Windows left them in a clean state. Settings choose which disks are mounted automatically, and the menu has per-disk choices.</li>
+      <li><strong>Eject</strong> from the menu, from Finder, or with <code>unlatch eject &lt;disk&gt;</code> before unplugging.</li>
+      <li><strong>Read-only when it is not safe to write.</strong> If Windows was hibernated, used Fast Startup, or did not finish writing, Unlatch mounts the disk read-only and says why. See <a href="#read-only">Why is my disk read-only?</a></li>
+      <li><strong>Command line:</strong> <code>unlatch list</code>, <code>mount</code>, <code>unmount</code>, <code>eject</code>, <code>status</code>, <code>doctor</code>; see <a href="#cli">the CLI reference</a>.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What works</h2>
+    <ul class="checks">
+      <li>Reading and writing files and folders of any size, sparse and compressed files, Unicode names (stored in Windows' normal form, NFC).</li>
+      <li>Extended attributes, Finder tags and comments, kept as NTFS named streams, so no <code>._</code> files appear; Windows sees them as alternate data streams.</li>
+      <li>Symlinks: links within the disk are native Windows symlinks that Windows follows; other links use the WSL format. Windows symlinks and junctions are readable. Hard links.</li>
+      <li>Hidden files, and the Windows read-only attribute as a missing write permission.</li>
+    </ul>
+
+    <h3>Limitations</h3>
+    <ul class="limits">
+      <li><strong>Windows Fast Startup</strong> keeps the disk "in use" when Windows only appears to shut down. Unlatch then mounts read-only. Turn Fast Startup off in Windows (Control Panel &gt; Power Options &gt; "Choose what the power buttons do"), or hold Shift while choosing Shut Down.</li>
+      <li><strong>Windows name rules apply.</strong> Names cannot contain <code>\ / : * ? " &lt; &gt; |</code>, end with a dot or space, or be a reserved name such as <code>CON</code> or <code>aux.txt</code>; the Mac reports "invalid argument" for those.</li>
+      <li><strong>Encrypted (EFS) files</strong> cannot be read or written; BitLocker volumes are not supported.</li>
+      <li><strong>No journal replay.</strong> Like ntfs-3g, Unlatch does not replay the NTFS journal. Always eject before unplugging; if a disk was pulled out mid-write, run <code>chkdsk</code> on Windows before relying on it.</li>
+      <li><strong>Not indexed by Spotlight</strong>, and not usable for Time Machine.</li>
+      <li>Permissions: files belong to the user who mounted the disk; NTFS access lists are not mapped.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="read-only">
+  <div class="wrap">
+    <h2>Why is my disk read-only?</h2>
+    <p>Unlatch writes to an NTFS disk only when Windows left it in a clean state. Otherwise writing could lose what Windows still has to write, or damage the disk, so Unlatch mounts it <strong>read-only</strong> and says why: in the menu (the badge next to the disk), in a notification, and in <code>unlatch status &lt;disk&gt;</code>. You can always read and copy files off the disk.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>What Unlatch says (<code>state</code>)</th><th>What it means</th><th>What to do</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Windows is hibernated on this volume</strong> (<code>hibernated</code>)</td><td>Windows went into hibernation with this disk attached; its open files live in <code>hiberfil.sys</code>.</td><td>Start Windows, then choose <strong>Shut Down</strong> (not Hibernate or Sleep).</td></tr>
+          <tr><td><strong>Windows Fast Startup (or an abrupt unplug) left cached metadata</strong> (<code>hibernated</code>)</td><td>Windows' "Shut Down" with Fast Startup on is really a hibernation of the system; the disk is left in use. An unplug without ejecting can look the same.</td><td>In Windows, hold <strong>Shift</strong> while choosing Shut Down, or turn Fast Startup off: Control Panel &gt; Power Options &gt; Choose what the power buttons do &gt; uncheck "Turn on fast startup".</td></tr>
+          <tr><td><strong>$LogFile has unfinished transactions</strong> (<code>unclean_log</code>)</td><td>Windows did not finish writing before the disk went away.</td><td>Attach the disk to Windows, let it open, then Shut Down (or eject it there).</td></tr>
+          <tr><td><strong>Volume is marked dirty</strong> (<code>dirty</code>)</td><td>Windows found a problem and wants <code>chkdsk</code> to run.</td><td>On Windows: <code>chkdsk X: /f</code> (X is the disk's letter), then eject it.</td></tr>
+          <tr><td><strong>Write-protected</strong>, or <strong>cannot be opened for writing</strong></td><td>The disk, card or image itself refuses writes (a lock switch, a read-only image, a failing drive).</td><td>Check the lock switch; copy a read-only image to a writable one.</td></tr>
+          <tr><td><strong>Handed over read-only</strong></td><td>You (or a script) asked for read-only, for example <code>unlatch mount -r</code>.</td><td>Unmount and mount again without <code>-r</code>.</td></tr>
+          <tr><td><strong>NTFS metadata is damaged</strong> (<code>corrupt</code>)</td><td>Unlatch could not make sense of the disk's own records. It does not mount it at all.</td><td>On Windows: <code>chkdsk X: /f</code>. Copy what you can elsewhere first.</td></tr>
+          <tr><td><strong>No NTFS boot sector</strong> (<code>not_ntfs</code>)</td><td>The partition is not NTFS.</td><td>Nothing to do; macOS or another app handles it.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Unlatch never forces a write (ntfs-3g's <code>recover</code> or <code>remove_hiberfile</code> options are not used): only Windows can safely finish what Windows started. After fixing it, eject the disk on Windows and plug it into the Mac again, and Unlatch mounts it read-write. Or, if it is still connected: <code>unlatch unmount &lt;disk&gt;</code> then <code>unlatch mount &lt;disk&gt;</code>.</p>
+  </div>
+</section>
+
+<section id="performance">
+  <div class="wrap">
+    <h2>Performance</h2>
+    <p>Speed depends on the disk. Numbers from the project's test Mac (Apple M2, 8 GiB, macOS 27.0.1); the method and raw results are in <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/Bench/README.md">Bench/README.md</a>.</p>
+
+    <h3>Real drive: USB 2.0 stick</h3>
+    <p>SanDisk Cruzer Blade 16 GB (USB 2.0), one 15.8 GB NTFS partition, Unlatch 1.0.0-beta.3. The device's own speed is <code>sudo dd</code> of 512 MiB in 4 MiB blocks on the raw partition; both are medians of 3.</p>
+    <div class="bars" role="img" aria-label="Sequential read: device 32.9 MB/s, Unlatch 33.1 MB/s. Sequential write: device 6.7 MB/s, Unlatch 5.5 MB/s.">
+      <div class="bar-group">
+        <h4>Sequential read (cold) <span class="muted">· 100% of the device</span></h4>
+        <div class="bar-row"><span class="label">Device</span><span class="track"><span class="fill device" style="width:99.4%;display:block"></span></span><span class="value">32.9 MB/s</span></div>
+        <div class="bar-row"><span class="label">Unlatch</span><span class="track"><span class="fill" style="width:100%;display:block"></span></span><span class="value">33.1 MB/s</span></div>
+      </div>
+      <div class="bar-group">
+        <h4>Sequential write <span class="muted">· 82% of the device</span></h4>
+        <div class="bar-row"><span class="label">Device</span><span class="track"><span class="fill device" style="width:100%;display:block"></span></span><span class="value">6.7 MB/s</span></div>
+        <div class="bar-row"><span class="label">Unlatch</span><span class="track"><span class="fill" style="width:82%;display:block"></span></span><span class="value">5.5 MB/s</span></div>
+      </div>
+    </div>
+    <p class="muted">Also on the stick: small files (1–16 KiB, create + delete) 94 files/s; metadata (create, rename, delete) 1,405 ops/s. Reads run at the stick's full speed. Writes lose about a fifth, most likely to NTFS's own writes (MFT records, bitmap, log) on a device this slow.</p>
+
+    <h3>SSD image</h3>
+    <p>On a fast SSD image, sequential copies run at about 1.5–2.7 GB/s. Every file system below gets its own 4 GiB image on the internal SSD; image-backed volumes live in the host's page cache, so these compare file system stacks, not drives. <code>ntfs3g</code> (stock ntfs-3g on macFUSE) and <code>unlatch-file</code> both mount the image file, like for like.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>Test</th><th class="num">APFS</th><th class="num">exFAT</th><th class="num">stock ntfs-3g</th><th class="num">Unlatch</th></tr></thead>
+        <tbody>
+          <tr><td>Sequential write</td><td class="num">2,709 MB/s</td><td class="num">2,402 MB/s</td><td class="num">932 MB/s</td><td class="num">1,533 MB/s</td></tr>
+          <tr><td>Sequential read, cold</td><td class="num">2,385 MB/s</td><td class="num">2,266 MB/s</td><td class="num">2,834 MB/s</td><td class="num">8,095 MB/s*</td></tr>
+          <tr><td>Small files (1–16 KiB)</td><td class="num">3,296 files/s</td><td class="num">1,190 files/s</td><td class="num">2,296 files/s</td><td class="num">2,840 files/s</td></tr>
+          <tr><td>Metadata (create, rename, delete)</td><td class="num">25,341 ops/s</td><td class="num">877 ops/s</td><td class="num">2,118 ops/s</td><td class="num">2,837 ops/s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">* Cold reads remount first, but image-file setups can still be served from the host's cache of the image. 1024 MiB file, 30,000 small files, 10,000 metadata files. Through an attached disk (<code>/dev/rdiskN</code>, the way a real drive is used), the engine's page cache brought sequential writes to 2,744 MB/s and cold reads to 1,788 MB/s. Details: <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/docs/M0-gate.md">docs/M0-gate.md</a>.</p>
+  </div>
+</section>
+
+<section id="cli">
+  <div class="wrap">
+    <h2>The <code>unlatch</code> command</h2>
+<pre><code>unlatch list [--json]                      <span class="comment"># NTFS volumes and who has them mounted</span>
+unlatch mount &lt;disk&gt; [-r|--read-only] [--json]
+unlatch unmount &lt;disk&gt; [--force]
+unlatch unmount --all [--force]            <span class="comment"># every volume Unlatch has mounted (before an update)</span>
+unlatch eject &lt;disk&gt; [--force]             <span class="comment"># unmount, then eject the whole disk</span>
+unlatch status [&lt;disk&gt;] [--json]           <span class="comment"># Unlatch's verdict per volume (clean, dirty, hibernated, ...)</span>
+unlatch doctor                             <span class="comment"># check macOS, macFUSE, unlatch-fuse, the helper</span>
+unlatch setup [--yes] [--no-helper]        <span class="comment"># install or update macFUSE, explain its approval, install the helper</span>
+sudo unlatch install-helper                <span class="comment"># once, for real disks (not needed for disk images)</span>
+sudo unlatch uninstall-helper</code></pre>
+    <p><code>&lt;disk&gt;</code> is a BSD name (<code>disk6s1</code>), a device path (<code>/dev/disk6s1</code> or <code>/dev/rdisk6s1</code>), a mount path (<code>/Volumes/Seagate</code>), or a volume label (case-insensitive; must name one volume).</p>
+    <p><code>mount</code> mounts at <code>/Volumes/&lt;label&gt;</code>. It is read-write only when the volume is clean and nothing forces read-only. If Apple's read-only NTFS driver had the volume, Unlatch unmounts it first and gives it back if mounting fails.</p>
+
+    <h3>Exit codes</h3>
+    <div class="table">
+      <table>
+        <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>success</td></tr>
+          <tr><td>1</td><td>error (the message says why)</td></tr>
+          <tr><td>2</td><td>usage: unknown command or option, missing argument</td></tr>
+          <tr><td>3</td><td>mounted, but read-only although read-write was asked for; the reason is on stderr</td></tr>
+          <tr><td>4</td><td>macFUSE missing or its kernel extension not allowed (<code>doctor</code> says which)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><code>list --json</code>, <code>status --json</code> and <code>mount --json</code> print a stable JSON format (<code>"schema": 1</code>). For example:</p>
+<pre><code>unlatch status --json | jq -r '.volumes[] | select(.owner == "unlatch") | .mountPoint'</code></pre>
+    <p>The full reference, including every JSON field: <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/docs/cli.md">docs/cli.md</a>.</p>
+  </div>
+</section>
+
+<section id="help">
+  <div class="wrap">
+    <h2>Troubleshooting</h2>
+    <p>Start with the menu bar's <strong>Setup &amp; Health…</strong> window, or <code>unlatch doctor</code> in a terminal: it checks macOS, macFUSE and its system extension, <code>unlatch-fuse</code>, the helper, and the status directory, and says what to fix.</p>
+
+    <details>
+      <summary>The disk does not mount, or Finder shows it read-only</summary>
+      <ul>
+        <li><strong>Read-only with a reason:</strong> see <a href="#read-only">Why is my disk read-only?</a></li>
+        <li><strong>"macFUSE is not installed" / exit code 4:</strong> install it (<code>brew install --cask macfuse</code>), then allow its system extension: on Apple Silicon, Reduced Security in Recovery once, then System Settings &gt; Privacy &amp; Security &gt; Allow. Restart if macOS asks.</li>
+        <li><strong>"macOS blocked the Unlatch helper"</strong> (real disks only): give the helper Full Disk Access: System Settings &gt; Privacy &amp; Security &gt; Full Disk Access &gt; + &gt; ⌘⇧G &gt; <code>/Library/PrivilegedHelperTools/Unlatch Helper</code>.</li>
+        <li><strong>"needs the helper":</strong> run Unlatch's setup again (menu &gt; Finish setting up), or <code>sudo unlatch install-helper</code>.</li>
+        <li><strong>Apple's read-only NTFS driver got the disk first:</strong> <code>unlatch mount &lt;disk&gt;</code> takes it over (and gives it back if mounting fails). Turning auto-mount on in Settings makes Unlatch claim NTFS disks as they appear.</li>
+        <li><strong>The disk is not listed at all:</strong> <code>diskutil list</code> should show a <code>Windows_NTFS</code> or <code>Microsoft Basic Data</code> partition. BitLocker-encrypted partitions are not supported.</li>
+      </ul>
+    </details>
+    <details>
+      <summary>"Unlatch can't be opened because Apple cannot check it"</summary>
+      <p>Unlatch is not signed with an Apple Developer ID. Right-click Unlatch in Applications &gt; Open, then Open; or System Settings &gt; Privacy &amp; Security &gt; Open Anyway.</p>
+    </details>
+    <details>
+      <summary><code>unlatch</code> in Terminal says "killed"</summary>
+      <p>macOS stops the programs inside a downloaded, unsigned app until the app itself has been opened once. Open Unlatch from Applications with right-click &gt; Open (or Open Anyway in Privacy &amp; Security), then run <code>unlatch</code> again. Needed once per version.</p>
+    </details>
+    <details>
+      <summary>Unmount or eject says the disk is busy</summary>
+      <p>A program still has a file open on it. Close it, or find it with <code>lsof +D /Volumes/&lt;name&gt;</code>. Right after a large copy, macOS itself may hold the disk for a moment; Unlatch retries for a few seconds. <code>unlatch unmount --force &lt;disk&gt;</code> unmounts anyway, which can lose the open program's unsaved changes.</p>
+    </details>
+    <details>
+      <summary>A folder shows up as empty, or a file name is missing</summary>
+      <ul>
+        <li>Names that break Windows' rules (<code>a:b</code>, <code>CON</code>, a trailing dot) cannot be created; programs get "invalid argument".</li>
+        <li>A damaged directory entry is skipped and logged instead of failing the whole folder. Run <code>chkdsk X: /f</code> on Windows.</li>
+      </ul>
+    </details>
+    <details>
+      <summary>Files named "Unlatch recovered N"</summary>
+      <p>A rename was cut off by a crash or an unplug; Unlatch kept the file under this name the next time it mounted the disk. Check it and rename or delete it.</p>
+    </details>
+    <details>
+      <summary>The disk was unplugged without ejecting</summary>
+      <p>Plug it back in: Unlatch mounts it read-only if Windows' records say it was in use, and it repairs its own leftovers. To be sure the disk is consistent, run <code>chkdsk X: /f</code> on Windows. Always eject first next time.</p>
+    </details>
+    <details>
+      <summary>It is slow</summary>
+      <p>Unlatch keeps a write-back cache in memory and writes it out at least every second. Very slow USB 2 sticks and SMR hard disks are slow at small-file work under any file system.</p>
+    </details>
+
+    <h3>Reporting a problem</h3>
+    <ol>
+      <li>Settings &gt; Troubleshooting &gt; <strong>Export logs…</strong> saves the last hour of Unlatch's log.</li>
+      <li>Note <code>unlatch --version</code>, macOS (<code>sw_vers</code>), macFUSE's version (<code>unlatch doctor</code>), and the disk (<code>diskutil info &lt;disk&gt;</code>; no personal data).</li>
+      <li>Open an issue at <a href="https://github.com/Ramanan-Bala/unlatch/issues">github.com/Ramanan-Bala/unlatch/issues</a> with what you did, what you expected and what happened. For anything that might be a security problem, see <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/SECURITY.md">SECURITY.md</a> instead.</li>
+    </ol>
+  </div>
+</section>
+
+<section id="updating">
+  <div class="wrap">
+    <h2>Updating and uninstalling</h2>
+    <p>Unlatch has no automatic updater: a signed updater needs an Apple Developer ID, which the project does not have. Once a day (Settings &gt; Updates, on by default) the app asks GitHub for the list of releases, and the menu shows <strong>"Unlatch X is available…"</strong> when a newer version exists. Nothing about your Mac or disks is sent.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Update</h3>
+<pre><code>brew upgrade --cask unlatch   <span class="comment"># the app</span>
+brew upgrade unlatch          <span class="comment"># the CLI formula</span></code></pre>
+        <p>From the DMG: <code>unlatch unmount --all</code>, quit Unlatch, drag the new app over the old one and open it once with right-click &gt; Open. Settings, auto-mount choices and the helper survive an update.</p>
+        <p class="muted">Upgrading from 1.0.0-beta.3 or earlier with Homebrew removes the helper once: open <strong>Setup &amp; Health…</strong>, click <strong>Install…</strong> next to the helper, and allow it in Full Disk Access.</p>
+      </div>
+      <div class="card">
+        <h3>Uninstall</h3>
+        <p>Settings &gt; About &gt; <strong>Uninstall Unlatch…</strong> unmounts the volumes, removes the helper and the login item, deletes Unlatch's settings and moves the app to the Trash. With Homebrew:</p>
+<pre><code>brew uninstall --cask --zap unlatch</code></pre>
+        <p class="muted">macFUSE stays, since other software may use it; nothing on your NTFS disks belongs to Unlatch.</p>
+      </div>
+    </div>
+    <p>More: <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/docs/updating.md">docs/updating.md</a>, <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/docs/uninstall.md">docs/uninstall.md</a>.</p>
+  </div>
+</section>
+
+<section id="building">
+  <div class="wrap">
+    <h2>Building from source</h2>
+    <p>Xcode 27, <a href="https://github.com/yonaskolb/XcodeGen">XcodeGen</a>, Git LFS, and macFUSE (for its headers):</p>
+<pre><code>Scripts/bootstrap.sh                <span class="comment"># checks tools, builds libntfs-3g, generates Unlatch.xcodeproj</span>
+xcodebuild -scheme Unlatch build    <span class="comment"># app, unlatch-fuse, helper, engine, test harness</span>
+swift build --package-path CLI      <span class="comment"># the unlatch command</span>
+Scripts/release.sh --allow-dirty    <span class="comment"># a local DMG in build/release/</span></code></pre>
+    <h3>How it is built</h3>
+    <ul>
+      <li><code>Engine/</code>: a small C engine over libntfs-3g with one public header (<code>unlatch_engine.h</code>), a write-back page cache, and crash-leftover repair.</li>
+      <li><code>Fuse/</code>: <code>unlatch-fuse</code>, the mount daemon, on libfuse's low-level API.</li>
+      <li><code>Helper/</code>: a tiny privileged helper that only opens NTFS disk devices for the logged-in user and hands them to the daemon, which runs as you.</li>
+      <li><code>Shared/</code>, <code>CLI/</code>, <code>App/</code>: Swift: disk detection and mounting, the <code>unlatch</code> command, the menu-bar app.</li>
+    </ul>
+    <h3>After 1.0</h3>
+    <ul>
+      <li>A native FSKit module, once the project can sign one (needs a paid Apple Developer membership), replacing macFUSE.</li>
+      <li>A repair assistant for disks that need <code>chkdsk</code>, and a format command (mkntfs).</li>
+      <li>Engine replacement behind <code>unlatch_engine.h</code> if a better NTFS implementation becomes available.</li>
+      <li>Localization.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="license">
+  <div class="wrap">
+    <h2>License</h2>
+    <p>Unlatch is free software: <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/LICENSE">GPL-3.0-or-later</a>. It includes libntfs-3g (GPL-2.0-or-later) and uses swift-argument-parser (Apache-2.0); the app's Settings &gt; About &gt; Licenses and source has every notice and the source offer. macFUSE is separate software with its own license and is never included.</p>
+    <p>Contributions are welcome under the Developer Certificate of Origin; see <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Unlatch @VERSION@ · GPL-3.0-or-later</span>
+    <span><a href="https://github.com/Ramanan-Bala/unlatch">GitHub</a> · <a href="https://github.com/Ramanan-Bala/unlatch/releases">Releases</a> · <a href="https://github.com/Ramanan-Bala/unlatch/issues">Issues</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
