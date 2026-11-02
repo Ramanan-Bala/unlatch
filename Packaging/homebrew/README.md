@@ -4,7 +4,7 @@ Templates for the tap repository `Ramanan-Bala/homebrew-unlatch` (plan Step 18, 
 
 | File | Installs | Notes |
 |---|---|---|
-| `Casks/unlatch.rb.in` | `Unlatch.app` from the release DMG, and links `unlatch` | `depends_on cask: "macfuse"`; uninstall unmounts Unlatch volumes, removes the helper; `zap` removes status files and settings |
+| `Casks/unlatch.rb.in` | `Unlatch.app` from the release DMG, and links `unlatch` | `depends_on cask: "macfuse"`; uninstall unmounts Unlatch volumes and quits the app; `zap` also removes the helper (not on uninstall: Homebrew runs it on upgrades, D-76), status files and settings |
 | `Formula/unlatch.rb.in` | `unlatch`, `unlatch-fuse` and the helper, built from the source tarball | formulae cannot depend on casks, so it stops with a message when macFUSE's headers are missing; built with `Scripts/build-tools.sh` (clang) and SwiftPM, because xcodebuild's package resolution cannot run in Homebrew's sandbox |
 
 Users:

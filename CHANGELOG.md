@@ -4,6 +4,10 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Fixed
+- `brew upgrade` no longer removes the helper (and with it its Full Disk Access): the cask removes it only with `brew uninstall --zap` or Settings > Uninstall. Upgrading from beta.3 or earlier still removes it once.
+- `unlatch install-helper` keeps an installed helper that has not changed, with its Full Disk Access.
+
 ## [1.0.0-beta.3] - 2026-11-02
 
 ### Fixed

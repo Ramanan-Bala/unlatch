@@ -17,7 +17,6 @@ Background: Apple DTS says a daemon generally does not inherit its app's TCC gra
 
 ## Other open items
 
-- [ ] `brew upgrade --cask unlatch` removes the helper: Homebrew runs the old cask's whole `uninstall` stanza on upgrade (only `signal` is skipped; `Library/Homebrew/cask/artifact/abstract_uninstall.rb`), including `launchctl` and `delete` for the helper, so after every upgrade the helper must be installed again and, with ad-hoc signing, Full Disk Access granted again. Options: move the helper's removal to `zap` (a plain uninstall then leaves the root helper behind until `--zap` or Settings > Uninstall), or have the app detect a missing helper after an upgrade and offer to reinstall it in one click. Decide, then update the cask, `docs/updating.md` and D-75.
 - [ ] The app's `CFBundleShortVersionString` reads `1.0` for `1.0.0-beta.2` (the build cuts off the pre-release part). Set it to the numeric `X.Y.Z` explicitly and keep the full version elsewhere (for example a custom Info.plist key, or `CFBundleVersion`), so Finder and About show the real version.
 - [ ] Full benchmark rerun (`Bench/baselines.sh`, all setups) and record it in `docs/M0-gate.md`.
 - [ ] Hardware tests in `docs/test-matrix.md`: USB stick pulled mid-copy, sleep and wake, a large real disk, the 24-hour soak, a clean-Mac install.

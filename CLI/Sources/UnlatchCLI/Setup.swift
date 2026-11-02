@@ -74,23 +74,40 @@ struct InstallHelper: ParsableCommand {
         guard getuid() == 0 else { throw fail("run it with sudo: sudo unlatch install-helper") }
         let src = Paths.helper
         guard FileManager.default.isExecutableFile(atPath: src.path) else { throw fail("no helper binary at \(src.path)") }
-        shell(["/bin/launchctl", "bootout", "system/\(HelperOpener.label)"])          // an older one, if any
         let fm = FileManager.default
-        try? fm.createDirectory(atPath: "/Library/PrivilegedHelperTools", withIntermediateDirectories: true)
-        try? fm.removeItem(atPath: Paths.installedHelper)
+        // An identical helper is kept: replacing the file can cost its Full Disk Access grant,
+        // since macOS identifies ad-hoc signed code by its exact contents (D-76).
+        let unchanged = fm.contentsEqual(atPath: src.path, andPath: Paths.installedHelper)
+        let plistUnchanged = (try? String(contentsOfFile: Paths.launchdPlist, encoding: .utf8)) == helperPlist
+        let loaded = shell(["/bin/launchctl", "print", "system/\(HelperOpener.label)"]).0 == 0
+        if !unchanged || !plistUnchanged {
+            shell(["/bin/launchctl", "bootout", "system/\(HelperOpener.label)"])      // an older one, if any
+        }
         try? fm.removeItem(atPath: HelperOpener.legacyInstalledPath)
-        try fm.copyItem(atPath: src.path, toPath: Paths.installedHelper)
-        try fm.setAttributes([.posixPermissions: 0o755, .ownerAccountID: 0, .groupOwnerAccountID: 0],
-                             ofItemAtPath: Paths.installedHelper)
+        if !unchanged {
+            try? fm.createDirectory(atPath: "/Library/PrivilegedHelperTools", withIntermediateDirectories: true)
+            try? fm.removeItem(atPath: Paths.installedHelper)
+            try fm.copyItem(atPath: src.path, toPath: Paths.installedHelper)
+            try fm.setAttributes([.posixPermissions: 0o755, .ownerAccountID: 0, .groupOwnerAccountID: 0],
+                                 ofItemAtPath: Paths.installedHelper)
+        }
         // The copy keeps the download's quarantine flag, but not the approval the user gave the app,
         // so Gatekeeper would block every launch (and launchd retry it every 10 s). The user is
         // installing Unlatch's own helper with administrator rights here, so the flag goes (D-75).
         removexattr(Paths.installedHelper, "com.apple.quarantine", 0)
-        try helperPlist.write(toFile: Paths.launchdPlist, atomically: true, encoding: .utf8)
-        try fm.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0],
-                             ofItemAtPath: Paths.launchdPlist)
-        let (rc, out) = shell(["/bin/launchctl", "bootstrap", "system", Paths.launchdPlist])
-        guard rc == 0 else { throw fail("launchctl bootstrap failed: \(out)") }
+        if !plistUnchanged {
+            try helperPlist.write(toFile: Paths.launchdPlist, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0],
+                                 ofItemAtPath: Paths.launchdPlist)
+        }
+        if !unchanged || !plistUnchanged || !loaded {
+            let (rc, out) = shell(["/bin/launchctl", "bootstrap", "system", Paths.launchdPlist])
+            guard rc == 0 else { throw fail("launchctl bootstrap failed: \(out)") }
+        }
+        if unchanged {
+            print("The Unlatch helper is already this version (\(Paths.installedHelper)); kept it and its Full Disk Access.")
+            return
+        }
         print("""
             Installed the Unlatch helper (\(Paths.installedHelper)).
             Allow it once in System Settings > Privacy & Security > Full Disk Access: drag it there from

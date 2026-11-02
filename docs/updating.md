@@ -20,4 +20,6 @@ brew upgrade unlatch               # the command-line formula, if you use that i
 2. Install the new DMG's app over the old one; open it once with right-click > Open (it is not signed with a Developer ID).
 3. If the release notes say the helper changed, run `sudo unlatch install-helper` again. Full Disk Access is kept.
 
-Your settings and the per-volume auto-mount choices survive an update. **The helper does not, with Homebrew** (it removes the old version's helper while upgrading): afterwards open **Setup & Health…** from the menu, click **Install…** next to the helper, and allow **Unlatch Helper** in Full Disk Access again.
+Your settings, the per-volume auto-mount choices and the helper survive an update, including `brew upgrade` (from 1.0.0-beta.4 on; D-76). When a new version changes the helper itself, Setup & Health shows it: click **Install…** there, and allow **Unlatch Helper** in Full Disk Access again if macOS asks. Reinstalling an unchanged helper keeps it and its Full Disk Access.
+
+**Upgrading from 1.0.0-beta.3 or earlier with Homebrew** still removes the helper once, because the old version's uninstall step runs during the upgrade. Afterwards open **Setup & Health…**, click **Install…** next to the helper, and allow **Unlatch Helper** in Full Disk Access.

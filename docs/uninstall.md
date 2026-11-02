@@ -7,10 +7,12 @@ Settings > About > **Uninstall Unlatch…**: it unmounts Unlatch's volumes (aski
 ## With Homebrew
 
 ```sh
-brew uninstall --cask unlatch          # unmounts, removes the helper and the app
-brew uninstall --cask --zap unlatch    # also deletes status files and settings
+brew uninstall --cask unlatch          # unmounts and removes the app; the helper stays (unused)
+brew uninstall --cask --zap unlatch    # also removes the helper, status files and settings
 brew uninstall unlatch                 # the command-line formula; run `sudo unlatch uninstall-helper` first
 ```
+
+Homebrew runs a cask's uninstall step during upgrades too, so the helper is removed only by `--zap` (D-76); otherwise every upgrade would turn it off. A helper left behind does nothing unless Unlatch asks it to open a disk.
 
 ## By hand
 
