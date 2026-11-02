@@ -106,7 +106,9 @@ static int fio_flush(void *ctx)
 
 int file_io_open(file_io_t *f, const char *path, bool writable)
 {
-    int fd = open(path, writable ? O_RDWR : O_RDONLY);
+    // /dev/fd/N: a descriptor the caller already has (a real disk from the privileged helper,
+    // Tests/Fuse/with-device.py); opening the path would check the device node's permissions.
+    int fd = !strncmp(path, "/dev/fd/", 8) ? dup(atoi(path + 8)) : open(path, writable ? O_RDWR : O_RDONLY);
 
     if (fd < 0) {
         memset(f, 0, sizeof(*f));

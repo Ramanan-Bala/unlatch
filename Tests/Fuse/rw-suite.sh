@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Read-write suite through a real mount (plan Step 10).
 #
-#   Tests/Fuse/rw-suite.sh [--runs N] [--backend kext|fskit] [--no-git] [--disk]
+#   Tests/Fuse/rw-suite.sh [--runs N] [--backend kext|fskit] [--no-git] [--disk | --device diskNsM]
 #
 # --disk attaches each image as a disk and mounts /dev/diskN (the daemon opens /dev/rdiskN
 # with its page cache, D-62), the way real drives are used.
+# --device runs on a real NTFS volume, mounted and unmounted with the `unlatch` CLI (through
+# the privileged helper, as the app does; UNLATCH_CLI picks the binary). Everything happens in
+# its rw-suite/ folder, which each run deletes first; nothing else on the volume is touched.
+# The checks after unmount go through Tests/Fuse/with-device.py (the probe; ntfsfix needs a
+# snapshot, see that script).
 #
 # Each run: a fresh image, mounted read-write; cp -R, rsync, ditto and a big file, each
 # checked by SHA-256 against the source; mv, case-only rename, rm -r, truncate, touch -t,
@@ -18,14 +23,16 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 products="$root/build/DerivedData/Build/Products/Debug"
 fuse="$products/unlatch-fuse" engine="$products/unlatch-engine"
 ntfsfix="$root/build/ntfs3g/bin/ntfsfix"
-runs=1 backend=kext git=1 disk=0
+cli="${UNLATCH_CLI:-$root/CLI/.build/debug/unlatch}" withdev="$root/Tests/Fuse/with-device.py"
+runs=1 backend=kext git=1 disk=0 device=
 while [ $# -gt 0 ]; do
     case "$1" in
         --runs) runs="$2"; shift 2 ;;
         --backend) backend="$2"; shift 2 ;;
         --no-git) git=0; shift ;;
         --disk) disk=1; shift ;;
-        *) echo "usage: $0 [--runs N] [--backend kext|fskit] [--no-git] [--disk]" >&2; exit 64 ;;
+        --device) device="${2#/dev/}"; shift 2 ;;
+        *) echo "usage: $0 [--runs N] [--backend kext|fskit] [--no-git] [--disk | --device diskNsM]" >&2; exit 64 ;;
     esac
 done
 
@@ -33,14 +40,25 @@ work="$root/build/rw-suite"
 src="$root/Engine/vendor/ntfs-3g"           # a real source tree: ~1,000 files, nested dirs
 mkdir -p "$work"
 if [ "$backend" = fskit ]; then mnt=/Volumes/UnlatchRW; else mnt="$work/mnt"; mkdir -p "$mnt"; fi
+vmnt="$mnt"                                  # the mount point; with --device, $mnt is a folder in it
 
 say() { printf '  %-44s' "$1"; }
 ok() { echo ok; }
 dev=""
 detach() { [ -z "$dev" ] || hdiutil detach -quiet "$dev" 2>/dev/null || true; dev=""; }
 # A system indexer can hold a fresh volume for a moment after heavy writes (EBUSY).
-unmount() { for _ in 1 2 3 4 5 6 7 8 9 10; do umount "$mnt" 2>/dev/null && return 0; sleep 0.5; done; umount "$mnt"; }
-die() { echo "FAIL: $*" >&2; mount | grep -q " on $mnt " && unmount; sleep 0.5; detach; exit 1; }
+unmount() {
+    if [ -n "$device" ]; then
+        for _ in 1 2 3 4 5 6 7 8 9 10; do "$cli" unmount "$device" > /dev/null 2>&1 && return 0; sleep 0.5; done
+        "$cli" unmount "$device"; return
+    fi
+    for _ in 1 2 3 4 5 6 7 8 9 10; do umount "$mnt" 2>/dev/null && return 0; sleep 0.5; done; umount "$mnt"
+}
+mounted() { mount | grep -q " on $vmnt (" ; }
+die() { echo "FAIL: $*" >&2; mounted && unmount; sleep 0.5; detach; exit 1; }
+# The volume's device, for the engine: an image path, or the helper's descriptor (--device).
+on_vol() { if [ -n "$device" ]; then "$withdev" "$device" "$1" "${@:2}"; else "${@:2}"; fi; }
+dev_arg() { if [ -n "$device" ]; then echo {}; else echo "$vol"; fi; }
 readdir_writer="$root/build/readdir-writer"
 clang -Wall -Wextra -Werror -o "$readdir_writer" "$root/Tests/Fuse/readdir-writer.c" || exit 1
 
@@ -51,7 +69,16 @@ expect_same() {
     diff <(hashes "$1") <(hashes "$2") > "$work/diff.txt" || { head -20 "$work/diff.txt" >&2; die "$3 differs"; }
 }
 
-mount_rw() { "$fuse" --backend "$backend" "$@" "$vol" "$mnt" 2>/dev/null || die "mount $*"; }
+mount_rw() {
+    if [ -n "$device" ]; then
+        local out
+        out=$(UNLATCH_BACKEND="$backend" "$cli" mount --json "$@" "$device") || die "unlatch mount $* $device"
+        vmnt=$(printf '%s' "$out" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["mountPoint"])') || die "mount point"
+        mnt="$vmnt/rw-suite"
+        return
+    fi
+    "$fuse" --backend "$backend" "$@" "$vol" "$mnt" 2>/dev/null || die "mount $*"
+}
 
 head -c $((300 << 20)) /dev/urandom > "$work/big.bin"
 src_hashes="$work/src.sha"
@@ -59,19 +86,25 @@ hashes "$src" > "$src_hashes"
 
 for run in $(seq 1 "$runs"); do
     echo "rw-suite: run $run of $runs ($backend backend)"
-    rm -f "$work/run.img"
-    img=$(cd "$work" && "$root/Scripts/make-image.sh" run 2g RWSUITE | tail -1)
+    win_nfd=$(printf 'e\314\201te\314\201-nfd') top=""
+    if [ -n "$device" ]; then
+        # A clean rw-suite/ folder: the volume's own content stays as it is.
+        vol="/dev/$device" img="" top=/rw-suite
+        "$cli" unmount "$device" > /dev/null 2>&1 || true
+        mount_rw; rm -rf "${mnt:?}"; unmount
+        on_vol rw "$engine" mkdir {} "$top" > /dev/null || die "mkdir $top"
+    else
+        rm -f "$work/run.img"
+        img=$(cd "$work" && "$root/Scripts/make-image.sh" run 2g RWSUITE | tail -1)
+        vol="$img"
+    fi
     # D-83: names stored decomposed, as Windows may store them (the harness stores names as given).
-    win_nfd=$(printf 'e\314\201te\314\201-nfd')
-    printf nfd | "$engine" put "$img" - "/$win_nfd.txt" >/dev/null || die "put $win_nfd.txt"
-    printf nfd | "$engine" put "$img" - "/$win_nfd-2.txt" >/dev/null || die "put $win_nfd-2.txt"
-    vol="$img"
+    printf nfd | on_vol rw "$engine" put "$(dev_arg)" - "$top/$win_nfd.txt" >/dev/null || die "put $win_nfd.txt"
+    printf nfd | on_vol rw "$engine" put "$(dev_arg)" - "$top/$win_nfd-2.txt" >/dev/null || die "put $win_nfd-2.txt"
     if [ "$disk" = 1 ]; then dev=$("$root/Scripts/attach-image.sh" "$img"); vol="/dev/$dev"; fi
     mount_rw
-    mount | grep " on $mnt " | grep -q read-only && die "mounted read-only"
+    mount | grep " on $vmnt (" | grep -q read-only && die "mounted read-only"
 
-    # D-81: a second mount of the mounted volume, read-write or read-only, by the same path or
-    # (with --disk) the image behind the device, is refused.
     say "decomposed names from Windows"
     ls "$mnt" | grep -qx "$win_nfd.txt" || die "$win_nfd.txt not listed"
     [ "$(cat "$mnt/$win_nfd.txt")" = nfd ] || die "read $win_nfd.txt"
@@ -81,12 +114,23 @@ for run in $(seq 1 "$runs"); do
     [ -z "$(ls "$mnt" | grep nfd)" ] || die "nfd names left: $(ls "$mnt" | grep nfd)"
     ok
 
+    # D-81: a second mount of the mounted volume, read-write or read-only, by the same path or
+    # (with --disk) the image behind the device, or (with --device) the helper's descriptor, is refused.
     say "second mount of the volume refused"
     mkdir -p "$work/mnt2"
-    for args in "$vol" "-r $vol" "$img"; do
-        # shellcheck disable=SC2086
-        if "$fuse" --backend kext $args "$work/mnt2" 2>/dev/null; then umount "$work/mnt2"; die "second mount: $args"; fi
-    done
+    if [ -n "$device" ]; then
+        for ro in "" -r; do
+            # shellcheck disable=SC2086
+            if "$withdev" "$device" rw "$fuse" --fd 3 --backend kext $ro "$vol" "$work/mnt2" 2>/dev/null; then
+                umount "$work/mnt2"; die "second mount through the helper $ro"
+            fi
+        done
+    else
+        for args in "$vol" "-r $vol" "$img"; do
+            # shellcheck disable=SC2086
+            if "$fuse" --backend kext $args "$work/mnt2" 2>/dev/null; then umount "$work/mnt2"; die "second mount: $args"; fi
+        done
+    fi
     ok
 
     say "cp -R a source tree";    cp -R "$src" "$mnt/cp";                  expect_same "$src" "$mnt/cp" "cp -R"; ok
@@ -178,8 +222,11 @@ for run in $(seq 1 "$runs"); do
     say "unmount, probe CLEAN, ntfsfix -n"
     cp_snapshot="$work/cp.sha"; (cd "$mnt/cp" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) > "$cp_snapshot"
     unmount
-    "$engine" probe "$vol" | grep -q '^state: *clean' || die "probe after unmount: $("$engine" probe "$vol" | head -1)"
-    "$ntfsfix" -n "$vol" > "$work/ntfsfix.txt" 2>&1 || { cat "$work/ntfsfix.txt" >&2; die "ntfsfix -n"; }
+    probe=$(on_vol ro "$engine" probe "$(dev_arg)")
+    printf '%s\n' "$probe" | grep -q '^state: *clean' || die "probe after unmount: $(printf '%s' "$probe" | head -1)"
+    if [ -z "$device" ]; then           # ntfs-3g opens paths itself: a device needs a snapshot
+        "$ntfsfix" -n "$vol" > "$work/ntfsfix.txt" 2>&1 || { cat "$work/ntfsfix.txt" >&2; die "ntfsfix -n"; }
+    fi
     ok
 
     say "read-only remount, hashes again"
