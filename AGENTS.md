@@ -29,8 +29,10 @@ Each step updates this list.
 | Build the project website (GitHub Pages; `.github/workflows/pages.yml` deploys it from `main`) | `Scripts/build-site.sh [outdir]` → `build/site/`; preview: `python3 -m http.server -d build/site 8000` |
 | Build unlatch-fuse and the helper with clang only (the Homebrew formula's path) | `Scripts/build-tools.sh <outdir>` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
+| Test on a real, disposable NTFS disk (both backends, big and small files, kill, snapshot check; prompts for replug, pull and sleep) | `Scripts/test-real-disk.sh <disk> [--quick] [--no-physical] [--fill] [--bench] [--only s1,s2]` → `build/real-disk/` |
+| Run a command on a real disk through the helper (fd 3), or snapshot it | `Tests/Fuse/with-device.py <diskNsM> ro\|rw <cmd> {}`; `... ro --snapshot <out.img>` |
 | Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
-| Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk) | `Tests/Fuse/rw-suite.sh --runs 3 [--backend kext\|fskit] [--no-git] [--disk]` |
+| Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk, `--device` a real one in its `rw-suite/` folder) | `Tests/Fuse/rw-suite.sh --runs 3 [--backend kext\|fskit] [--no-git] [--disk \| --device diskNsM]` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
 | Test UnlatchCore | `swift test --package-path Shared`; with attached images and macFUSE: `UNLATCH_INTEGRATION=1 swift test --package-path Shared --no-parallel` (in parallel, ejects of several images at once can fail "busy") |

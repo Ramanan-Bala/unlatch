@@ -17,6 +17,21 @@ Machine: Apple M2, 8 GiB, macOS 27.0.1, macFUSE 5.4.0 (kext backend), Windows 11
 | UnlatchCore integration tests (mount, unmount, eject, Apple's mount restored, watcher, dead-daemon reaping) | pass | 9 of 9 | 2026-11-01 | step 17 |
 | CLI tests | pass | 4 of 4 | 2026-11-01 | step 17 |
 
+## Real disk (`Scripts/test-real-disk.sh`)
+
+SanDisk Cruzer Blade 16 GB, USB 2.0 (raw: 33 MB/s read, 6.7 MB/s write), GPT, NTFS made by Windows. Unlatch 1.0.0-beta.6 (build `636816e`), macFUSE 5.5.0, both backends. Reports in `build/real-disk/`.
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| Read-write suite on the stick, kext backend (`rw-suite.sh --device`, through the helper and the CLI) | every check passes; CLEAN after unmount | pass, 21 of 21 steps (3 min 47 s), incl. git clone + fsck, second mount through the helper refused | 2026-11-02 | 636816e |
+| Same, FSKit backend | same | pass | 2026-11-02 | 636816e |
+| 4.5 GiB file (over FAT32's limit) | same SHA-256 after a read-only remount | pass; written in 865 s (5 MiB/s) | 2026-11-02 | 636816e |
+| 10,000 small files in 100 folders | same after a remount; space back after `rm -r` | pass | 2026-11-02 | 636816e |
+| `kill -9` of the daemon mid-copy on the stick | probe not CORRUPT; remount read-write; earlier file intact | probe CLEAN, read-write, 208 files of the copy present, earlier file intact | 2026-11-02 | 636816e |
+| Snapshot of the whole stick after the kill, through the helper | `ntfsfix -n` clean; every file through a read-only mount matches the engine | pass: 116 directories, 1,144 files, 0 failures | 2026-11-02 | 636816e |
+| App's claim against Apple's driver | `diskutil mount` refused while the app runs | refused ("Unlatch mounts this NTFS volume"). With the app **not** running, macOS mounts the stick read-only about 1.5 s after a dead daemon's mount is reaped, and an `unlatch mount` in that window leaves both mounted (carry-over, S2) | 2026-11-02 | 636816e |
+| Replug, pull mid-copy, sleep and wake (`--only replug,pull,sleep`) | see the script | **open**: needs the owner at the Mac | – | – |
+
 ## Interruption (`Tests/Fuse/interrupt.sh`)
 
 | Scenario | Expected | Actual | Date | Build |

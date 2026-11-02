@@ -795,7 +795,22 @@ Scripts/set-version.sh --check && Scripts/bootstrap.sh && xcodebuild -scheme Unl
 /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" -c "Print :CFBundleVersion" -c "Print :UnlatchVersion" build/DerivedData/Build/Products/Debug/Unlatch.app/Contents/Info.plist   # 1.0.0, 6, 1.0.0-beta.5
 ```
 
+### Follow-up: tests on a real disk — 2026-11-02
+
+- `Scripts/test-real-disk.sh <disk>`: confirms the disk (external, NTFS, typed label), then doctor, rw-suite on each backend, a 4.5 GiB file, 10,000 small files, a SIGKILL mid-copy, a snapshot check, optionally `--fill` and `--bench`, and the physical steps (replug, pull mid-copy, sleep) with prompts. Writes only `unlatch-test/` and `rw-suite/`; report in `build/real-disk/`.
+- `rw-suite.sh --device diskNsM` (CLI mounts through the helper, a `rw-suite/` folder). `Tests/Fuse/with-device.py`: a command gets the helper's descriptor as fd 3, or `--snapshot` copies the volume to a sparse image (ntfs-3g's tools open paths, and `/dev/fd/3` is refused by the node's permissions). `unlatch-engine` accepts `/dev/fd/N`.
+- Results on the owner's SanDisk Cruzer Blade 16 GB: every automatic step passed on both backends (docs/test-matrix.md, "Real disk").
+
+```sh
+Scripts/test-real-disk.sh SANDISK --no-physical            # ~45 min on USB 2.0
+Scripts/test-real-disk.sh SANDISK --only replug,pull,sleep  # at the Mac
+```
+
+Surprise: during the run the Unlatch app was not running (no crash report), and Apple's driver mounted the stick read-only beside Unlatch's mount after a reaped dead mount. With the app running its claim refuses Apple's driver (checked with `diskutil mount`). The script now notes when the app is not running.
+
 ## Carry-overs
+
+- **Apple's driver beside a CLI mount (S2, 2026-11-02):** without the app running, macOS mounts an NTFS disk read-only about 1.5 s after a dead daemon's mount is reaped (`reapDeadMounts`), and an `unlatch mount` in that window leaves both mounted (Unlatch read-write, Apple read-only, two volumes in Finder). DiskArbitration does not see the macFUSE mount as using the device (its source is `unlatch@diskNsM`). Options: hold a mount-approval claim in MountService while it mounts and briefly after a reap, or re-check for an Apple mount after mounting and unmount it.
 
 - **Parallel integration tests (2026-11-02):** ejecting several attached images at once fails "busy" now and then. Either serialize the integration tests in code (`@Suite(.serialized)`) or retry the eject in the tests.
 

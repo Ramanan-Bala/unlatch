@@ -122,6 +122,12 @@ if [ $yes = 0 ]; then
 fi
 unmount_vol || true
 
+# The app claims auto-mounted disks from Apple's driver (DiskWatcher(claim:)); without it,
+# macOS mounts the disk read-only after an unmount, sometimes beside Unlatch's own mount.
+if ! pgrep -qf "Unlatch.app/Contents/MacOS/Unlatch"; then
+    say "  note: the Unlatch app is not running: replug mounts with the CLI, and Apple's driver may mount the disk too"
+fi
+
 backends="fskit"
 "$cli" doctor 2>/dev/null | grep -q "kernel extension (allowed" && backends="kext fskit"
 
