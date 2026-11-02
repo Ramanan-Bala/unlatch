@@ -16,26 +16,34 @@ def newest(label):
 
 
 raw, unlatch, exfat = newest("raw-usb-sandisk"), newest("unlatch-usb-sandisk"), newest("exfat-usb-sandisk")
+fskit = newest("unlatch-fskit-usb-sandisk")
 
-SERIES = [("device", "Stick itself (raw dd)"), ("unlatch", "Unlatch (NTFS)"), ("exfat", "exFAT (Apple)")]
+# FSKit sits between the device and the kernel extension: next to exFAT's orange, its yellow
+# fails the palette validator's adjacent-pair checks.
+SERIES = [("device", "Stick itself (raw dd)"), ("fskit", "Unlatch, FSKit"),
+          ("unlatch", "Unlatch, kernel ext."), ("exfat", "exFAT (Apple)")]
 PANELS = [
     ("Sequential read, cold", "MB/s", {"device": raw["mb_per_s"]["raw_read"],
+                                      "fskit": fskit["mb_per_s"]["seq_read_cold"],
                                       "unlatch": unlatch["mb_per_s"]["seq_read_cold"],
                                       "exfat": exfat["mb_per_s"]["seq_read_cold"]}),
     ("Sequential write", "MB/s", {"device": raw["mb_per_s"]["raw_write"],
+                                  "fskit": fskit["mb_per_s"]["seq_write"],
                                   "unlatch": unlatch["mb_per_s"]["seq_write"],
                                   "exfat": exfat["mb_per_s"]["seq_write"]}),
-    ("Small files, 1–16 KiB", "files/s", {"unlatch": unlatch["small_files_per_s"],
+    ("Small files, 1–16 KiB", "files/s", {"fskit": fskit["small_files_per_s"],
+                                          "unlatch": unlatch["small_files_per_s"],
                                           "exfat": exfat["small_files_per_s"]}),
-    ("Metadata: create, rename, delete", "ops/s", {"unlatch": unlatch["metadata_ops_per_s"],
+    ("Metadata: create, rename, delete", "ops/s", {"fskit": fskit["metadata_ops_per_s"],
+                                                   "unlatch": unlatch["metadata_ops_per_s"],
                                                    "exfat": exfat["metadata_ops_per_s"]}),
 ]
 
 THEMES = {
     "light": dict(surface="#fcfcfb", ink="#0b0b0b", ink2="#52514e", base="#c3c2b7",
-                  device="#1baf7a", unlatch="#2a78d6", exfat="#eb6834"),
+                  device="#1baf7a", fskit="#eda100", unlatch="#2a78d6", exfat="#eb6834"),
     "dark": dict(surface="#1a1a19", ink="#f0efec", ink2="#c3c2b7", base="#383835",
-                 device="#199e70", unlatch="#3987e5", exfat="#d95926"),
+                 device="#199e70", fskit="#c98500", unlatch="#3987e5", exfat="#d95926"),
 }
 
 W, PANEL_W, GAP_X = 800, 380, 40
@@ -66,7 +74,7 @@ def svg(t):
     for i, (title, unit, vals) in enumerate(PANELS):
         col, rowi = i % 2, i // 2
         px = col * (PANEL_W + GAP_X)
-        py = y0 + rowi * (36 + 3 * ROW + 24)
+        py = y0 + rowi * (36 + 4 * ROW + 24)
         top = max(vals.values())
         plot_w = PANEL_W - LABEL_W - VALUE_W
         out.append(f'<text x="{px}" y="{py + 12}" fill="{t["ink"]}" font-size="14" font-weight="600">'
@@ -87,7 +95,7 @@ def svg(t):
         panel_h.append(py + 26 + len(rows) * ROW)
     h = max(panel_h) + 6
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{h}" viewBox="-12 -4 {W + 24} {h + 8}" '
-            f'font-family="{FONT}" role="img" aria-label="Unlatch versus exFAT and the raw device on a USB 2.0 stick">\n'
+            f'font-family="{FONT}" role="img" aria-label="Unlatch through FSKit and through the kernel extension, versus exFAT and the raw device on a USB 2.0 stick">\n'
             f'<rect x="-12" y="-4" width="{W + 24}" height="{h + 8}" rx="8" fill="{t["surface"]}"/>\n'
             + "\n".join(out) + "\n</svg>\n")
 

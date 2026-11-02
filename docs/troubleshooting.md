@@ -7,7 +7,7 @@ Start with the menu bar's **Setup & Health…** window, or `unlatch doctor` in a
 - **Read-only with a reason:** see [read-only.md](read-only.md).
 - **"macFUSE is not installed" / exit code 4:** install macFUSE 5.5 or later (`unlatch setup`, or `brew install --cask macfuse`).
 - **"macFUSE's file system extension did not take the mount":** try again in a minute: right after macFUSE's background service restarts, it reports its extension missing for a minute or so. If it keeps failing, check that the extension is on: System Settings > General > Login Items & Extensions > File System Extensions (info button) > **macFUSE**. If the switch is greyed out, view the list By Category.
-- **Leftover from an older version:** if you allowed macFUSE's kernel extension before (Reduced Security in Recovery), Unlatch no longer needs it; you can leave it or undo it in Recovery.
+- **Copying many small files is slow:** without macFUSE's kernel extension, mounts go through FSKit, which is up to 8 times slower at small-file and metadata work (README, "What FSKit costs"). Allowing the kernel extension (README, "Faster small files") makes Unlatch use it; `unlatch doctor` says which one mounts use.
 - **"macOS blocked the Unlatch helper"** (real disks only): give the helper Full Disk Access: System Settings > Privacy & Security > Full Disk Access > + > ⌘⇧G > `/Library/PrivilegedHelperTools/Unlatch Helper`.
 - **"needs the helper":** run Unlatch's setup again (menu > Finish setting up), or `sudo unlatch install-helper`.
 - **Apple's read-only NTFS driver got the disk first:** `unlatch mount <disk>` takes it over (and gives it back if mounting fails). Turning auto-mount on in Settings makes Unlatch claim NTFS disks as they appear.

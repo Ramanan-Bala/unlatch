@@ -4,10 +4,10 @@ Never use a drive that holds real data. Use image files (`Scripts/make-image.sh`
 
 Unlatch mounts through **macFUSE** (D-39): macFUSE forwards file system calls to the `unlatch-fuse` daemon, which runs the engine. Nothing of ours needs signing. macFUSE has two backends:
 
-- **fskit** (what the app and CLI use, D-78): no kernel extension, so users never visit Recovery; they only turn on macFUSE's file system extension. It mounts only directly under `/Volumes`. macFUSE 5.5.0 loses `fuse_reply_buf` replies to reads of 64 KiB or more (macfuse/macfuse#1225, fixed in 5.6.0), so `unlatch-fuse` replies with `fuse_reply_data`.
+- **fskit** (what the app and CLI use unless the kext is allowed, D-78, D-79): no kernel extension, so users never visit Recovery; they only turn on macFUSE's file system extension. Up to 8 times slower than the kext with small files and metadata, 20–40% with large files on a fast SSD (README, "What FSKit costs"). It mounts only directly under `/Volumes`. macFUSE 5.5.0 loses `fuse_reply_buf` replies to reads of 64 KiB or more (macfuse/macfuse#1225, fixed in 5.6.0), so `unlatch-fuse` replies with `fuse_reply_data`.
 - **kext** (`--backend kext`): macFUSE's kernel extension. Mounts anywhere, so the test and benchmark scripts use it for mount points outside `/Volumes`. It must be allowed once: on Apple Silicon, Reduced Security in Recovery, then approval in System Settings → Privacy & Security, then a restart.
 
-`unlatch-fuse`'s default, `--backend auto`, is fskit for a mount point directly under `/Volumes` and kext anywhere else.
+`unlatch-fuse`'s default, `--backend auto`, is fskit for a mount point directly under `/Volumes` and kext anywhere else. The app and CLI choose for themselves (`MacFUSE.preferredBackend`: the kext when it is loaded or in the auxiliary kernel collection at the installed version, per `kmutil inspect`) and pass `--backend`; `UNLATCH_BACKEND=kext|fskit` overrides that, and `Bench/baselines.sh` takes it too.
 
 ## 1. Install and enable macFUSE (once per machine)
 

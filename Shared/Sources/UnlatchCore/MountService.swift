@@ -152,9 +152,9 @@ public actor MountService {
         return FileManager.default.fileExists(atPath: first) ? "/Volumes/\(base) \(info.bsdName)" : first
     }
 
-    /// Runs `unlatch-fuse --fd 3 [-r] <device> <mountpoint>`; it returns once mounted.
+    /// Runs `unlatch-fuse --fd 3 --backend B [-r] <device> <mountpoint>`; it returns once mounted.
     private func runDaemon(fd: Int32, device: String, mountPoint: String, readOnly: Bool) throws {
-        var args = [daemon.path, "--fd", "3"]
+        var args = [daemon.path, "--fd", "3", "--backend", MacFUSE.preferredBackend.rawValue]
         if readOnly { args.append("-r") }
         args += [device, mountPoint]
         var errPipe: [Int32] = [0, 0]

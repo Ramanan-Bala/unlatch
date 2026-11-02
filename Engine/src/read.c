@@ -283,7 +283,7 @@ int ue_statfs(ue_engine_t *e, uint64_t *total, uint64_t *free_bytes, uint32_t *c
         return EINVAL;
     vol = e->vol;
     // Free clusters are counted once at open; libntfs-3g keeps the count current.
-    if (!NVolFreeSpaceKnown(vol) && ntfs_volume_get_free_space(vol))
+    if (!NVolFreeSpaceKnown(vol) && (!ue_bitmaps_plausible(vol) || ntfs_volume_get_free_space(vol)))
         return errno ? errno : EIO;
     if (total)
         *total = (uint64_t)vol->nr_clusters * vol->cluster_size;

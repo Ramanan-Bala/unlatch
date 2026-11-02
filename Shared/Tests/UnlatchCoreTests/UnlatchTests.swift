@@ -66,6 +66,11 @@ import Foundation
     #expect(MacFUSE.needsInstall(installed: nil))
     #expect(MacFUSE.needsInstall(installed: "4.8.0"))
     #expect(MacFUSE.needsInstall(installed: "5.4.0") && !MacFUSE.needsInstall(installed: "5.5.0"))
+    let aux = "com.apple.iokit.IONVMeFamily\t2.1.0\t/System/x.kext\nio.macfuse.filesystems.macfuse.25\t5.5.0\t/Library/StagedExtensions/m.kext\n"
+    #expect(MacFUSE.kextAllowed(loaded: "", collections: aux, installed: "5.5.0"))
+    #expect(!MacFUSE.kextAllowed(loaded: "", collections: aux, installed: "5.6.0"))      // updated, not re-approved
+    #expect(!MacFUSE.kextAllowed(loaded: "", collections: "com.apple.x\t1\t/x\n", installed: "5.5.0"))
+    #expect(MacFUSE.kextAllowed(loaded: "251 0 0 0x1 0x1 io.macfuse.filesystems.macfuse.25 (5.5.0)", collections: "", installed: nil))
 }
 
 /// Downloads the real latest macFUSE release and verifies it, without installing anything.

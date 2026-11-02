@@ -75,10 +75,14 @@ macOS's privacy protection (TCC) also requires the helper to have **Full Disk Ac
 
 Finding the other binaries: `$UNLATCH_FUSE` and `$UNLATCH_HELPER`, else next to `unlatch`, else the repository's Debug build.
 
+## macFUSE backend
+
+Mounts go through macFUSE's kernel extension when it is allowed on this Mac (loaded, or approved at the installed macFUSE version), because it is up to 8 times faster with many small files; otherwise through macFUSE's FSKit backend, which needs no kernel extension (D-79). Unlatch never asks macOS to load the kernel extension on its own. `unlatch doctor` says which one mounts use. `UNLATCH_BACKEND=kext` or `UNLATCH_BACKEND=fskit` forces one (for testing; `kext` on a Mac where it is not allowed makes macOS show its "blocked extension" prompt).
+
 ## `unlatch setup`
 
 Runs the one-time setup in order, asking before each change (`--yes` skips the questions):
 
 1. macFUSE: if it is missing or older than 5.5, downloads the newest release from github.com/macfuse/macfuse, checks the published SHA-256, the package signature (Developer ID Installer, team 3T5GSNBU6W) and Apple's notarization, and runs `sudo installer -pkg … -target /`.
-2. macFUSE's file system extension: prints how to turn it on (System Settings > General > Login Items & Extensions > File System Extensions > macFUSE) and offers to open that pane. Only the user can switch it on, and FSKit does not report whether it is on, so the first mount shows it; a failed mount says how to turn it on (D-78).
+2. How macFUSE mounts (D-78, D-79): if its kernel extension is allowed on this Mac, Unlatch uses it and there is nothing to do. Otherwise it prints how to turn on macFUSE's file system extension (System Settings > General > Login Items & Extensions > File System Extensions > macFUSE) and offers to open that pane. Only the user can switch it on, and FSKit does not report whether it is on, so the first mount shows it; a failed mount says how to turn it on.
 3. The helper: `sudo unlatch install-helper`, then opens Full Disk Access in System Settings.

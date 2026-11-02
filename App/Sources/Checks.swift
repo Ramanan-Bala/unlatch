@@ -38,6 +38,7 @@ final class Checks {
         } else {
             macFUSE = .failed("Unlatch mounts disks through macFUSE (free, installed separately).")
         }
+        if MacFUSE.kextAllowed { fsExtension = .ok }   // mounts use the kernel extension (D-79)
         helper = HelperOpener.installed ? .ok : .failed("Needed for real disks, not for disk images.")
         if macFUSE == .ok, selfTest != .ok { await runSelfTest() }
     }

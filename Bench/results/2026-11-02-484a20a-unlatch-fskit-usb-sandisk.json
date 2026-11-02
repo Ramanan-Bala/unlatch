@@ -1,0 +1,22 @@
+{
+  "label": "unlatch-fskit-usb-sandisk",
+  "commit": "484a20a",
+  "date": "2026-11-02T07:38:36Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "macfuse://2F0B9B9F-6617-40B8-9368-D48A25E92F17 on /Volumes/SANDISK (macfuse, nodev, nosuid, noowners, noatime, fskit, mounted by ramanan)",
+  "runs": 3, "mib": 512, "small_files": 5000, "metadata_files": 5000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 87.326335,
+    "seq_read_cold": 16.256344,
+    "seq_read_warm": 0.042742,
+    "small_files": 60.769333,
+    "metadata": 37.459806
+  },
+  "mb_per_s": {
+    "seq_write": 6.1, "seq_read_cold": 33.0, "seq_read_warm": 12560.7
+  },
+  "small_files_per_s": 82,
+  "metadata_ops_per_s": 400
+}

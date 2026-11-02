@@ -80,7 +80,7 @@ brew install --cask ramanan-bala/unlatch/unlatch</code></pre>
         <tbody>
           <tr><td>A Mac with Apple Silicon (M1 or later)</td><td>Unlatch is built for arm64 only</td><td>–</td></tr>
           <tr><td>macOS 27 or later</td><td>the macFUSE and system APIs Unlatch uses</td><td>–</td></tr>
-          <tr><td><a href="https://macfuse.github.io">macFUSE</a> 5.4 or later</td><td>Unlatch mounts disks through it. Its license does not allow bundling it, so it is installed separately</td><td><strong>Unlatch does it for you</strong> (setup window, <code>unlatch setup</code>, or the Homebrew cask), from macFUSE's own releases</td></tr>
+          <tr><td><a href="https://macfuse.github.io">macFUSE</a> 5.5 or later</td><td>Unlatch mounts disks through it. Its license does not allow bundling it, so it is installed separately</td><td><strong>Unlatch does it for you</strong> (setup window, <code>unlatch setup</code>, or the Homebrew cask), from macFUSE's own releases</td></tr>
           <tr><td>An administrator password</td><td>installing macFUSE and the disk helper</td><td>you, when macOS asks</td></tr>
         </tbody>
       </table>
@@ -135,17 +135,17 @@ unlatch setup</code></pre>
       </li>
       <li>
         <strong>macFUSE</strong>
-        In the setup window, click <strong>Install macFUSE</strong>. Unlatch downloads the latest release from macFUSE's GitHub page, checks it against the checksum macFUSE publishes, checks that the installer is signed by macFUSE's developer (Benjamin Fleischer, team 3T5GSNBU6W) and notarized by Apple, and then installs it. macOS asks for your password. If macFUSE is older than 5.4, the button says <strong>Update macFUSE</strong>. Homebrew users already have it. Prefer to do it yourself? Install it from <a href="https://macfuse.github.io">macfuse.github.io</a> or with <code>brew install --cask macfuse</code>; Unlatch then finds it.
+        In the setup window, click <strong>Install macFUSE</strong>. Unlatch downloads the latest release from macFUSE's GitHub page, checks it against the checksum macFUSE publishes, checks that the installer is signed by macFUSE's developer (Benjamin Fleischer, team 3T5GSNBU6W) and notarized by Apple, and then installs it. macOS asks for your password. If macFUSE is older than 5.5, the button says <strong>Update macFUSE</strong>. Homebrew users already have it. Prefer to do it yourself? Install it from <a href="https://macfuse.github.io">macfuse.github.io</a> or with <code>brew install --cask macfuse</code>; Unlatch then finds it.
       </li>
       <li>
-        <strong>Allow macFUSE's kernel extension</strong>
-        Apple Silicon Macs only load extensions from other developers after you allow it, once. Unlatch cannot do this for you:
+        <strong>Turn on macFUSE's file system extension</strong>
+        Unlatch mounts through macOS's own file system extension framework (FSKit), so there is no kernel extension to allow, no Recovery and no restart. Only you can switch it on, once:
         <ol>
-          <li>Shut down the Mac. Press and hold the power button until "Loading startup options" appears, then choose <strong>Options</strong> &gt; <strong>Continue</strong>.</li>
-          <li>In Recovery: <strong>Utilities</strong> &gt; <strong>Startup Security Utility</strong> &gt; select your startup disk &gt; <strong>Security Policy</strong> &gt; <strong>Reduced Security</strong>, and turn on <strong>"Allow user management of kernel extensions from identified developers"</strong>. Click OK, enter your password, and restart.</li>
-          <li>Back in macOS, run the setup window's self-test (or mount any disk). macOS reports a blocked system extension: open System Settings &gt; <strong>Privacy &amp; Security</strong>, click <strong>Allow</strong> next to "Benjamin Fleischer", and restart when asked.</li>
+          <li>Click <strong>Open Login Items &amp; Extensions</strong> in the setup window (or System Settings &gt; <strong>General</strong> &gt; <strong>Login Items &amp; Extensions</strong>).</li>
+          <li>Under Extensions, click the info button next to <strong>File System Extensions</strong>. If the switch is greyed out, choose to view the list <strong>By Category</strong>.</li>
+          <li>Turn on <strong>macFUSE</strong>, then click <strong>Done</strong>. The self-test confirms it.</li>
         </ol>
-        <p class="muted">If you used macFUSE before, this is already done. Reduced Security only lets you approve extensions yourself; FileVault and other protections stay on.</p>
+        <p class="muted">If macFUSE's kernel extension is already allowed on this Mac (for macFUSE before, or for Unlatch 1.0.0-beta.4 or earlier), Unlatch uses that instead and this step is not needed; <code>unlatch doctor</code> says which one your mounts use. It is faster with many small files: see <a href="#faster-small-files">Faster small files</a>.</p>
       </li>
       <li>
         <strong>The helper, for real disks</strong>
@@ -158,6 +158,16 @@ unlatch setup</code></pre>
       </li>
     </ol>
     <p>Check it all again any time from the menu bar: <strong>Setup &amp; Health…</strong> opens the same window (its icon turns orange when something needs attention). From a terminal: <code>unlatch doctor</code>.</p>
+
+    <h3 id="faster-small-files">Faster small files (optional)</h3>
+    <p>macFUSE can also mount through its kernel extension. Copying, deleting or renaming many small files (a source tree, a photo library) is then up to 8 times faster, and large files on a fast SSD 20–40% faster; see <a href="#performance">Performance</a>. Unlatch uses the kernel extension on its own once it is allowed, and never asks macOS to load it before. Allowing it takes a visit to Recovery, once:</p>
+    <ol>
+      <li>Shut down the Mac. Press and hold the power button until "Loading startup options" appears, then choose <strong>Options</strong> &gt; <strong>Continue</strong>.</li>
+      <li>In Recovery: <strong>Utilities</strong> &gt; <strong>Startup Security Utility</strong> &gt; select your startup disk &gt; <strong>Security Policy</strong> &gt; <strong>Reduced Security</strong>, and turn on <strong>"Allow user management of kernel extensions from identified developers"</strong>. Click OK, enter your password, and restart.</li>
+      <li>Back in macOS, run macFUSE's loader in Terminal: <code>/Library/Filesystems/macfuse.fs/Contents/Resources/load_macfuse</code>. macOS reports a blocked system extension: open System Settings &gt; <strong>Privacy &amp; Security</strong>, click <strong>Allow</strong> next to "Benjamin Fleischer", and restart when asked.</li>
+      <li><code>unlatch doctor</code> now says "mounts use macFUSE's kernel extension".</li>
+    </ol>
+    <p class="muted">Reduced Security only lets you approve extensions yourself; FileVault and other protections stay on. After a macFUSE update, macOS may ask you to allow the new version; until then Unlatch uses FSKit.</p>
   </div>
 </section>
 
@@ -221,43 +231,59 @@ unlatch setup</code></pre>
 <section id="performance">
   <div class="wrap">
     <h2>Performance</h2>
-    <p>Speed depends on the disk. Numbers from the project's test Mac (Apple M2, 8 GiB, macOS 27.0.1); the method and raw results are in <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/Bench/README.md">Bench/README.md</a>.</p>
+    <p>Speed depends on the disk. Numbers from the project's test Mac (Apple M2, 8 GiB, macOS 27.0.1, macFUSE 5.5.0) with Unlatch 1.0.0-beta.5. Unlatch mounts through macFUSE's <strong>kernel extension</strong> when it is allowed on the Mac, and through <strong>FSKit</strong> otherwise (<a href="#faster-small-files">Faster small files</a>); both are shown. The method and raw results are in <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/Bench/README.md">Bench/README.md</a>.</p>
 
     <h3>Real drive: USB 2.0 stick</h3>
-    <p>SanDisk Cruzer Blade 16 GB (USB 2.0), one 15.8 GB NTFS partition, Unlatch 1.0.0-beta.3, next to the stick's own speed (<code>sudo dd</code> on the raw partition) and Apple's exFAT driver on the same stick. Median of 3 runs, 512 MiB files.</p>
+    <p>SanDisk Cruzer Blade 16 GB (USB 2.0), one 15.8 GB NTFS partition, next to the stick's own speed (<code>sudo dd</code> on the raw partition) and Apple's exFAT driver on the same stick. Median of 3 runs, 512 MiB files.</p>
     <figure class="chart">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="bench/usb-dark.svg">
-        <img src="bench/usb.svg" width="800" height="266" alt="Bar charts: cold sequential read 32.9 MB/s raw, 33.1 Unlatch, 32.5 exFAT; sequential write 6.7 MB/s raw, 5.5 Unlatch, 6.2 exFAT; small files 94 per second Unlatch, 61 exFAT; metadata 1,405 operations per second Unlatch, 122 exFAT">
+        <img src="bench/usb.svg" width="800" height="318" alt="Bar charts on a USB 2.0 stick. Cold sequential read: 32.9 MB/s raw, 33.0 Unlatch FSKit, 33.4 Unlatch kernel extension, 32.5 exFAT. Sequential write: 6.7 MB/s raw, 6.1 FSKit, 6.1 kernel extension, 6.2 exFAT. Small files: 82 per second FSKit, 89 kernel extension, 61 exFAT. Metadata: 400 operations per second FSKit, 1,157 kernel extension, 122 exFAT">
       </picture>
     </figure>
     <div class="table">
       <table>
-        <thead><tr><th>Test</th><th class="num">Stick (raw <code>dd</code>)</th><th class="num">Unlatch</th><th class="num">exFAT</th></tr></thead>
+        <thead><tr><th>Test</th><th class="num">Stick (raw <code>dd</code>)</th><th class="num">Unlatch, FSKit</th><th class="num">Unlatch, kernel ext.</th><th class="num">exFAT</th></tr></thead>
         <tbody>
-          <tr><td>Sequential read, cold</td><td class="num">32.9 MB/s</td><td class="num">33.1 MB/s</td><td class="num">32.5 MB/s</td></tr>
-          <tr><td>Sequential write</td><td class="num">6.7 MB/s</td><td class="num">5.5 MB/s</td><td class="num">6.2 MB/s</td></tr>
-          <tr><td>Small files (1–16 KiB, create + delete)</td><td class="num"></td><td class="num">94 files/s</td><td class="num">61 files/s</td></tr>
-          <tr><td>Metadata (create, rename, delete)</td><td class="num"></td><td class="num">1,405 ops/s</td><td class="num">122 ops/s</td></tr>
+          <tr><td>Sequential read, cold</td><td class="num">32.9 MB/s</td><td class="num">33.0 MB/s</td><td class="num">33.4 MB/s</td><td class="num">32.5 MB/s</td></tr>
+          <tr><td>Sequential write</td><td class="num">6.7 MB/s</td><td class="num">6.1 MB/s</td><td class="num">6.1 MB/s</td><td class="num">6.2 MB/s</td></tr>
+          <tr><td>Small files (1–16 KiB, create + delete)</td><td class="num"></td><td class="num">82 files/s</td><td class="num">89 files/s</td><td class="num">61 files/s</td></tr>
+          <tr><td>Metadata (create, rename, delete)</td><td class="num"></td><td class="num">400 ops/s</td><td class="num">1,157 ops/s</td><td class="num">122 ops/s</td></tr>
         </tbody>
       </table>
     </div>
-    <p>Reads run at the stick's full speed; sequential writes reach 82% of it (exFAT 93%); small files and metadata are faster than exFAT, helped by the engine's write-back cache for NTFS's small metadata writes.</p>
+    <p>Reads run at the stick's full speed and sequential writes reach 91% of it with either backend (exFAT 93%). Small files and metadata beat exFAT with either backend, helped by the engine's write-back cache.</p>
 
-    <h3>SSD image</h3>
-    <p>On a fast SSD image, sequential copies run at about 1.5–2.7 GB/s. Every file system below gets its own 4 GiB image on the internal SSD; image-backed volumes live in the host's page cache, so these compare file system stacks, not drives. <code>ntfs3g</code> (stock ntfs-3g on macFUSE) and <code>unlatch-file</code> both mount the image file, like for like.</p>
+    <h3>Fast SSD</h3>
+    <p>A 4 GiB image on the internal SSD, attached as a disk, the way a real drive is used. Median of 5 runs, 1 GiB file, 30,000 small files, 10,000 metadata files.</p>
     <div class="table">
       <table>
-        <thead><tr><th>Test</th><th class="num">APFS</th><th class="num">exFAT</th><th class="num">stock ntfs-3g</th><th class="num">Unlatch</th></tr></thead>
+        <thead><tr><th>Test</th><th class="num">Unlatch, FSKit</th><th class="num">Unlatch, kernel ext.</th><th class="num">APFS</th><th class="num">exFAT</th></tr></thead>
         <tbody>
-          <tr><td>Sequential write</td><td class="num">2,709 MB/s</td><td class="num">2,402 MB/s</td><td class="num">932 MB/s</td><td class="num">1,533 MB/s</td></tr>
-          <tr><td>Sequential read, cold</td><td class="num">2,385 MB/s</td><td class="num">2,266 MB/s</td><td class="num">2,834 MB/s</td><td class="num">8,095 MB/s*</td></tr>
-          <tr><td>Small files (1–16 KiB)</td><td class="num">3,296 files/s</td><td class="num">1,190 files/s</td><td class="num">2,296 files/s</td><td class="num">2,840 files/s</td></tr>
-          <tr><td>Metadata (create, rename, delete)</td><td class="num">25,341 ops/s</td><td class="num">877 ops/s</td><td class="num">2,118 ops/s</td><td class="num">2,837 ops/s</td></tr>
+          <tr><td>Sequential write</td><td class="num">2,183 MB/s</td><td class="num">2,747 MB/s</td><td class="num">2,054 MB/s</td><td class="num">1,876 MB/s</td></tr>
+          <tr><td>Sequential read, cold</td><td class="num">1,109 MB/s</td><td class="num">1,891 MB/s</td><td class="num">2,309 MB/s</td><td class="num">2,407 MB/s</td></tr>
+          <tr><td>Sequential read, warm (cached)</td><td class="num">16,356 MB/s</td><td class="num">15,811 MB/s</td><td class="num">13,905 MB/s</td><td class="num">13,133 MB/s</td></tr>
+          <tr><td>Small files (1–16 KiB)</td><td class="num">368 files/s</td><td class="num">2,891 files/s</td><td class="num">2,231 files/s</td><td class="num">1,131 files/s</td></tr>
+          <tr><td>Metadata (create, rename, delete)</td><td class="num">510 ops/s</td><td class="num">4,358 ops/s</td><td class="num">26,845 ops/s</td><td class="num">833 ops/s</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="muted">* Cold reads remount first, but image-file setups can still be served from the host's cache of the image. 1024 MiB file, 30,000 small files, 10,000 metadata files. Through an attached disk (<code>/dev/rdiskN</code>, the way a real drive is used), the engine's page cache brought sequential writes to 2,744 MB/s and cold reads to 1,788 MB/s. Details: <a href="https://github.com/Ramanan-Bala/unlatch/blob/main/docs/M0-gate.md">docs/M0-gate.md</a>.</p>
+
+    <h3 id="fskit-costs">What FSKit costs</h3>
+    <p>FSKit needs no kernel extension, but every file operation then passes through Apple's <code>fskitd</code> and macFUSE's extension process before it reaches Unlatch. Compared with the kernel extension, on the same disk and day:</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>Test</th><th>Fast SSD</th><th>USB 2.0 stick</th></tr></thead>
+        <tbody>
+          <tr><td>Small files (create + delete)</td><td><strong>7.9× slower</strong> (368 vs 2,891 files/s)</td><td>8% slower (82 vs 89)</td></tr>
+          <tr><td>Metadata (create, rename, delete)</td><td><strong>8.5× slower</strong> (510 vs 4,358 ops/s)</td><td><strong>2.9× slower</strong> (400 vs 1,157)</td></tr>
+          <tr><td>Sequential read, cold</td><td>41% slower (1,109 vs 1,891 MB/s)</td><td>same (the stick is the limit)</td></tr>
+          <tr><td>Sequential write</td><td>21% slower (2,183 vs 2,747 MB/s)</td><td>same (the stick is the limit)</td></tr>
+          <tr><td>Sequential read, warm (cached)</td><td>same</td><td>same</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The slower the disk, the less this matters: a USB 2.0 stick hides almost all of it, a fast SSD shows all of it. Copying a source tree, a photo library or anything else with thousands of small files is where you notice. Besides speed: if Unlatch's daemon crashes, an FSKit mount stays listed until the app or <code>unlatch list</code> removes it.</p>
   </div>
 </section>
 
@@ -271,7 +297,7 @@ unlatch unmount --all [--force]            <span class="comment"># every volume 
 unlatch eject &lt;disk&gt; [--force]             <span class="comment"># unmount, then eject the whole disk</span>
 unlatch status [&lt;disk&gt;] [--json]           <span class="comment"># Unlatch's verdict per volume (clean, dirty, hibernated, ...)</span>
 unlatch doctor                             <span class="comment"># check macOS, macFUSE, unlatch-fuse, the helper</span>
-unlatch setup [--yes] [--no-helper]        <span class="comment"># install or update macFUSE, explain its approval, install the helper</span>
+unlatch setup [--yes] [--no-helper]        <span class="comment"># install or update macFUSE, turn on its extension, install the helper</span>
 sudo unlatch install-helper                <span class="comment"># once, for real disks (not needed for disk images)</span>
 sudo unlatch uninstall-helper</code></pre>
     <p><code>&lt;disk&gt;</code> is a BSD name (<code>disk6s1</code>), a device path (<code>/dev/disk6s1</code> or <code>/dev/rdisk6s1</code>), a mount path (<code>/Volumes/Seagate</code>), or a volume label (case-insensitive; must name one volume).</p>
@@ -286,7 +312,7 @@ sudo unlatch uninstall-helper</code></pre>
           <tr><td>1</td><td>error (the message says why)</td></tr>
           <tr><td>2</td><td>usage: unknown command or option, missing argument</td></tr>
           <tr><td>3</td><td>mounted, but read-only although read-write was asked for; the reason is on stderr</td></tr>
-          <tr><td>4</td><td>macFUSE missing or its kernel extension not allowed (<code>doctor</code> says which)</td></tr>
+          <tr><td>4</td><td>macFUSE missing or older than 5.5</td></tr>
         </tbody>
       </table>
     </div>
@@ -299,13 +325,15 @@ sudo unlatch uninstall-helper</code></pre>
 <section id="help">
   <div class="wrap">
     <h2>Troubleshooting</h2>
-    <p>Start with the menu bar's <strong>Setup &amp; Health…</strong> window, or <code>unlatch doctor</code> in a terminal: it checks macOS, macFUSE and its system extension, <code>unlatch-fuse</code>, the helper, and the status directory, and says what to fix.</p>
+    <p>Start with the menu bar's <strong>Setup &amp; Health…</strong> window, or <code>unlatch doctor</code> in a terminal: it checks macOS, macFUSE and which way mounts go through it, <code>unlatch-fuse</code>, the helper, and the status directory, and says what to fix.</p>
 
     <details>
       <summary>The disk does not mount, or Finder shows it read-only</summary>
       <ul>
         <li><strong>Read-only with a reason:</strong> see <a href="#read-only">Why is my disk read-only?</a></li>
-        <li><strong>"macFUSE is not installed" / exit code 4:</strong> install it (<code>brew install --cask macfuse</code>), then allow its system extension: on Apple Silicon, Reduced Security in Recovery once, then System Settings &gt; Privacy &amp; Security &gt; Allow. Restart if macOS asks.</li>
+        <li><strong>"macFUSE is not installed" / exit code 4:</strong> install macFUSE 5.5 or later (<code>unlatch setup</code>, or <code>brew install --cask macfuse</code>).</li>
+        <li><strong>"macFUSE's file system extension did not take the mount":</strong> try again in a minute: right after macFUSE's background service restarts, it reports its extension missing for a minute or so. If it keeps failing, check that it is on: System Settings &gt; General &gt; Login Items &amp; Extensions &gt; File System Extensions (info button) &gt; <strong>macFUSE</strong>.</li>
+        <li><strong>Copying many small files is slow:</strong> without macFUSE's kernel extension, mounts go through FSKit, up to 8 times slower at small-file work (<a href="#fskit-costs">What FSKit costs</a>). Allowing the kernel extension (<a href="#faster-small-files">Faster small files</a>) makes Unlatch use it.</li>
         <li><strong>"macOS blocked the Unlatch helper"</strong> (real disks only): give the helper Full Disk Access: System Settings &gt; Privacy &amp; Security &gt; Full Disk Access &gt; + &gt; ⌘⇧G &gt; <code>/Library/PrivilegedHelperTools/Unlatch Helper</code>.</li>
         <li><strong>"needs the helper":</strong> run Unlatch's setup again (menu &gt; Finish setting up), or <code>sudo unlatch install-helper</code>.</li>
         <li><strong>Apple's read-only NTFS driver got the disk first:</strong> <code>unlatch mount &lt;disk&gt;</code> takes it over (and gives it back if mounting fails). Turning auto-mount on in Settings makes Unlatch claim NTFS disks as they appear.</li>

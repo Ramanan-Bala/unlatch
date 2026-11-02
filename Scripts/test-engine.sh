@@ -188,7 +188,7 @@ echo "== fsx regressions"
 
 echo "== include boundary"
 if grep -rn --include='*.c' --include='*.h' --include='*.swift' --include='*.m' -E '#\s*include\s*[<"]ntfs-3g/' \
-    "$root" --exclude-dir=vendor --exclude-dir=build --exclude-dir=.build \
+    "$root" --exclude-dir=vendor --exclude-dir=build --exclude-dir=.build --exclude-dir=.claude \
     | grep -v "^$root/Engine/src/"; then
     echo "FAIL ntfs-3g headers included outside Engine/src" >&2
     exit 1

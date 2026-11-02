@@ -59,6 +59,8 @@ The first time, Unlatch's setup window opens and checks each step; most of them 
    2. Under Extensions, click the info button next to **File System Extensions**. If the switch is greyed out, choose to view the list **By Category**.
    3. Turn on **macFUSE**, then click **Done**. The self-test (step 5) confirms it.
 
+   If macFUSE's kernel extension is already allowed on this Mac (you allowed it for macFUSE before, or for Unlatch 1.0.0-beta.4 or earlier), Unlatch uses that instead and this step is not needed; `unlatch doctor` says which one your mounts use. The kernel extension is faster with many small files: see [Faster small files](#faster-small-files-optional).
+
 4. **The helper, for real disks.** Disk images work without it. For USB drives and internal disks, click **Install…** in the setup window (or answer yes in `unlatch setup`); macOS asks for your password. Then click **Allow in Full Disk Access**: System Settings opens at Privacy & Security > **Full Disk Access**, and a Finder window shows **Unlatch Helper**. Drag it into the list and turn it on. Without it, macOS keeps the helper from opening removable disks.
 
    Why the helper and not the app? Disk devices can only be opened by root, so the small root helper opens them and hands them to Unlatch, which runs as you. macOS checks Full Disk Access for the program that opens the disk, which is the helper. In Login Items it appears under Unlatch.
@@ -72,6 +74,17 @@ unlatch doctor
 ```
 
 [docs/install.md](docs/install.md) has more detail, and [docs/troubleshooting.md](docs/troubleshooting.md) covers what to do when a step fails.
+
+### Faster small files (optional)
+
+macFUSE can also mount through its kernel extension. Copying, deleting or renaming many small files (a source tree, a photo library) is then up to 8 times faster, and large files on a fast SSD 20–40% faster. See [Speed](#speed). Unlatch uses the kernel extension on its own once it is allowed, and never asks macOS to load it before. Allowing it takes a visit to Recovery, once:
+
+1. Shut down the Mac. Press and hold the power button until "Loading startup options" appears, then choose **Options** > **Continue**.
+2. In Recovery: **Utilities** > **Startup Security Utility** > select your startup disk > **Security Policy** > **Reduced Security**, and turn on **"Allow user management of kernel extensions from identified developers"**. Click OK, enter your password, and restart.
+3. Back in macOS, run macFUSE's loader in Terminal: `/Library/Filesystems/macfuse.fs/Contents/Resources/load_macfuse`. macOS reports a blocked system extension: open System Settings > **Privacy & Security**, click **Allow** next to "Benjamin Fleischer", and restart when asked.
+4. `unlatch doctor` now says "mounts use macFUSE's kernel extension".
+
+Reduced Security only lets you approve extensions yourself; FileVault and other protections stay on. After a macFUSE update, macOS may ask you to allow the new version; until then Unlatch uses FSKit.
 
 ## Use
 
@@ -101,23 +114,49 @@ When something goes wrong: [docs/troubleshooting.md](docs/troubleshooting.md). S
 
 ## Speed
 
-On a real USB 2.0 stick (SanDisk Cruzer Blade 16 GB, Apple M2, Unlatch 1.0.0-beta.3), next to the stick's own speed and Apple's exFAT driver on the same stick:
+Measured on the project's test Mac (Apple M2, 8 GiB, macOS 27.0.1, macFUSE 5.5.0) with Unlatch 1.0.0-beta.5. Unlatch mounts through macFUSE's **kernel extension** when it is allowed on the Mac, and through **FSKit** otherwise ([Faster small files](#faster-small-files-optional)); both are shown.
+
+On a real USB 2.0 stick (SanDisk Cruzer Blade 16 GB), next to the stick's own speed and Apple's exFAT driver on the same stick:
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="Bench/usb-dark.svg">
-    <img src="Bench/usb.svg" alt="Bar charts: cold sequential read 32.9 MB/s raw, 33.1 Unlatch, 32.5 exFAT; sequential write 6.7 MB/s raw, 5.5 Unlatch, 6.2 exFAT; small files 94 per second Unlatch, 61 exFAT; metadata 1,405 operations per second Unlatch, 122 exFAT" width="800">
+    <img src="Bench/usb.svg" alt="Bar charts on a USB 2.0 stick. Cold sequential read: 32.9 MB/s raw, 33.0 Unlatch FSKit, 33.4 Unlatch kernel extension, 32.5 exFAT. Sequential write: 6.7 MB/s raw, 6.1 FSKit, 6.1 kernel extension, 6.2 exFAT. Small files: 82 per second FSKit, 89 kernel extension, 61 exFAT. Metadata: 400 operations per second FSKit, 1,157 kernel extension, 122 exFAT" width="800">
   </picture>
 </p>
 
-| | Stick itself (raw `dd`) | Unlatch (NTFS) | exFAT (Apple) |
-|---|---|---|---|
-| Sequential read, cold | 32.9 MB/s | 33.1 MB/s | 32.5 MB/s |
-| Sequential write | 6.7 MB/s | 5.5 MB/s | 6.2 MB/s |
-| Small files (1–16 KiB, create + delete) | | 94 files/s | 61 files/s |
-| Metadata (create, rename, delete) | | 1,405 ops/s | 122 ops/s |
+| | Stick itself (raw `dd`) | Unlatch, FSKit | Unlatch, kernel ext. | exFAT (Apple) |
+|---|---|---|---|---|
+| Sequential read, cold | 32.9 MB/s | 33.0 MB/s | 33.4 MB/s | 32.5 MB/s |
+| Sequential write | 6.7 MB/s | 6.1 MB/s | 6.1 MB/s | 6.2 MB/s |
+| Small files (1–16 KiB, create + delete) | | 82 files/s | 89 files/s | 61 files/s |
+| Metadata (create, rename, delete) | | 400 ops/s | 1,157 ops/s | 122 ops/s |
 
-Reads run at the stick's full speed; sequential writes reach 82% of it (exFAT 93%); small files and metadata are faster than exFAT, helped by the engine's write-back cache for NTFS's small metadata writes. Median of 3 runs, 512 MiB files. On a fast SSD image, sequential copies run at about 1.5–2.7 GB/s ([docs/M0-gate.md](docs/M0-gate.md)). How these are measured: [Bench/README.md](Bench/README.md).
+On the stick, reads run at its full speed and sequential writes reach 91% of it with either backend (exFAT 93%). Small files and metadata beat exFAT with either backend, helped by the engine's write-back cache. Median of 3 runs, 512 MiB files.
+
+On a fast SSD (a 4 GiB image on the internal SSD, attached as a disk; median of 5 runs, 1 GiB file, 30,000 small files, 10,000 metadata files):
+
+| | Unlatch, FSKit | Unlatch, kernel ext. | APFS | exFAT (Apple) |
+|---|---|---|---|---|
+| Sequential write | 2,183 MB/s | 2,747 MB/s | 2,054 MB/s | 1,876 MB/s |
+| Sequential read, cold | 1,109 MB/s | 1,891 MB/s | 2,309 MB/s | 2,407 MB/s |
+| Sequential read, warm (cached) | 16,356 MB/s | 15,811 MB/s | 13,905 MB/s | 13,133 MB/s |
+| Small files (1–16 KiB) | 368 files/s | 2,891 files/s | 2,231 files/s | 1,131 files/s |
+| Metadata (create, rename, delete) | 510 ops/s | 4,358 ops/s | 26,845 ops/s | 833 ops/s |
+
+### What FSKit costs
+
+FSKit needs no kernel extension, but every file operation then passes through Apple's `fskitd` and macFUSE's extension process before it reaches Unlatch. Compared with the kernel extension, on the same disk and day:
+
+| | Fast SSD | USB 2.0 stick |
+|---|---|---|
+| Small files (create + delete) | **7.9× slower** (368 vs 2,891 files/s) | 8% slower (82 vs 89) |
+| Metadata (create, rename, delete) | **8.5× slower** (510 vs 4,358 ops/s) | **2.9× slower** (400 vs 1,157) |
+| Sequential read, cold | 41% slower (1,109 vs 1,891 MB/s) | same (the stick is the limit) |
+| Sequential write | 21% slower (2,183 vs 2,747 MB/s) | same (the stick is the limit) |
+| Sequential read, warm (cached) | same | same |
+
+The slower the disk, the less this matters: a USB 2.0 stick hides almost all of it, a fast SSD shows all of it. Copying a source tree, a photo library or anything else with thousands of small files is where you notice. Besides speed: if Unlatch's daemon crashes, an FSKit mount stays listed until the app or `unlatch list` removes it. How these are measured, and every raw result: [Bench/README.md](Bench/README.md).
 
 ## Building
 

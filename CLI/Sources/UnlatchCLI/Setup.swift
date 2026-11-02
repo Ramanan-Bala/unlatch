@@ -148,9 +148,16 @@ struct Doctor: AsyncParsableCommand {
         let fuseVersion = (info?["CFBundleShortVersionString"] ?? info?["CFBundleVersion"]) as? String ?? "?"
         check(fuse && !MacFUSE.needsInstall, "macFUSE installed\(fuse ? " (\(fuseVersion))" : "")",
               fuse ? "macFUSE \(MacFUSE.minimumVersion) or later is needed: unlatch setup" : "unlatch setup (or brew install --cask macfuse)", .macFUSE)
-        // Whether macFUSE's file system extension is on cannot be read (FSKit's FSClient does
-        // not list it); the first mount shows it, and a failed mount says how to turn it on.
-        if fuse { print("     macFUSE's file system extension must be on: \(MacFUSE.approvalSteps.joined(separator: " "))") }
+        // Kernel extension when it is allowed, else FSKit (D-79). Whether FSKit's extension is
+        // on cannot be read (FSClient does not list it); a failed mount says how to turn it on.
+        if fuse {
+            if MacFUSE.preferredBackend == .kext {
+                print("ok   mounts use macFUSE's kernel extension (allowed on this Mac)")
+            } else {
+                print("ok   mounts use macFUSE's FSKit backend; its file system extension must be on: \(MacFUSE.approvalSteps.joined(separator: " "))")
+                print("     Many small files are up to 8x faster through macFUSE's kernel extension; allowing it needs Recovery (README).")
+            }
+        }
         let daemon = Paths.daemon
         check(FileManager.default.isExecutableFile(atPath: daemon.path), "unlatch-fuse at \(daemon.path)",
               "Build it (xcodebuild -scheme Unlatch build) or set UNLATCH_FUSE.")
@@ -222,12 +229,18 @@ struct SetupCmd: AsyncParsableCommand {
             print("1. macFUSE \(MacFUSE.installedVersion ?? "") is installed.")
         }
 
-        // 2. macFUSE's file system extension (FSKit, D-78): only the user can turn it on. No
-        // kernel extension, so no Recovery and no restart.
-        print("2. macFUSE's file system extension has to be on (once; skip this if it already is):")
-        for (i, s) in MacFUSE.approvalSteps.enumerated() { print("   \(Character(UnicodeScalar(UInt8(97 + i))))) \(s)") }
-        if confirm("   Open Login Items & Extensions now?") {
-            _ = shell(["/usr/bin/open", MacFUSE.extensionSettingsURL.absoluteString])
+        // 2. How macFUSE mounts: its kernel extension if already allowed (faster with small
+        // files), else its FSKit extension, which only the user can turn on (D-78, D-79).
+        if MacFUSE.kextAllowed {
+            print("2. macFUSE's kernel extension is allowed on this Mac; Unlatch mounts through it.")
+        } else {
+            print("2. macFUSE's file system extension has to be on (once; skip this if it already is):")
+            for (i, s) in MacFUSE.approvalSteps.enumerated() { print("   \(Character(UnicodeScalar(UInt8(97 + i))))) \(s)") }
+            if confirm("   Open Login Items & Extensions now?") {
+                _ = shell(["/usr/bin/open", MacFUSE.extensionSettingsURL.absoluteString])
+            }
+            print("   (Copying many small files is up to 8x faster through macFUSE's kernel extension. Allowing it")
+            print("   needs Recovery once; Unlatch then uses it on its own. Steps: README, \"Faster small files\".)")
         }
 
         // 3. The helper, for real disks.

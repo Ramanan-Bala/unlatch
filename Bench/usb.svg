@@ -1,47 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="266" viewBox="-12 -4 824 274" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" role="img" aria-label="Unlatch versus exFAT and the raw device on a USB 2.0 stick">
-<rect x="-12" y="-4" width="824" height="274" rx="8" fill="#fcfcfb"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="318" viewBox="-12 -4 824 326" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" role="img" aria-label="Unlatch through FSKit and through the kernel extension, versus exFAT and the raw device on a USB 2.0 stick">
+<rect x="-12" y="-4" width="824" height="326" rx="8" fill="#fcfcfb"/>
 <rect x="0" y="8" width="12" height="12" rx="3" fill="#1baf7a"/>
 <text x="18" y="18" fill="#52514e" font-size="13">Stick itself (raw dd)</text>
-<rect x="181.20000000000002" y="8" width="12" height="12" rx="3" fill="#2a78d6"/>
-<text x="199.20000000000002" y="18" fill="#52514e" font-size="13">Unlatch (NTFS)</text>
-<rect x="312.0" y="8" width="12" height="12" rx="3" fill="#eb6834"/>
-<text x="330.0" y="18" fill="#52514e" font-size="13">exFAT (Apple)</text>
+<rect x="181.20000000000002" y="8" width="12" height="12" rx="3" fill="#eda100"/>
+<text x="199.20000000000002" y="18" fill="#52514e" font-size="13">Unlatch, FSKit</text>
+<rect x="312.0" y="8" width="12" height="12" rx="3" fill="#2a78d6"/>
+<text x="330.0" y="18" fill="#52514e" font-size="13">Unlatch, kernel ext.</text>
+<rect x="486.0" y="8" width="12" height="12" rx="3" fill="#eb6834"/>
+<text x="504.0" y="18" fill="#52514e" font-size="13">exFAT (Apple)</text>
 <text x="0" y="56" fill="#0b0b0b" font-size="14" font-weight="600">Sequential read, cold <tspan fill="#52514e" font-weight="400">(MB/s)</tspan></text>
 <text x="140" y="82.5" text-anchor="end" fill="#52514e" font-size="12">Stick itself (raw dd)</text>
-<g><title>Stick itself (raw dd): 32.9 MB/s</title><path d="M150,70 h155.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-155.0 z" fill="#1baf7a"/></g>
-<text x="315.0" y="82.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">32.9</text>
-<text x="140" y="108.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch (NTFS)</text>
-<g><title>Unlatch (NTFS): 33.1 MB/s</title><path d="M150,96 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#2a78d6"/></g>
-<text x="316.0" y="108.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">33.1</text>
-<text x="140" y="134.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
-<g><title>exFAT (Apple): 32.5 MB/s</title><path d="M150,122 h153.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-153.1 z" fill="#eb6834"/></g>
-<text x="313.1" y="134.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">32.5</text>
-<line x1="150" y1="67" x2="150" y2="141" stroke="#c3c2b7" stroke-width="1"/>
+<g><title>Stick itself (raw dd): 32.9 MB/s</title><path d="M150,70 h153.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-153.6 z" fill="#1baf7a"/></g>
+<text x="313.6" y="82.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">32.9</text>
+<text x="140" y="108.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 33.0 MB/s</title><path d="M150,96 h154.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-154.1 z" fill="#eda100"/></g>
+<text x="314.1" y="108.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">33.0</text>
+<text x="140" y="134.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 33.4 MB/s</title><path d="M150,122 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#2a78d6"/></g>
+<text x="316.0" y="134.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">33.4</text>
+<text x="140" y="160.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
+<g><title>exFAT (Apple): 32.5 MB/s</title><path d="M150,148 h151.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-151.7 z" fill="#eb6834"/></g>
+<text x="311.7" y="160.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">32.5</text>
+<line x1="150" y1="67" x2="150" y2="167" stroke="#c3c2b7" stroke-width="1"/>
 <text x="420" y="56" fill="#0b0b0b" font-size="14" font-weight="600">Sequential write <tspan fill="#52514e" font-weight="400">(MB/s)</tspan></text>
 <text x="560" y="82.5" text-anchor="end" fill="#52514e" font-size="12">Stick itself (raw dd)</text>
 <g><title>Stick itself (raw dd): 6.7 MB/s</title><path d="M570,70 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#1baf7a"/></g>
 <text x="736.0" y="82.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">6.7</text>
-<text x="560" y="108.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch (NTFS)</text>
-<g><title>Unlatch (NTFS): 5.5 MB/s</title><path d="M570,96 h127.3 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-127.3 z" fill="#2a78d6"/></g>
-<text x="707.3" y="108.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">5.5</text>
-<text x="560" y="134.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
-<g><title>exFAT (Apple): 6.2 MB/s</title><path d="M570,122 h144.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-144.1 z" fill="#eb6834"/></g>
-<text x="724.1" y="134.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">6.2</text>
-<line x1="570" y1="67" x2="570" y2="141" stroke="#c3c2b7" stroke-width="1"/>
-<text x="0" y="194" fill="#0b0b0b" font-size="14" font-weight="600">Small files, 1–16 KiB <tspan fill="#52514e" font-weight="400">(files/s)</tspan></text>
-<text x="140" y="220.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch (NTFS)</text>
-<g><title>Unlatch (NTFS): 94 files/s</title><path d="M150,208 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#2a78d6"/></g>
-<text x="316.0" y="220.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">94</text>
-<text x="140" y="246.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
-<g><title>exFAT (Apple): 61 files/s</title><path d="M150,234 h99.8 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-99.8 z" fill="#eb6834"/></g>
-<text x="259.8" y="246.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">61</text>
-<line x1="150" y1="205" x2="150" y2="253" stroke="#c3c2b7" stroke-width="1"/>
-<text x="420" y="194" fill="#0b0b0b" font-size="14" font-weight="600">Metadata: create, rename, delete <tspan fill="#52514e" font-weight="400">(ops/s)</tspan></text>
-<text x="560" y="220.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch (NTFS)</text>
-<g><title>Unlatch (NTFS): 1,405 ops/s</title><path d="M570,208 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#2a78d6"/></g>
-<text x="736.0" y="220.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">1,405</text>
-<text x="560" y="246.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
-<g><title>exFAT (Apple): 122 ops/s</title><path d="M570,234 h9.9 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-9.9 z" fill="#eb6834"/></g>
-<text x="589.9" y="246.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">122</text>
-<line x1="570" y1="205" x2="570" y2="253" stroke="#c3c2b7" stroke-width="1"/>
+<text x="560" y="108.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 6.1 MB/s</title><path d="M570,96 h141.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-141.7 z" fill="#eda100"/></g>
+<text x="721.7" y="108.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">6.1</text>
+<text x="560" y="134.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 6.1 MB/s</title><path d="M570,122 h141.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-141.7 z" fill="#2a78d6"/></g>
+<text x="721.7" y="134.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">6.1</text>
+<text x="560" y="160.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
+<g><title>exFAT (Apple): 6.2 MB/s</title><path d="M570,148 h144.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-144.1 z" fill="#eb6834"/></g>
+<text x="724.1" y="160.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">6.2</text>
+<line x1="570" y1="67" x2="570" y2="167" stroke="#c3c2b7" stroke-width="1"/>
+<text x="0" y="220" fill="#0b0b0b" font-size="14" font-weight="600">Small files, 1–16 KiB <tspan fill="#52514e" font-weight="400">(files/s)</tspan></text>
+<text x="140" y="246.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 82 files/s</title><path d="M150,234 h143.4 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-143.4 z" fill="#eda100"/></g>
+<text x="303.4" y="246.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">82</text>
+<text x="140" y="272.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 89 files/s</title><path d="M150,260 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#2a78d6"/></g>
+<text x="316.0" y="272.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">89</text>
+<text x="140" y="298.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
+<g><title>exFAT (Apple): 61 files/s</title><path d="M150,286 h105.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-105.7 z" fill="#eb6834"/></g>
+<text x="265.7" y="298.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">61</text>
+<line x1="150" y1="231" x2="150" y2="305" stroke="#c3c2b7" stroke-width="1"/>
+<text x="420" y="220" fill="#0b0b0b" font-size="14" font-weight="600">Metadata: create, rename, delete <tspan fill="#52514e" font-weight="400">(ops/s)</tspan></text>
+<text x="560" y="246.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 400 ops/s</title><path d="M570,234 h51.3 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-51.3 z" fill="#eda100"/></g>
+<text x="631.3" y="246.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">400</text>
+<text x="560" y="272.5" text-anchor="end" fill="#52514e" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 1,157 ops/s</title><path d="M570,260 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#2a78d6"/></g>
+<text x="736.0" y="272.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">1,157</text>
+<text x="560" y="298.5" text-anchor="end" fill="#52514e" font-size="12">exFAT (Apple)</text>
+<g><title>exFAT (Apple): 122 ops/s</title><path d="M570,286 h12.9 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-12.9 z" fill="#eb6834"/></g>
+<text x="592.9" y="298.5" fill="#0b0b0b" font-size="12" font-variant-numeric="tabular-nums">122</text>
+<line x1="570" y1="231" x2="570" y2="305" stroke="#c3c2b7" stroke-width="1"/>
 </svg>

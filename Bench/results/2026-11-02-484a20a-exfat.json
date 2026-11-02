@@ -1,0 +1,23 @@
+{
+  "label": "exfat",
+  "commit": "484a20a",
+  "date": "2026-11-02T06:40:30Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "/dev/disk8 on /Volumes/BEXFAT (exfat, local, nodev, nosuid, noowners, noatime, fskit, mounted by ramanan)",
+  "runs": 5, "mib": 1024, "small_files": 30000, "metadata_files": 10000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 0.572231,
+    "seq_read_cold": 0.446065,
+    "seq_read_warm": 0.081759,
+    "small_files": 26.536269,
+    "metadata": 36.006616,
+    "raw_read": 0.450591
+  },
+  "mb_per_s": {
+    "seq_write": 1876.4, "seq_read_cold": 2407.1, "seq_read_warm": 13133.0, "raw_read": 2383.0
+  },
+  "small_files_per_s": 1131,
+  "metadata_ops_per_s": 833
+}

@@ -11,6 +11,8 @@
 # Stock ntfs-3g refuses block devices unless run as root ("unprivileged user can not mount
 # NTFS block devices using the external FUSE library"), so it mounts the image file; the
 # unlatch-file run does the same for a like-for-like comparison, and unlatch uses the disk.
+# Unlatch mounts under /Volumes; UNLATCH_BACKEND=kext|fskit picks macFUSE's backend (default
+# auto: fskit there) and is added to the label, e.g. unlatch-file-kext (D-78, D-79).
 #   Bench/baselines.sh remount <kind>             used by run.sh between write and cold read
 set -euo pipefail
 
@@ -18,16 +20,19 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$root/build/bench"
 products="$root/build/DerivedData/Build/Products/Debug"
 mnt_fuse="$work/m"
+mnt_unlatch=/Volumes/BUNLATCH
 mkdir -p "$work" "$mnt_fuse"
 
 dev_of() { cat "$work/$1.dev"; }
-mount_point() { case "$1" in apfs) echo /Volumes/BAPFS ;; exfat) echo /Volumes/BEXFAT ;; *) echo "$mnt_fuse" ;; esac; }
+mount_point() {
+    case "$1" in apfs) echo /Volumes/BAPFS ;; exfat) echo /Volumes/BEXFAT ;; unlatch*) echo "$mnt_unlatch" ;; *) echo "$mnt_fuse" ;; esac
+}
 
 fuse_mount() {          # kind
     local disk; disk=$(dev_of "$1")
     case "$1" in
-        unlatch) "$products/unlatch-fuse" "/dev/$disk" "$mnt_fuse" 2>/dev/null ;;
-        unlatch-file) "$products/unlatch-fuse" "$work/$1.img" "$mnt_fuse" 2>/dev/null ;;
+        unlatch) "$products/unlatch-fuse" --backend "${UNLATCH_BACKEND:-auto}" "/dev/$disk" "$mnt_unlatch" 2>/dev/null ;;
+        unlatch-file) "$products/unlatch-fuse" --backend "${UNLATCH_BACKEND:-auto}" "$work/$1.img" "$mnt_unlatch" 2>/dev/null ;;
         ntfs3g)
             # ntfs-3g dies after forking on macOS (like any fork without exec), so no_detach.
             ("$root/build/ntfs3g-driver/bin/ntfs-3g" -o no_detach "$work/$1.img" "$mnt_fuse" > "$work/ntfs3g.log" 2>&1 &)
@@ -83,7 +88,8 @@ kinds=("$@"); [ ${#kinds[@]} -gt 0 ] || kinds=(apfs exfat ntfs3g unlatch-file un
 for kind in "${kinds[@]}"; do
     setup "$kind"
     dev=(); [ -z "$(dev_of "$kind")" ] || dev=(--device "r$(dev_of "$kind")")
-    "$root/Bench/run.sh" "$(mount_point "$kind")" "$kind" --runs "$runs" ${dev[@]+"${dev[@]}"} \
+    label="$kind"; case "$kind" in unlatch*) label="$kind${UNLATCH_BACKEND:+-$UNLATCH_BACKEND}" ;; esac
+    "$root/Bench/run.sh" "$(mount_point "$kind")" "$label" --runs "$runs" ${dev[@]+"${dev[@]}"} \
         --remount "'$root/Bench/baselines.sh' remount $kind" || { teardown "$kind"; exit 1; }
     teardown "$kind"
 done

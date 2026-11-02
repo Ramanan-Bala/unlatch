@@ -41,6 +41,38 @@ public enum MacFUSE {
     /// True when macFUSE is missing or older than `minimumVersion`.
     public static var needsInstall: Bool { needsInstall(installed: installedVersion) }
 
+    /// macFUSE's two ways to mount (D-79).
+    public enum Backend: String, Sendable { case kext, fskit }
+
+    /// The backend for Unlatch's mounts: macFUSE's kernel extension when it can load without
+    /// asking anyone, because it is up to 8x faster with small files and metadata; otherwise FSKit,
+    /// which needs no kernel extension (D-79). `UNLATCH_BACKEND=kext|fskit` overrides it.
+    public static var preferredBackend: Backend {
+        if let s = ProcessInfo.processInfo.environment["UNLATCH_BACKEND"], let b = Backend(rawValue: s) { return b }
+        return kextAllowed ? .kext : .fskit
+    }
+
+    /// True when the kernel extension is loaded, or approved: in the auxiliary kernel collection
+    /// at the installed version, so loading it shows no prompt. Reads only, no root (~0.4 s).
+    public static var kextAllowed: Bool {
+        let loaded = (try? run("/usr/bin/kmutil", ["showloaded", "--list-only"])) ?? ""
+        if kextAllowed(loaded: loaded, collections: "", installed: nil) { return true }
+        let collections = (try? run("/usr/bin/kmutil", ["inspect", "-V", "release", "--no-header"])) ?? ""
+        return kextAllowed(loaded: "", collections: collections, installed: installedVersion)
+    }
+
+    static let kextID = "io.macfuse.filesystems.macfuse"   // loaded as ...macfuse.<macOS major>
+
+    static func kextAllowed(loaded: String, collections: String, installed: String?) -> Bool {
+        if loaded.contains(kextID) { return true }
+        guard let installed else { return false }
+        // kmutil inspect: "<bundle id>\t<version>\t<path>" per kext in every collection.
+        return collections.split(separator: "\n").contains { line in
+            let f = line.split(separator: "\t")
+            return f.count >= 2 && f[0].hasPrefix(kextID) && f[1] == installed
+        }
+    }
+
     static func needsInstall(installed: String?) -> Bool {
         guard let s = installed, let v = Version(s) else { return true }
         return v < Version(minimumVersion)!
@@ -163,7 +195,8 @@ public enum MacFUSE {
     }
 
     /// The one-time step that lets macFUSE mount: turning on its file system extension (FSKit
-    /// backend, D-78). No kernel extension, no Recovery, no restart.
+    /// backend, D-78). No kernel extension, no Recovery, no restart. Not needed when the kernel
+    /// extension is allowed (D-79).
     public static let approvalSteps = [
         "Open System Settings > General > Login Items & Extensions.",
         "Under Extensions, click the info button next to File System Extensions.",

@@ -718,6 +718,24 @@ Surprises:
 - `diskutil unmount` (Finder's path) unmounts FSKit mounts. 15 quick mount/unmount cycles did not switch the extension off.
 - `windows-content.img`: `names/éte-nfd.txt` is missing from listings on both backends (pre-existing; carry-over).
 
+### Follow-up: kext when allowed, else FSKit; benchmarks; beta.5 (D-79) — 2026-11-02
+
+- Benchmarks (`Bench/README.md`, results `2026-11-02-484a20a-*`): all five SSD-image setups through FSKit, then `unlatch-file` and `unlatch` through the kext (`UNLATCH_BACKEND=kext`, labels `-kext`), and the SanDisk USB 2.0 stick through both. FSKit is 7.9x slower at small files and 8.5x at metadata on the SSD image; on the stick 8% and 2.9x.
+- `MacFUSE.preferredBackend` / `kextAllowed` (parsing tested in `UnlatchTests`), `--backend` from MountService, `UNLATCH_BACKEND` override; `doctor`, `setup` and the app's row say which backend mounts use. README "Faster small files" and "What FSKit costs", site sections, cli/install/troubleshooting/dev-setup, changelog.
+- `Bench/usb-chart.py` draws four series (FSKit yellow between the device and the kext, validated with the dataviz palette checker in both themes); `Bench/baselines.sh` mounts Unlatch under `/Volumes/BUNLATCH` and takes `UNLATCH_BACKEND`.
+- `Scripts/test-engine.sh`'s include-boundary check skips `.claude/` (another session's git worktree of this repo tripped it).
+
+```sh
+CLI/.build/debug/unlatch doctor                                   # "mounts use macFUSE's kernel extension (allowed on this Mac)"
+UNLATCH_INTEGRATION=1 swift test --package-path Shared            # 14 passed (auto = kext here)
+UNLATCH_BACKEND=fskit UNLATCH_INTEGRATION=1 swift test --package-path Shared   # 14 passed
+Bench/usb-chart.py && Scripts/build-site.sh
+```
+
+Release gates for beta.5: engine tests, fsx regressions, include boundary, rw-suite (FSKit and kext, files and disks), Swift tests passed; Windows chkdsk skipped (no `WINDOWS_SSH` here). Fuzzing found a probe hang (D-80): a crafted 2 MiB image whose $MFT bitmap claims a huge size; fixed, input saved in `Tests/Fuzz/crashes/fuzz_probe/`, `Scripts/fuzz.sh --regress` and a new 60 s run pass.
+
+Surprises: `appleMountComesBackAfterAFailure` failed once (eject "busy" right after Apple's driver got the disk back), then passed 9 of 9 with and without the change. Earlier runs had left `build/interrupt/kill.img` and a core-test image attached; detached.
+
 ## Carry-overs
 
 - **Helper Full Disk Access on the app (owner's request, D-74):** try registering the helper as an `SMAppService` daemon, a bare executable in `Unlatch.app/Contents/MacOS` with its plist in `Contents/Library/LaunchDaemons`, so that the grant given to "Unlatch" covers it. Undocumented; check that SMAppService registers an ad-hoc-signed app at all; test with a disposable USB stick (the only removable disk here holds real data). Keep the current helper as the fallback.
@@ -727,7 +745,6 @@ Surprises:
 - **Two mounts of one disk (data integrity):** the app's auto-mount and `unlatch mount` both mounted disk6 read-write within 0.1 s (2026-11-02). `unlatch-fuse` should take an exclusive lock on the device (or MountService a per-disk lock) and refuse a second mount.
 - **NFD name on the Windows-made image:** `names/éte-nfd.txt` in `windows-content.img` is missing from mount listings (kext and FSKit alike), so `check-readonly.sh` fails there.
 - **FSKit transient failure (D-78):** after macFUSE's background service restarts, mounts fail for about a minute ("not found"/"not enabled"). Consider a retry with backoff in `MountService.mount` for auto-mounts.
-- **Benchmarks (D-78):** users now mount through FSKit; `Bench/baselines.sh` mounts under `build/bench/m` (kext). Add an FSKit run under `/Volumes` and refresh the README charts.
 - **macFUSE 5.6.0:** when released, rerun the FSKit suites; `reply_bytes()` can stay.
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).

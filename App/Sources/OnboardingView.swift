@@ -22,8 +22,9 @@ struct OnboardingView: View {
                     Task { await checks.installMacFUSE(model: model) }
                 }
             }
-            CheckRow(title: "macFUSE file system extension on", state: checks.fsExtension,
-                     note: MacFUSE.approvalSteps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")) {
+            CheckRow(title: "macFUSE allowed to mount", state: checks.fsExtension,
+                     note: MacFUSE.approvalSteps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+                         + "\nCopying many small files is up to 8x faster through macFUSE's kernel extension. Allowing it takes a visit to Recovery; Unlatch then uses it on its own (step-by-step guide).") {
                 HStack {
                     Button("Open Login Items & Extensions") { Checks.openExtensionSettings() }
                     Button("Step-by-step guide") { NSWorkspace.shared.open(Checks.approvalHelp) }

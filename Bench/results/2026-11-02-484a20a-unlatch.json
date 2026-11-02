@@ -1,0 +1,23 @@
+{
+  "label": "unlatch",
+  "commit": "484a20a",
+  "date": "2026-11-02T07:13:53Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "macfuse://3AF2F887-4F00-4CE4-B6CB-4BCDED21C253 on /Volumes/BUNLATCH (macfuse, nodev, nosuid, noowners, noatime, fskit, mounted by ramanan)",
+  "runs": 5, "mib": 1024, "small_files": 30000, "metadata_files": 10000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 0.491802,
+    "seq_read_cold": 0.968240,
+    "seq_read_warm": 0.065648,
+    "small_files": 81.586761,
+    "metadata": 58.799487,
+    "raw_read": 0.278171
+  },
+  "mb_per_s": {
+    "seq_write": 2183.3, "seq_read_cold": 1109.0, "seq_read_warm": 16356.0, "raw_read": 3860.0
+  },
+  "small_files_per_s": 368,
+  "metadata_ops_per_s": 510
+}

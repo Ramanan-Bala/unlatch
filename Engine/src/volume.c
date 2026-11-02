@@ -81,6 +81,16 @@ static int unmount_volume(ntfs_volume *vol, ue_dev_t *ctx)
     return err;
 }
 
+// Clusters and MFT records are at least 512 bytes, so a bitmap holds at most one bit per 512
+// bytes of the volume; one cluster of slack covers rounding.
+bool ue_bitmaps_plausible(const ntfs_volume *vol)
+{
+    s64 limit = (s64)(((uint64_t)vol->nr_clusters * vol->cluster_size) / 512 / 8) + vol->cluster_size;
+
+    return vol->lcnbmp_na && vol->mftbmp_na && vol->lcnbmp_na->data_size <= limit &&
+           vol->mftbmp_na->data_size <= limit;
+}
+
 // Label, sizes, versions and serial. Leaves state and reason alone.
 static void fill_info(ntfs_volume *vol, const ue_io_t *io, ue_probe_t *out)
 {
@@ -89,7 +99,7 @@ static void fill_info(ntfs_volume *vol, const ue_io_t *io, ue_probe_t *out)
     snprintf(out->label, sizeof(out->label), "%s", vol->vol_name ? vol->vol_name : "");
     out->cluster_size = vol->cluster_size;
     out->total_bytes = (uint64_t)vol->nr_clusters * vol->cluster_size;
-    if (ntfs_volume_get_free_space(vol) == 0 && vol->free_clusters >= 0)
+    if (ue_bitmaps_plausible(vol) && ntfs_volume_get_free_space(vol) == 0 && vol->free_clusters >= 0)
         out->free_bytes = (uint64_t)vol->free_clusters * vol->cluster_size;
     out->major_ver = vol->major_ver;
     out->minor_ver = vol->minor_ver;
@@ -163,6 +173,11 @@ int ue_probe(const ue_io_t *io, ue_probe_t *out)
             return ENOMEM;
         // The boot sector is NTFS, so any mount failure (EINVAL included) means damage.
         set_state(out, UE_VOL_CORRUPT, "NTFS metadata is damaged: %s", strerror(err));
+        return 0;
+    }
+    if (!ue_bitmaps_plausible(vol)) {
+        set_state(out, UE_VOL_CORRUPT, "NTFS metadata is damaged: a bitmap is larger than the volume");
+        unmount_volume(vol, ctx);
         return 0;
     }
     fill_info(vol, io, out);

@@ -81,6 +81,10 @@ struct ue_engine {
 int ue_iget(ue_engine_t *e, ue_ino_t ino, ntfs_inode **out);   // open + sequence check
 ntfs_inode *ue_iopen_rec(ue_engine_t *e, uint64_t rec);          // open by record, counted
 int ue_iput(ntfs_inode *ni);                                     // close; 0 or errno
+
+// False when the cluster or MFT bitmap is larger than any real volume of this size has.
+// Counting free bits reads all of it: a 2 MiB crafted image took minutes (fuzz, D-80).
+bool ue_bitmaps_plausible(const ntfs_volume *vol);
 bool ue_is_dir(const ntfs_inode *ni);
 bool ue_is_symlink(ntfs_inode *ni);
 void ue_logf(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));  // engine's own messages (log.c)                              // any kind NTFS has (link.c)
