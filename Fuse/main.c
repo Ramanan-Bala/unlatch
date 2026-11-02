@@ -541,6 +541,13 @@ int main(int argc, char **argv)
         return 1;
     }
     fs.root = root.ino;
+    // The user marked the volume checked: from here on it is treated as clean, in the status
+    // record (the app's badge and menu) as in the engine, which clears the mark at a clean
+    // close like any read-write mount's (D-92).
+    if (forced && mark_checked && !fs.read_only) {
+        p.state = UE_VOL_CLEAN;
+        snprintf(p.reason, sizeof(p.reason), "marked as checked");
+    }
 
     char volname[600], opts[2048];
     escape_opt(p.label[0] ? p.label : "NTFS", volname, sizeof(volname));

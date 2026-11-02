@@ -879,6 +879,8 @@ UNLATCH_FUSE=... unlatch mount diskN; unlatch mount --mark-checked diskN; unlatc
 
 Not checked: the app's alert and menu item by hand (built only).
 
+Owner's report after beta.9: right after Mark as Checked the badge said "Read-write, unchecked" and the menu offered it again (the status record kept the probe's DIRTY). The daemon now records the mount as CLEAN, "marked as checked"; `unlatch status` shows it at once, and the disk probes clean after the eject.
+
 ## Carry-overs
 
 - **The Unlatch app stops (2026-11-02):** twice during the real-disk tests the app was not running, with no crash report (started again at 18:29, gone before 18:56). Find out why: `/usr/bin/log show --predicate 'process == "Unlatch"'`, launchd, or a quit from the menu.
