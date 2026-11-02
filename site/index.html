@@ -254,6 +254,26 @@ unlatch setup</code></pre>
     </div>
     <p>Reads run at the stick's full speed and sequential writes reach 91% of it with either backend (exFAT 93%). Small files and metadata beat exFAT with either backend, helped by the engine's write-back cache.</p>
 
+    <h3>A real copy: 123 GB of GoPro footage to a USB hard drive</h3>
+    <p>A Finder copy of a GoPro footage folder (364 files, 123 GB, mostly multi-GB clips) from the Mac's internal SSD to a Seagate Expansion 1 TB portable hard drive (2.5", 5400 rpm, USB 3.0), formatted NTFS and mounted by Unlatch through the kernel extension.</p>
+    <figure class="chart">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="bench/seagate-dark.svg">
+        <img src="bench/seagate.svg" width="800" height="300" alt="Line chart of write speed during a 19 minute, 123 GB Finder copy to a Seagate USB 3.0 hard drive through Unlatch. Speed holds between about 92 and 112 MB/s, averaging 106 MB/s, against the drive's rated maximum of 130 MB/s">
+      </picture>
+    </figure>
+    <div class="table">
+      <table>
+        <tbody>
+          <tr><td>Copied</td><td class="num">123.1 GB in 19 min 21 s</td></tr>
+          <tr><td>Average write speed</td><td class="num"><strong>106 MB/s</strong></td></tr>
+          <tr><td>Steady range (30 s average)</td><td class="num">92–112 MB/s</td></tr>
+          <tr><td>Drive's rated maximum</td><td class="num">up to 130 MB/s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The copy ran at 82% of the drive's rated maximum from start to finish, with no slowdown as it went. That rating is the maker's best case on the drive's outer tracks; this drive was a third full, so the copy landed further in, where a spinning disk is slower. The drive itself, not Unlatch, set the pace.</p>
+
     <h3>Fast SSD</h3>
     <p>A 4 GiB image on the internal SSD, attached as a disk, the way a real drive is used. Median of 5 runs, 1 GiB file, 30,000 small files, 10,000 metadata files.</p>
     <div class="table">

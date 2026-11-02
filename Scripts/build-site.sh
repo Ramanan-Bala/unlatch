@@ -20,7 +20,7 @@ for f in wordmark.svg wordmark-dark.svg app-icon.svg social-preview.png; do
     cp "docs/brand/$f" "$out/brand/"
 done
 mkdir -p "$out/bench"
-for f in usb.svg usb-dark.svg; do
+for f in usb.svg usb-dark.svg seagate.svg seagate-dark.svg; do
     cp "Bench/$f" "$out/bench/"
 done
 touch "$out/.nojekyll"
