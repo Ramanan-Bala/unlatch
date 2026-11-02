@@ -536,7 +536,6 @@ $U doctor
 **Left:**
 - The owner's look at the menu, onboarding and Settings: eject from the menu, badges, wording, VoiceOver.
 - `chkdsk /scan` of the Seagate on Windows after its first real write.
-- FSKit-experiment leftovers that need the owner (see the cleanup entry below).
 
 ### Step 15: Speed on the disk path (re-scoped, D-62) — done 2026-11-01
 
@@ -675,7 +674,7 @@ WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 Tests/Images/windows/make.sh
 ### Leftovers: FSKit cleanup and CI — done 2026-11-02
 
 - Removed: the saved personal-team signing config (`build/Local.xcconfig.personal-team`), scratch builds, and about 7 GB of regenerable images and VHDs in `build/` (the chkdsk reports stay in `Tests/oracle/`). `/Volumes/UnlatchTest` was already gone. The dormant `Extension/` sources stay (D-39), as does `Tests/Fuse/macfuse-repro/` for the upstream report.
-- Left for the owner: `sudo rmdir /Volumes/HelloFS` (an empty folder from the FSKit tests; root-owned parent), and `~/Library/Containers/io.github.ramanan-bala.Unlatch.FSModule` (the dormant extension's empty sandbox container; macOS refuses to let a script delete it; drag it to the Trash in Finder).
+- The owner removed `/Volumes/HelloFS` and the dormant extension's sandbox container (`~/Library/Containers/io.github.ramanan-bala.Unlatch.FSModule`), 2026-11-02. No FSKit-experiment leftovers remain.
 - CI (`gh run list --workflow engine`): green on every pushed step; two runs were cancelled only because a newer push superseded them.
 
 ## Carry-overs
