@@ -6,7 +6,7 @@ Goal: confidence that Unlatch does not lose or corrupt data on real disks before
 
 - At least **3 Macs** (Apple Silicon, 8 GB and up) on at least **2 macOS 27.x builds**.
 - A mix of disks: USB hard disk, USB or Thunderbolt SSD, a Windows-formatted USB stick, an SD card, and if possible an internal NTFS partition. At least one should be shared with a Windows PC in daily use.
-- Release: `1.0.0-beta.N`, published as a pre-release; testers install with Homebrew (`brew install --cask ramanan-bala/unlatch/unlatch`) or the DMG. The app offers newer betas to beta users only.
+- Release: `1.0.0-beta.N`, published as a pre-release; testers install with Homebrew (`brew tap ramanan-bala/unlatch`, `brew trust --tap ramanan-bala/unlatch`, `brew install --cask ramanan-bala/unlatch/unlatch`) or the DMG. The app offers newer betas to beta users only.
 
 ## What testers do
 

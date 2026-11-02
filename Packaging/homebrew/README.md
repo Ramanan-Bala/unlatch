@@ -10,6 +10,8 @@ Templates for the tap repository `Ramanan-Bala/homebrew-unlatch` (plan Step 18, 
 Users:
 
 ```sh
+brew tap ramanan-bala/unlatch
+brew trust --tap ramanan-bala/unlatch                 # Homebrew 7: non-official taps must be trusted
 brew install --cask ramanan-bala/unlatch/unlatch      # the app (and macFUSE)
 brew install ramanan-bala/unlatch/unlatch             # or only the command-line tools
 ```

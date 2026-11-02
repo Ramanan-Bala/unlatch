@@ -29,6 +29,8 @@ Pick one.
 **Homebrew** (recommended; installs macFUSE too):
 
 ```sh
+brew tap ramanan-bala/unlatch
+brew trust --tap ramanan-bala/unlatch       # Homebrew 7 loads casks from other taps only once trusted
 brew install --cask ramanan-bala/unlatch/unlatch
 ```
 
@@ -38,6 +40,8 @@ brew install --cask ramanan-bala/unlatch/unlatch
 
 ```sh
 brew install --cask macfuse
+brew tap ramanan-bala/unlatch
+brew trust --tap ramanan-bala/unlatch
 brew install ramanan-bala/unlatch/unlatch
 unlatch setup
 ```
