@@ -17,12 +17,14 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(UNLATCH_SHORT_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Unlatch contributors. GPL-3.0-or-later.</string>
+	<key>UnlatchVersion</key>
+	<string>$(MARKETING_VERSION)</string>
 </dict>
 </plist>

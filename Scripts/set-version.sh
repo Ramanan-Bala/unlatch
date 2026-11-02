@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The version lives in VERSION and is copied into every place that carries it (plan Step 18):
-# project.yml (MARKETING_VERSION), UnlatchCore (Unlatch.version), the engine (ue_version) and
+# project.yml (MARKETING_VERSION, and UNLATCH_SHORT_VERSION without any -pre part), UnlatchCore (Unlatch.version), the engine (ue_version) and
 # the daemon's status records (UNLATCH_VERSION).
 #
 #   Scripts/set-version.sh X.Y.Z[-pre]     write VERSION and every copy, bump the build number
@@ -26,6 +26,8 @@ if [ "${1:-}" = --check ]; then
         have="$(current "$f")"
         [ "$have" = "$want" ] || { echo "set-version: $f has $have, VERSION has $want" >&2; bad=1; }
     done
+    short="$(sed -n 's/^    UNLATCH_SHORT_VERSION: "\(.*\)"/\1/p' project.yml)"
+    [ "$short" = "${want%%-*}" ] || { echo "set-version: project.yml UNLATCH_SHORT_VERSION is $short, want ${want%%-*}" >&2; bad=1; }
     [ $bad = 0 ] && echo "set-version: every copy is $want"
     exit $bad
 fi
@@ -34,6 +36,7 @@ v="${1:?usage: $0 X.Y.Z[-pre] | --check}"
 [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "set-version: not a version: $v" >&2; exit 64; }
 echo "$v" > VERSION
 sed -i '' "s/^    MARKETING_VERSION: \".*\"/    MARKETING_VERSION: \"$v\"/" project.yml
+sed -i '' "s/^    UNLATCH_SHORT_VERSION: \".*\"/    UNLATCH_SHORT_VERSION: \"${v%%-*}\"/" project.yml
 build=$(sed -n 's/^    CURRENT_PROJECT_VERSION: "\(.*\)"/\1/p' project.yml)
 sed -i '' "s/^    CURRENT_PROJECT_VERSION: \".*\"/    CURRENT_PROJECT_VERSION: \"$((build + 1))\"/" project.yml
 sed -i '' "s/^    public static let version = \".*\"/    public static let version = \"$v\"/" Shared/Sources/UnlatchCore/Unlatch.swift

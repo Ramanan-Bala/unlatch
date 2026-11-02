@@ -9,6 +9,7 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 - **Deleting files frees their space right away.** Before, space freed by deleting files on a mounted disk came back only after ejecting it, so a full disk stayed full. A file that is still open keeps its space until it is closed.
 - Files whose names Windows stored with separate accent characters (for example from some Mac-to-Windows copies) are listed and can be opened, renamed and deleted; before, they were missing from Finder and `ls`.
 - When macFUSE's file system extension refuses a mount for a moment (right after an eject, or after macFUSE restarts), Unlatch tries again after a few seconds instead of failing. A failed mount no longer pushes the next one to a folder named `<name> diskN`.
+- Finder's Get Info shows the app's real version (it showed 1.0).
 
 ## [1.0.0-beta.5] - 2026-11-02
 

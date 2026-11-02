@@ -786,6 +786,15 @@ UNLATCH_INTEGRATION=1 swift test --package-path Shared --no-parallel     # 16 pa
 
 Surprise: run in parallel, two integration tests at a time failed to eject ("DiskArbitration status 0xc010", busy), a different pair each run; serially all pass. AGENTS.md now says `--no-parallel`.
 
+### Follow-up: app version in Finder — done 2026-11-02
+
+- The app's Info.plist had `CFBundleShortVersionString` 1.0 and `CFBundleVersion` 1 hard-coded since Step 01 (not a cut-off pre-release part, as TODO.md guessed). project.yml now sets them from `UNLATCH_SHORT_VERSION` (X.Y.Z, written by `set-version.sh`) and `CURRENT_PROJECT_VERSION`, plus `UnlatchVersion` with the full version; the dormant extension too. `set-version.sh --check` verifies the short version.
+
+```sh
+Scripts/set-version.sh --check && Scripts/bootstrap.sh && xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" -c "Print :CFBundleVersion" -c "Print :UnlatchVersion" build/DerivedData/Build/Products/Debug/Unlatch.app/Contents/Info.plist   # 1.0.0, 6, 1.0.0-beta.5
+```
+
 ## Carry-overs
 
 - **Parallel integration tests (2026-11-02):** ejecting several attached images at once fails "busy" now and then. Either serialize the integration tests in code (`@Suite(.serialized)`) or retry the eject in the tests.
