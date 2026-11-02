@@ -829,7 +829,23 @@ Not checked: item 2 with the app running and macFUSE or the helper missing (need
 
 Surprise: libntfs-3g's read-write mount resets `$LogFile` before `ue_open` can set the mark, so that one write is not covered. It leaves the journal empty and consistent, so it is harmless.
 
+### Follow-up: pulled-disk fixes checked on the stick; cut-off tests opt-in (D-89) — 2026-11-02
+
+- The owner pulled the SanDisk stick mid-copy by hand. That found D-85 (a stale daemon blocks the next mount; fixed in `93fed26`) and D-86 (a pulled disk probed CLEAN; the engine side was done by the "Audit.md documentation" session in `84a7224`). A full check of the stick afterwards (snapshot, `ntfsfix -n`, every file through a read-only mount) found no damage from that pull.
+- With D-86 on the stick: after a SIGKILL mid-copy it probed DIRTY and mounted read-only, and the earlier file was intact. The check found two directories with unwritten index blocks: the stick needs chkdsk. `check-readonly.sh` had passed them (both sides empty); it now fails an unlistable directory.
+- `unlatch-engine mark-clean` (UE_OPEN_CLEAR_DIRTY). `test-real-disk.sh`: kill and pull only with `--cut`, last; mark clean only after a clean check; the CLI's exit 3 for a DIRTY read-only mount is expected; cleanup unmounts before the final probe.
+
+```sh
+build/DerivedData/Build/Products/Debug/unlatch-engine mark-clean <img>   # set_dirty image -> clean
+Scripts/test-real-disk.sh SANDISK --yes --no-physical --cut --only kill  # DIRTY, read-only, then the check
+```
+
+Surprises: in zsh `log` is a shell builtin (use `/usr/bin/log show`), which hid every log query earlier today. The Unlatch app was found not running twice during the tests (no crash report): carry-over.
+
 ## Carry-overs
+
+- **The Unlatch app stops (2026-11-02):** twice during the real-disk tests the app was not running, with no crash report (started again at 18:29, gone before 18:56). Find out why: `/usr/bin/log show --predicate 'process == "Unlatch"'`, launchd, or a quit from the menu.
+- **Write-back order after a crash:** a SIGKILL mid-`cp -R` left directories whose MFT records point at index blocks that were never written. The page cache writes dirty pages back sorted by offset (D-62). Writing index and data blocks before the MFT records that point at them would shrink the damage. The dirty mark (D-86) already makes it safe (read-only until chkdsk).
 
 - **Audit item 10, lock files (2026-11-02):** the D-81 locks are in a world-writable folder, so another local user can hold a volume's lock, and two disks with one serial (a clone) cannot both be mounted read-write. Not changed: keying by device name would let an image and its attached device both be mounted read-write (what D-81 prevents), and a root-owned folder needs the helper to create the lock files (a new helper command). Decide whether shared Macs matter enough for that.
 

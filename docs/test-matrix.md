@@ -27,10 +27,12 @@ SanDisk Cruzer Blade 16 GB, USB 2.0 (raw: 33 MB/s read, 6.7 MB/s write), GPT, NT
 | Same, FSKit backend | same | pass | 2026-11-02 | 636816e |
 | 4.5 GiB file (over FAT32's limit) | same SHA-256 after a read-only remount | pass; written in 865 s (5 MiB/s) | 2026-11-02 | 636816e |
 | 10,000 small files in 100 folders | same after a remount; space back after `rm -r` | pass | 2026-11-02 | 636816e |
-| `kill -9` of the daemon mid-copy on the stick | probe not CORRUPT; remount read-write; earlier file intact | probe CLEAN, read-write, 208 files of the copy present, earlier file intact | 2026-11-02 | 636816e |
+| `kill -9` of the daemon mid-copy on the stick | probe not CORRUPT; remount read-write; earlier file intact | probe CLEAN, read-write, 208 files of the copy present, earlier file intact (before D-86: CLEAN was wrong, see below) | 2026-11-02 | 636816e |
+| Same with the dirty mark (D-86, `--cut`) | DIRTY; read-only; earlier file intact; the check finds what chkdsk must fix | DIRTY, read-only ("run chkdsk on Windows before writing to it"), 180 files of the copy present, earlier file intact. The check found `unlatch-test/copy/2` and `copy/3` unreadable (index blocks never written): the stick needs chkdsk, as Windows would say | 2026-11-02 | 84a7224 |
+| The owner pulled the stick mid-copy (by hand, before D-85/D-86) | daemon exits; next mount safe | **failed, fixed**: the daemon stayed 33 s and blocked the next mount (D-85); the stick probed CLEAN after libntfs-3g logged inconsistent metadata (D-86). A full check afterwards found that pull did no lasting damage | 2026-11-02 | 3d7abe9 |
 | Snapshot of the whole stick after the kill, through the helper | `ntfsfix -n` clean; every file through a read-only mount matches the engine | pass: 116 directories, 1,144 files, 0 failures | 2026-11-02 | 636816e |
 | App's claim against Apple's driver | `diskutil mount` refused while the app runs | refused ("Unlatch mounts this NTFS volume"). With the app **not** running, macOS mounts the stick read-only about 1.5 s after a dead daemon's mount is reaped, and an `unlatch mount` in that window leaves both mounted (carry-over, S2) | 2026-11-02 | 636816e |
-| Replug, pull mid-copy, sleep and wake (`--only replug,pull,sleep`) | see the script | **open**: needs the owner at the Mac | – | – |
+| Replug, pull mid-copy, sleep and wake (`--only replug,sleep`, and `--cut --only pull`) | see the script | **open**: needs the owner at the Mac, after the stick is repaired | – | – |
 
 ## Interruption (`Tests/Fuse/interrupt.sh`)
 

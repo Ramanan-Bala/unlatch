@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Tests Unlatch on a real, disposable NTFS disk: everything the image-based suites cannot do.
 #
-#   Scripts/test-real-disk.sh <disk> [--yes] [--quick] [--no-physical] [--fill] [--bench] [--only s1,s2]
+#   Scripts/test-real-disk.sh <disk> [--yes] [--quick] [--no-physical] [--fill] [--bench] [--cut] [--only s1,s2]
 #
 #   <disk>          the NTFS volume: BSD name (disk6s2), /dev path or label
 #   --yes           do not ask to confirm the disk
@@ -10,6 +10,10 @@
 #   --no-physical   skip the steps that need you at the Mac (replug, pull out, sleep)
 #   --fill          also fill the volume until it is full (slow: free space / write speed)
 #   --bench         also run Bench/run.sh on it (results in Bench/results/)
+#   --cut           also cut writes off: kill the daemon, and (with you) pull the disk out. Run
+#                   last; they leave the volume DIRTY and often damaged, as on Windows: when the
+#                   check after them finds damage, the disk needs Windows chkdsk (or reformatting)
+#                   before it can be written again
 #   --only STEPS    run only these steps, comma-separated (for example --only replug,pull,sleep)
 #
 # Steps, each PASS / FAIL / SKIP:
@@ -17,14 +21,16 @@
 #   rw-suite        Tests/Fuse/rw-suite.sh --device on each backend this Mac can use
 #   big-file        a 4.5 GiB file (over FAT32's limit), read back after a remount
 #   small-files     thousands of small files, checked after a remount, deleted, space back
-#   kill            the daemon SIGKILLed mid-copy, then probe, remount, write
 #   snapshot        the volume copied through the helper; ntfsfix -n and the engine read it,
 #                   and every file through a read-only mount matches the engine (check-readonly)
 #   fill            write until ENOSPC; the volume stays clean; the space comes back
 #   replug          eject, unplug, plug back in: auto-mount (or a CLI mount) sees the files
-#   pull            pull the disk out mid-copy: no hang, then a safe remount, data before intact
 #   sleep           sleep and wake the Mac with the disk mounted: the mount survives
 #   bench           speeds, against the earlier results
+#   kill (--cut)    the daemon SIGKILLed mid-copy: DIRTY, read-only (D-86), earlier file intact,
+#                   then the snapshot check; marked clean again only if that finds nothing
+#   pull (--cut)    pull the disk out mid-copy: the daemon exits within 5 s (D-85), no hang,
+#                   then the same as kill
 #
 # Only the folders unlatch-test/ and rw-suite/ on the volume are written; other files stay as
 # they are. Still, use a disk whose content you can lose: some steps cut writes off on purpose.
@@ -38,12 +44,13 @@ fuse="$products/unlatch-fuse" engine="$products/unlatch-engine" ntfsfix="$root/b
 cli="${UNLATCH_CLI:-$root/CLI/.build/debug/unlatch}" withdev="$root/Tests/Fuse/with-device.py"
 src="$root/Engine/vendor/ntfs-3g"
 
-disk="" yes=0 quick=0 physical=1 fill=0 bench=0 only=""
+disk="" yes=0 quick=0 physical=1 fill=0 bench=0 cut=0 only=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --yes) yes=1 ;; --quick) quick=1 ;; --no-physical) physical=0 ;; --fill) fill=1 ;; --bench) bench=1 ;;
         --only) only=",$2,"; shift ;;
-        -h|--help) sed -n '3,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --cut) cut=1 ;;
+        -h|--help) sed -n '3,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "test-real-disk: unknown option $1" >&2; exit 64 ;;
         *) [ -z "$disk" ] && disk="$1" || { echo "test-real-disk: one disk only" >&2; exit 64; } ;;
     esac
@@ -84,9 +91,11 @@ result() {     # step, PASS|FAIL|SKIP, detail
 logrun() { echo "\$ $*" >> "$log"; "$@" >> "$log" 2>&1; }
 
 cur_mount() { IFS='|' read -r _ _ _ m _ <<< "$(find_vol "$bsd")"; printf '%s' "${m:-}"; }
-mount_vol() {  # [-r]; prints the mount point
-    local out; out=$("$cli" mount --json "$@" "$bsd" 2>> "$log") || return $?
-    printf '%s' "$out" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["mountPoint"])'
+mount_vol() {  # [-r]; prints the mount point; returns the CLI's exit (3: mounted, forced read-only)
+    local out rc=0; out=$("$cli" mount --json "$@" "$bsd" 2>> "$log") || rc=$?
+    [ $rc = 0 ] || [ $rc = 3 ] || return $rc
+    printf '%s' "$out" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["mountPoint"])' || return 1
+    return $rc
 }
 unmount_vol() { for _ in 1 2 3 4 5 6 7 8 9 10; do "$cli" unmount "$bsd" >> "$log" 2>&1 && return 0; sleep 1; done; return 1; }
 probe_state() { "$withdev" "$bsd" ro "$engine" probe {} 2>> "$log" | awk '/^state:/ {print $2}'; }
@@ -199,7 +208,8 @@ step_kill() {
     local m pid d state n
     m=$(mount_vol) || { result kill FAIL "mount"; return; }
     rm -rf "${m:?}/unlatch-test/copy"; mkdir -p "$m/unlatch-test/copy"
-    echo before > "$m/unlatch-test/before-kill.txt"; sync
+    echo before > "$m/unlatch-test/before-kill.txt"; sync; sleep 2      # written back (D-62)
+    (cd "$m/unlatch-test" && shasum -a 256 before-kill.txt) > "$work/before-kill.sha"
     ( for i in 1 2 3 4 5 6; do cp -R "$src" "$m/unlatch-test/copy/$i" 2>/dev/null || exit 0; done ) &
     pid=$!
     sleep 4
@@ -208,34 +218,55 @@ step_kill() {
     kill -9 "$d"; wait $pid 2>/dev/null
     gone "$m" || { umount -f "$m" 2>/dev/null; gone "$m"; }
     "$cli" list > /dev/null 2>&1          # reaps a dead daemon's mount
-    state=$(probe_state)
-    case "$state" in clean|dirty) ;; *) result kill FAIL "probe after SIGKILL: ${state:-nothing}"; return ;; esac
-    m=$(mount_vol); local rc=$?
-    [ $rc = 0 ] || [ $rc = 3 ] || { result kill FAIL "remount after SIGKILL (exit $rc)"; return; }
-    n=$(find "$m/unlatch-test/copy" -type f 2>/dev/null | wc -l | tr -d ' ')
-    [ "$(cat "$m/unlatch-test/before-kill.txt" 2>/dev/null)" = before ] || { result kill FAIL "file written before the kill is gone"; unmount_vol; return; }
-    if [ $rc = 0 ]; then
-        cp -R "$src/include" "$m/unlatch-test/after-kill" && diff -r "$src/include" "$m/unlatch-test/after-kill" > /dev/null \
-            || { result kill FAIL "write after the kill"; unmount_vol; return; }
-    fi
-    unmount_vol
-    result kill PASS "probe $state, remounted $( [ $rc = 0 ] && echo read-write || echo read-only), $n files of the copy present, earlier file intact"
+    after_cut kill "SIGKILL"
 }
 
-step_snapshot() {     # name
-    local img="$work/snapshot.img" m
+# After a cut-off write (kill or pull): the volume is DIRTY (D-86), mounts read-only (CLI
+# exit 3), and a file written back before the cut is intact. Then the snapshot check, and
+# only if that passes the volume is marked clean again, so the later steps can write.
+after_cut() {     # step, what; the file is unlatch-test/before-<step>.*
+    local state m rc n
+    state=$(probe_state)
+    [ "$state" = dirty ] || { result "$1" FAIL "probe after the $2: ${state:-nothing} (want dirty, D-86)"; return; }
+    m=$(mount_vol); rc=$?
+    [ $rc = 3 ] || { result "$1" FAIL "mount after the $2: exit $rc (want 3, read-only)"; [ $rc = 0 ] && unmount_vol; return; }
+    n=$(find "$m/unlatch-test/copy" -type f 2>/dev/null | wc -l | tr -d ' ')
+    if ! (cd "$m/unlatch-test" && shasum -a 256 -c --status "$work/before-$1.sha") 2>/dev/null; then
+        result "$1" FAIL "the file written before the $2 differs or is gone"; unmount_vol; return
+    fi
+    unmount_vol
+    result "$1" PASS "probe dirty, mounted read-only, $n files of the copy present, earlier file intact"
+    if step_snapshot "$1-check" dirty; then mark_clean "$1"
+    else say "  $label stays DIRTY and read-only: the $2 left damage, as on Windows. Run chkdsk on Windows (or reformat it) before writing to it again."; fi
+}
+
+# The volume was checked (snapshot, ntfsfix -n, check-readonly): clear its dirty mark.
+mark_clean() {
+    if "$withdev" "$bsd" rw "$engine" mark-clean {} >> "$log" 2>&1 && [ "$(probe_state)" = clean ]; then
+        result "$1-clean" PASS "checked, marked clean again"
+    else
+        result "$1-clean" FAIL "could not mark the checked volume clean; later steps run read-only"
+    fi
+}
+
+step_snapshot() {     # name [state, default clean]; returns 0 on PASS
+    local img="$work/snapshot.img" m want="${2:-clean}"
     unmount_vol 2>/dev/null || true
     rm -f "$img"
-    if ! "$withdev" "$bsd" ro --snapshot "$img" >> "$log" 2>&1; then result "$1" FAIL "snapshot through the helper"; return; fi
-    if ! logrun "$ntfsfix" -n "$img"; then result "$1" FAIL "ntfsfix -n: $(tail -1 "$log")"; rm -f "$img"; return; fi
-    "$engine" probe "$img" | grep -q '^state: *clean' || { result "$1" FAIL "engine probe of the snapshot: $("$engine" probe "$img" | head -1)"; rm -f "$img"; return; }
-    m=$(mount_vol -r) || { result "$1" FAIL "read-only mount"; rm -f "$img"; return; }
+    if ! "$withdev" "$bsd" ro --snapshot "$img" >> "$log" 2>&1; then result "$1" FAIL "snapshot through the helper"; return 1; fi
+    if ! logrun "$ntfsfix" -n "$img"; then result "$1" FAIL "ntfsfix -n: $(tail -1 "$log")"; rm -f "$img"; return 1; fi
+    "$engine" probe "$img" | grep -q "^state: *$want" || { result "$1" FAIL "engine probe of the snapshot: $("$engine" probe "$img" | head -1) (want $want)"; rm -f "$img"; return 1; }
+    local rc=0
+    m=$(mount_vol -r); rc=$?           # 3: a DIRTY volume reports "forced read-only" even with -r
+    [ $rc = 0 ] || [ $rc = 3 ] || { result "$1" FAIL "read-only mount (exit $rc)"; rm -f "$img"; return 1; }
+    rc=0
     if UNLATCH_ENGINE="$engine" logrun "$root/Tests/Fuse/check-readonly.sh" "$img" "$m"; then
-        result "$1" PASS "ntfsfix -n ok, clean, $(tail -1 "$log" | sed 's/^check-readonly: //')"
+        result "$1" PASS "ntfsfix -n ok, $want, $(tail -1 "$log" | sed 's/^check-readonly: //')"
     else
-        result "$1" FAIL "mount and engine disagree: $(grep FAIL "$log" | tail -1)"
+        result "$1" FAIL "mount and engine disagree: $(grep FAIL "$log" | tail -1)"; rc=1
     fi
     unmount_vol; rm -f "$img"
+    return $rc
 }
 
 step_fill() {
@@ -273,11 +304,11 @@ step_replug() {
 }
 
 step_pull() {
-    local m want pid d t0
+    local m pid d t0
     m=$(mount_vol) || { result pull FAIL "mount"; return; }
     rm -rf "${m:?}/unlatch-test/copy"; mkdir -p "$m/unlatch-test/copy"
     head -c 5000000 /dev/urandom > "$m/unlatch-test/before-pull.bin"
-    want=$(shasum -a 256 < "$m/unlatch-test/before-pull.bin" | cut -d' ' -f1)
+    (cd "$m/unlatch-test" && shasum -a 256 before-pull.bin) > "$work/before-pull.sha"
     sync; sleep 2                        # written back (D-62: within a second)
     d=$(daemon_pid)
     ( for i in $(seq 1 30); do cp -R "$src" "$m/unlatch-test/copy/$i" 2>/dev/null || exit 0; done ) &
@@ -287,8 +318,11 @@ step_pull() {
     fi
     t0=$(date +%s)
     wait_disk gone 30 || { result pull FAIL "the disk is still attached"; kill $pid; wait $pid 2>/dev/null; return; }
-    for _ in $(seq 1 30); do kill -0 "$d" 2>/dev/null || break; sleep 1; done
-    if kill -0 "$d" 2>/dev/null; then result pull FAIL "the daemon still runs 30 s after the pull"; kill -9 "$d"; fi
+    # The daemon notices within a second or two and unmounts itself (D-85).
+    local waited=0
+    while kill -0 "$d" 2>/dev/null && [ $waited -lt 30 ]; do sleep 1; waited=$((waited + 1)); done
+    if kill -0 "$d" 2>/dev/null; then result pull FAIL "the daemon still runs 30 s after the pull"; kill -9 "$d"; return
+    elif [ $waited -gt 5 ]; then result pull FAIL "the daemon took ${waited}s to notice the pull (more than 5 s)"; fi
     kill $pid 2>/dev/null; wait $pid 2>/dev/null
     gone "$m" || { umount -f "$m" 2>/dev/null; gone "$m" || { result pull FAIL "stale mount at $m"; return; }; }
     ls /Volumes > /dev/null 2>&1 & local lsp=$!          # macOS has no timeout(1)
@@ -296,16 +330,9 @@ step_pull() {
     if kill -0 $lsp 2>/dev/null; then kill -9 $lsp; result pull FAIL "/Volumes hangs after the pull"; return; fi
     ask "Plug \"$label\" back in." || { result pull SKIP "not plugged back"; return; }
     wait_disk back 60 || { result pull FAIL "the disk did not come back"; return; }
-    sleep 3; m=$(cur_mount); [ -z "$m" ] || unmount_vol
-    local state; state=$(probe_state)
-    case "$state" in clean|dirty) ;; *) result pull FAIL "probe after the pull: ${state:-nothing}"; return ;; esac
-    m=$(mount_vol); local rc=$?
-    [ $rc = 0 ] || [ $rc = 3 ] || { result pull FAIL "remount after the pull (exit $rc)"; return; }
-    local got; got=$(shasum -a 256 < "$m/unlatch-test/before-pull.bin" 2>/dev/null | cut -d' ' -f1)
-    unmount_vol
-    [ "$got" = "$want" ] || { result pull FAIL "a file written before the pull differs"; return; }
-    result pull PASS "daemon exited in $(( $(date +%s) - t0 ))s or less, no hang; probe $state; remounted $( [ $rc = 0 ] && echo read-write || echo "read-only (Windows chkdsk advised)"); earlier file intact"
-    step_snapshot pull-check
+    sleep 3; m=$(cur_mount); [ -z "$m" ] || unmount_vol      # the app may have mounted it (read-only)
+    result pull PASS "the daemon exited ${waited}s after the disk went away; no hang"
+    after_cut pull "pull"
 }
 
 step_sleep() {
@@ -338,9 +365,10 @@ step_bench() {
     done
 }
 
-cleanup() {
+cleanup() {     # leaves the volume unmounted: it is DIRTY while mounted read-write (D-86)
     local m; m=$(cur_mount); [ -n "$m" ] || m=$(mount_vol 2>/dev/null) || return
     rm -rf "${m:?}/unlatch-test" "${m:?}/rw-suite"
+    unmount_vol
 }
 
 say "backends: $backends$( [ $quick = 1 ] && echo ', quick')$( [ -n "$only" ] && echo ", only${only%,}")"
@@ -349,17 +377,28 @@ want doctor && step_doctor
 want rw-suite && step_rwsuite
 want big-file && step_bigfile
 want small-files && step_smallfiles
-want kill && step_kill
 want snapshot && step_snapshot snapshot
 if want fill; then if [ $fill = 1 ] || [ -n "$only" ]; then step_fill; else result fill SKIP "not asked (--fill)"; fi; fi
-for s in replug pull sleep; do
+for s in replug sleep; do
     want $s || continue
     if [ $physical = 1 ] && { : < /dev/tty; } 2>/dev/null; then "step_$s"
     else why="--no-physical"; [ $physical = 1 ] && why="no terminal to ask you in"; result $s SKIP "$why"; fi
 done
 if want bench; then if [ $bench = 1 ] || [ -n "$only" ]; then step_bench; else result bench SKIP "not asked (--bench)"; fi; fi
+# Last: they cut writes off and can leave the disk needing chkdsk.
+if want kill; then if [ $cut = 1 ] || [ -n "$only" ]; then step_kill; else result kill SKIP "not asked (--cut)"; fi; fi
+if want pull; then
+    if [ $cut = 0 ] && [ -z "$only" ]; then result pull SKIP "not asked (--cut)"
+    elif [ $physical = 1 ] && { : < /dev/tty; } 2>/dev/null; then step_pull
+    else result pull SKIP "$( [ $physical = 1 ] && echo "no terminal to ask you in" || echo --no-physical)"; fi
+fi
 cleanup
-[ "$(probe_state)" = clean ] && result final PASS "volume clean, test folders removed" || result final FAIL "volume not clean at the end"
+case "$(probe_state)" in
+    clean) result final PASS "volume clean, test folders removed" ;;
+    dirty) if grep -q -E '^(kill|pull)-check +FAIL' "$report"; then result final SKIP "DIRTY after a cut, as expected: needs chkdsk"
+           else result final FAIL "volume DIRTY at the end"; fi ;;
+    *) result final FAIL "volume not clean at the end" ;;
+esac
 "$cli" mount "$bsd" > /dev/null 2>&1 || true
 
 say ""

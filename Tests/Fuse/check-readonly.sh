@@ -35,6 +35,9 @@ mount_ls() {
 walk() {
     local rel="$1" line type name
     dirs=$((dirs + 1))
+    # A directory neither side can list would compare equal (both empty): an error is a failure.
+    if ! "$engine" ls "$img" "${rel:-/}" > /dev/null 2>&1; then bad "the engine cannot list ${rel:-/}"; return; fi
+    if ! ls -A "$mnt$rel" > /dev/null 2>&1; then bad "the mount cannot list ${rel:-/}"; return; fi
     if ! diff <(harness_ls "${rel:-/}") <(mount_ls "$rel") >/dev/null; then
         bad "listing of ${rel:-/} differs:"
         diff <(harness_ls "${rel:-/}") <(mount_ls "$rel") | head -10 >&2 || true

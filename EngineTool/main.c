@@ -23,6 +23,7 @@ static void usage(FILE *out)
             "commands:\n"
             "  probe <img>          safety probe: state, reason, label, sizes\n"
             "  info [--rw] <img>    open the volume (read-only unless --rw) and print it\n"
+            "  mark-clean <img>     clear the dirty mark of a volume that was checked (D-86)\n"
             "  ls [--stats] <img> [path]   list a directory (type, size, name)\n"
             "  stat <img> <path>    print a file's attributes\n"
             "  cat <img> <path>     write a file's contents to stdout\n"
@@ -75,7 +76,10 @@ static int cmd_probe(const char *path)
     return 0;
 }
 
-static int cmd_info(const char *path, bool rw)
+// clear_dirty: open read-write with UE_OPEN_CLEAR_DIRTY, so the close clears the dirty mark.
+// Only for a volume that was checked (Scripts/test-real-disk.sh: snapshot, ntfsfix -n,
+// check-readonly); Windows' chkdsk is the real check.
+static int cmd_info(const char *path, bool rw, bool clear_dirty)
 {
     file_io_t f;
     ue_engine_t *e;
@@ -86,7 +90,7 @@ static int cmd_info(const char *path, bool rw)
         fprintf(stderr, "unlatch-engine: %s: %s\n", path, strerror(err));
         return EX_FAIL;
     }
-    err = ue_open(&f.io, rw ? 0 : UE_OPEN_RDONLY, &e, &p);
+    err = ue_open(&f.io, (rw ? 0 : UE_OPEN_RDONLY) | (clear_dirty ? UE_OPEN_CLEAR_DIRTY : 0), &e, &p);
     if (err) {
         fprintf(stderr, "unlatch-engine: open failed: %s\n", strerror(err));
         file_io_close(&f);
@@ -545,9 +549,11 @@ int main(int argc, char **argv)
     if (argc == 3 && strcmp(argv[1], "probe") == 0)
         return cmd_probe(argv[2]);
     if (argc == 3 && strcmp(argv[1], "info") == 0)
-        return cmd_info(argv[2], false);
+        return cmd_info(argv[2], false, false);
     if (argc == 4 && strcmp(argv[1], "info") == 0 && strcmp(argv[2], "--rw") == 0)
-        return cmd_info(argv[3], true);
+        return cmd_info(argv[3], true, false);
+    if (argc == 3 && strcmp(argv[1], "mark-clean") == 0)
+        return cmd_info(argv[2], true, true);
     if (argc >= 3 && strcmp(argv[1], "ls") == 0) {
         bool stats = strcmp(argv[2], "--stats") == 0;
         int i = stats ? 3 : 2;
