@@ -133,7 +133,8 @@ static int mark_ghost(ue_engine_t *e, ue_ino_t ino)
 }
 
 // Removes `u` from dir. A file whose last name goes away while the host still holds it is
-// moved to a hidden ghost name in the root instead, and deleted on ue_release (D-25).
+// moved to a hidden ghost name in the root instead, and deleted on ue_release (D-25), or,
+// with UE_OPEN_GHOST_OPEN_ONLY, only while it is open, and deleted at its last close (D-82).
 static int remove_name(ue_engine_t *e, ue_ino_t dir, const ntfschar *u, int len, int want_dir)
 {
     ntfs_inode *dni, *ni;
@@ -178,7 +179,7 @@ static int remove_name(ue_engine_t *e, ue_ino_t dir, const ntfschar *u, int len,
     ino = ue_ino_of(ni);
     links = real_links(ni);
     h = ue_held_find(&e->held, ni->mft_no);
-    if (!isdir && links == 1 && h && h->seq == MSEQNO(ino) && !h->ghost) {
+    if (!isdir && links == 1 && h && h->seq == MSEQNO(ino) && !h->ghost && (!e->ghost_open_only || h->opens)) {
         ntfschar *g;
         int glen;
         uint64_t id = ++e->next_tmp_id;
@@ -210,6 +211,9 @@ static int remove_name(ue_engine_t *e, ue_ino_t dir, const ntfschar *u, int len,
     // ntfs_delete always closes ni and dni.
     if (ntfs_delete(e->vol, NULL, ni, dni, u, (u8)len))
         return errno ? errno : EIO;
+    // The record is gone: forget a hold on it, so later calls (and ue_file_opened) see ESTALE.
+    if ((isdir || links <= 1) && h && h->seq == MSEQNO(ino) && !h->ghost)
+        ue_held_remove(&e->held, MREF(ino));
     return 0;
 
 close_both:

@@ -82,6 +82,28 @@ void ue_release(ue_engine_t *e, ue_ino_t ino)
     ue_held_remove(&e->held, MREF(ino));
 }
 
+int ue_file_opened(ue_engine_t *e, ue_ino_t ino)
+{
+    ue_held_t *h;
+
+    if (!e)
+        return EINVAL;
+    if (!(h = ue_held_find(&e->held, MREF(ino))) || h->seq != MSEQNO(ino))
+        return ESTALE;
+    h->opens++;
+    return 0;
+}
+
+void ue_file_closed(ue_engine_t *e, ue_ino_t ino)
+{
+    ue_held_t *h;
+
+    if (!e || !(h = ue_held_find(&e->held, MREF(ino))) || h->seq != MSEQNO(ino) || !h->opens)
+        return;
+    if (--h->opens == 0 && h->ghost && e->ghost_open_only)
+        ue_delete_ghost(e, h);          // last handle of a removed file: delete it now
+}
+
 // readdir: ntfs_readdir fills a batch of names; attributes are read after it returns,
 // so no other inode is opened while libntfs-3g is walking the index.
 typedef struct {

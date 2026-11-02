@@ -90,6 +90,17 @@ for run in $(seq 1 "$runs"); do
     expect_same "$src" "$mnt/moved" "moved tree"; ok
 
     say "rm -r a tree";           rm -r "$mnt/rsync"; [ ! -e "$mnt/rsync" ] || die "rm -r"; ok
+    # D-82: deleting frees the space while mounted, not at unmount; an open file keeps it.
+    say "rm frees space at once, open file at close"
+    # Used is minus Available: macFUSE's FSKit backend reports 0 used (it does show Available).
+    used() { df -k "$mnt" | awk 'NR==2 { print -$4 }'; }
+    cp "$work/big.bin" "$mnt/free.bin"; u0=$(used); rm "$mnt/free.bin"; u1=$(used)
+    [ $((u0 - u1)) -ge $((290 << 10)) ] || die "rm freed $((u0 - u1)) KiB of 300 MiB"
+    exec 4> "$mnt/open.bin"; cat "$work/big.bin" >&4; rm "$mnt/open.bin"; u2=$(used)
+    [ $((u2 - u1)) -ge $((290 << 10)) ] || { exec 4>&-; die "an open, removed file lost its space"; }
+    exec 4>&-; sleep 0.5; u3=$(used)
+    [ $((u2 - u3)) -ge $((290 << 10)) ] || die "close freed $((u2 - u3)) KiB of 300 MiB"
+    ok
     say "truncate grow and shrink"
     printf 'abcdef' > "$mnt/t.txt"
     truncate -s 1000000 "$mnt/t.txt"; [ "$(stat -f %z "$mnt/t.txt")" = 1000000 ] || die "grow"

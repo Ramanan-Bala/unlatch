@@ -6,6 +6,7 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 - **A disk can no longer be mounted read-write twice at once** (for example by automatic mounting and `unlatch mount` at the same moment), which could have damaged it. The second mount is refused with "already mounted".
+- **Deleting files frees their space right away.** Before, space freed by deleting files on a mounted disk came back only after ejecting it, so a full disk stayed full. A file that is still open keeps its space until it is closed.
 
 ## [1.0.0-beta.5] - 2026-11-02
 

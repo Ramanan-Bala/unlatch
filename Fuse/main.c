@@ -391,7 +391,7 @@ int main(int argc, char **argv)
     }
     ue_probe_t info;
     ue_attr_t root;
-    uint32_t cflag = cache ? UE_OPEN_CACHE : 0;
+    uint32_t cflag = (cache ? UE_OPEN_CACHE : 0) | UE_OPEN_GHOST_OPEN_ONLY;   // D-82
     err = ue_open(&f.io, (fs.read_only ? UE_OPEN_RDONLY : 0) | cflag, &fs.engine, &info);
     if (err == EROFS && !fs.read_only) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s is write-protected, read-only", source);

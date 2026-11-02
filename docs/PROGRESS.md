@@ -749,11 +749,25 @@ UNLATCH_INTEGRATION=1 swift test --package-path Shared        # 14 passed
 
 Checked by hand: two read-only mounts share; a SIGKILLed daemon's lock is gone and the volume mounts again. `mkdir` drops the sticky bit, hence the `chmod`.
 
+### Follow-up: deleting frees space while mounted (D-82) — done 2026-11-02
+
+- Cause of the Seagate carry-over ("6.9 GB less used after remounts"): every file removed while the kernel still held its node became a ghost (D-25), and macOS sends no FORGET for such nodes, so the space came back only at unmount. Reproduced on an image: `rm -r` of 1.2 GB freed nothing for 40 s; a remount freed it.
+- Engine: `UE_OPEN_GHOST_OPEN_ONLY`, `ue_file_opened`, `ue_file_closed`; a deleted record's hold is dropped. Daemon: sets the flag, counts opens in open/create, closes in release. Test `test_ghost_open_only` (with and without the page cache); rw-suite step "rm frees space at once, open file at close" (measures Available, see the FSKit carry-over).
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh                        # PASSED, fsx regressions included
+Tests/Fuse/rw-suite.sh --runs 2 && Tests/Fuse/rw-suite.sh --runs 1 --disk && Tests/Fuse/rw-suite.sh --runs 1 --backend fskit
+UNLATCH_INTEGRATION=1 swift test --package-path Shared           # 14 passed
+Tests/Fuse/interrupt.sh kill && Tests/Fuse/interrupt.sh --backend fskit kill
+```
+
+Surprise: FSKit's `df` shows Used 0 (carry-over). Not run: a Windows chkdsk of a volume written this way (no `WINDOWS_SSH` here); the deletes go through the same `ntfs_delete` as before.
+
 ## Carry-overs
 
 - **Failed FSKit mount leaves its mount point (2026-11-02, Seagate HDD):** `unlatch mount` through FSKit straight after `unlatch unmount` failed ("did not take the mount") and left an empty `/Volumes/seagate`; the next mount landed on `/Volumes/seagate disk6s1`, and the user cannot remove the leftover (`/Volumes` is root's). Remove the mount point on failure, and retry with a pause (see the FSKit transient failure below).
 - **Kext warm read not cached (2026-11-02, Seagate HDD):** `Bench/run.sh` through the kernel extension read the 1 GiB file again at 109 MB/s, the drive's speed, where the stick and SSD runs read it from the page cache. Find out why (memory pressure after a 123 GB copy, or the mount's options).
-- **Free space after a long mount (2026-11-02, Seagate HDD):** `df` showed 6.9 GB less used after the benchmark's remounts than at the end of a 123 GB Finder copy, with every file's name, size and time unchanged. Check whether the daemon over-reports used clusters while mounted.
+- **FSKit shows 0 used (2026-11-02):** on FSKit mounts `df` (and so Finder) shows Used 0 while Available is right; the kext shows both. Our statfs reply fills `f_blocks`/`f_bfree`/`f_bavail`; check what macFUSE's FSKit backend maps to FSKit's used bytes, and report upstream if it is theirs.
 - **Helper Full Disk Access on the app (owner's request, D-74):** try registering the helper as an `SMAppService` daemon, a bare executable in `Unlatch.app/Contents/MacOS` with its plist in `Contents/Library/LaunchDaemons`, so that the grant given to "Unlatch" covers it. Undocumented; check that SMAppService registers an ad-hoc-signed app at all; test with a disposable USB stick (the only removable disk here holds real data). Keep the current helper as the fallback.
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).

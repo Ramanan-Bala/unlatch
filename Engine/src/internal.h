@@ -49,6 +49,7 @@ typedef struct {
     uint16_t seq;
     bool used;
     bool ghost;                       // its last name was removed while held (D-25)
+    uint32_t opens;                   // open handles, with UE_OPEN_GHOST_OPEN_ONLY (D-82)
     uint64_t ghost_dir;               // directory holding the ghost name (the root)
     uint64_t ghost_id;                // name is UE_GHOST_PREFIX + ghost_id
 } ue_held_t;
@@ -68,6 +69,7 @@ struct ue_engine {
     ntfs_volume *vol;                 // owns the ntfs_device
     ue_dev_t *dev_ctx;
     bool readonly;
+    bool ghost_open_only;             // UE_OPEN_GHOST_OPEN_ONLY (D-82)
     ue_held_map_t held;
     uint64_t next_tmp_id;             // ghost and rename temp names
     ue_stats_t stats;

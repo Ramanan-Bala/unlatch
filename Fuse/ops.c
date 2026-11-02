@@ -482,13 +482,18 @@ static void uf_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
     uf_fs_t *fs = fs_of(req);
 
-    (void)ino;
     if (fs->read_only && (fi->flags & O_ACCMODE) != O_RDONLY) {
         fuse_reply_err(req, EROFS);
         return;
     }
     fi->keep_cache = fs->read_only;   // read-write: the kernel's cache is dropped on open
-    fuse_reply_open(req, fi);
+    // Opens are counted so a removed file is kept only while it is open: macOS holds looked-up
+    // nodes long after their last use, and space freed by rm came back only at unmount (D-82).
+    int err = ue_file_opened(fs->engine, to_engine(fs, ino));
+    if (err)
+        fuse_reply_err(req, err);
+    else if (fuse_reply_open(req, fi) != 0)
+        ue_file_closed(fs->engine, to_engine(fs, ino));
 }
 
 static void uf_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
@@ -520,8 +525,10 @@ static void uf_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, stru
 
 static void uf_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-    (void)ino;
+    uf_fs_t *fs = fs_of(req);
+
     (void)fi;
+    ue_file_closed(fs->engine, to_engine(fs, ino));   // the last close deletes a removed file
     fuse_reply_err(req, 0);
 }
 
@@ -666,8 +673,11 @@ static void uf_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
         return;
     }
     fi->keep_cache = 0;
-    if (fuse_reply_create(req, &e, fi) != 0)
+    ue_file_opened(fs->engine, a.ino);    // held since ue_create
+    if (fuse_reply_create(req, &e, fi) != 0) {
+        ue_file_closed(fs->engine, a.ino);
         unmake_entry(fs, &a);
+    }
 }
 
 // Removing a name the kernel still holds is fine: the engine keeps the file as a hidden

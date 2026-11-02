@@ -52,7 +52,8 @@ typedef struct {
 } ue_attr_t;
 
 enum { UE_OPEN_RDONLY = 1,
-       UE_OPEN_CACHE = 2 /* write-back page cache in front of the device (Step 15, D-62) */ };
+       UE_OPEN_CACHE = 2 /* write-back page cache in front of the device (Step 15, D-62) */,
+       UE_OPEN_GHOST_OPEN_ONLY = 4 /* removed files are ghosts only while open (D-82) */ };
 enum { UE_SET_SIZE = 1, UE_SET_MTIME = 2, UE_SET_ATIME = 4, UE_SET_BIRTH = 8, UE_SET_CTIME = 16, UE_SET_FLAGS = 32, UE_SET_MODE = 64 };
 enum { UE_RENAME_EXCL = 1 };
 
@@ -83,6 +84,13 @@ typedef bool (*ue_dirent_fn)(void *ctx, const char *name, const ue_attr_t *attr,
 int  ue_readdir(ue_engine_t *e, ue_ino_t dir, uint64_t cookie, ue_dirent_fn emit, void *ctx, uint64_t *verifier);
 int  ue_read(ue_engine_t *e, ue_ino_t ino, uint64_t off, void *buf, size_t len, size_t *done);
 void ue_release(ue_engine_t *e, ue_ino_t ino); // FSKit reclaimed the item (deferred delete happens here)
+// Open handles, with UE_OPEN_GHOST_OPEN_ONLY (D-82). A host whose kernel holds looked-up items
+// long after their last use (macOS FUSE sends FORGET late or never) counts opens instead: a
+// file removed while it has no open handle is deleted at once, even if held (later calls on
+// it return ESTALE), and one removed while open is deleted when the last handle closes.
+// Without the flag a held file is a ghost until ue_release (D-25), and these do nothing.
+int  ue_file_opened(ue_engine_t *e, ue_ino_t ino);    // ESTALE if ino is not held
+void ue_file_closed(ue_engine_t *e, ue_ino_t ino);
 // Lookup and readdir skip ".", "..", DOS-only 8.3 names and the root's metafiles ($MFT, ...).
 // Lookup is case-insensitive (NTFS $UpCase); readdir returns names case-preserved.
 // readdir: cookie 0 starts; each entry carries the cookie that resumes after it. emit

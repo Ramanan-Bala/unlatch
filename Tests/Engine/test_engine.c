@@ -803,6 +803,56 @@ static void test_remove(void)
     CHECK(wclose(&w) == 0, "not clean");
 }
 
+// UE_OPEN_GHOST_OPEN_ONLY (D-82): a held file without open handles is deleted at once; one
+// removed while open lives until its last close.
+static void test_ghost_open_only(void)
+{
+    wvol_t w;
+    ue_attr_t a, b, g;
+    ue_ino_t root;
+    uint64_t free0, free1, free2;
+    uint32_t saved = wflags;
+    int err;
+
+    wflags |= UE_OPEN_GHOST_OPEN_ONLY;
+    err = wopen(&w, "clean", "ghost-open");
+    wflags = saved;
+    CHECK(err == 0, "open: %s", strerror(err));
+    root = root_of(w.e);
+
+    // Held (looked up by the host) but not open: removal frees the space now.
+    WCHECK(ue_create(w.e, root, "held.bin", UE_T_REG, 0644, &a) == 0, "create");
+    WCHECK(write_gen(w.e, a.ino, 0, 2 << 20, 31) == 0, "write");
+    WCHECK(ue_statfs(w.e, NULL, &free0, NULL) == 0, "statfs after write");
+    WCHECK(ue_remove(w.e, root, "held.bin", false) == 0, "unlink held");
+    WCHECK(ue_getattr(w.e, a.ino, &g) == ESTALE, "held, not open: deleted at once");
+    WCHECK(ue_statfs(w.e, NULL, &free1, NULL) == 0 && free1 >= free0 + (2 << 20), "space returned at once");
+    WCHECK(ue_file_opened(w.e, a.ino) == ESTALE, "open of a removed file");
+    ue_release(w.e, a.ino);
+
+    // Open: kept, readable, until the last of two handles closes.
+    WCHECK(ue_create(w.e, root, "open.bin", UE_T_REG, 0644, &b) == 0, "create open");
+    WCHECK(ue_file_opened(w.e, b.ino) == 0 && ue_file_opened(w.e, b.ino) == 0, "two opens");
+    WCHECK(write_gen(w.e, b.ino, 0, 2 << 20, 32) == 0, "write open");
+    WCHECK(ue_remove(w.e, root, "open.bin", false) == 0, "unlink open");
+    WCHECK(ue_walk(w.e, "/open.bin", &g) == ENOENT, "name gone");
+    WCHECK(check_gen(w.e, b.ino, 0, 2 << 20, 32) == 0, "data readable while open");
+    ue_file_closed(w.e, b.ino);
+    WCHECK(check_gen(w.e, b.ino, 0, 2 << 20, 32) == 0, "still readable with one handle");
+    WCHECK(ue_statfs(w.e, NULL, &free1, NULL) == 0, "statfs while open");
+    ue_file_closed(w.e, b.ino);
+    WCHECK(ue_getattr(w.e, b.ino, &g) == ESTALE, "deleted at last close");
+    WCHECK(ue_statfs(w.e, NULL, &free2, NULL) == 0 && free2 >= free1 + (2 << 20), "space returned at last close");
+    ue_file_closed(w.e, b.ino);             // extra close of a stale item: ignored
+    ue_release(w.e, b.ino);
+
+    // Removed while open and never closed: ue_close deletes it.
+    WCHECK(ue_create(w.e, root, "late.bin", UE_T_REG, 0644, &a) == 0, "create late");
+    WCHECK(ue_file_opened(w.e, a.ino) == 0, "open late");
+    WCHECK(ue_remove(w.e, root, "late.bin", false) == 0, "unlink late");
+    CHECK(wclose(&w) == 0, "not clean");
+}
+
 static void test_rename_matrix(void)
 {
     wvol_t w;
@@ -1520,6 +1570,7 @@ int main(int argc, char **argv)
         RUN(test_create_rules);
         RUN(test_readonly_engine);
         RUN(test_remove);
+        RUN(test_ghost_open_only);
         RUN(test_rename_matrix);
         RUN(test_setattr);
         RUN(test_verifier);

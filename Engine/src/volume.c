@@ -253,6 +253,7 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
     e->vol = vol;
     e->dev_ctx = ctx;
     e->readonly = readonly;
+    e->ghost_open_only = (flags & UE_OPEN_GHOST_OPEN_ONLY) != 0;
     if ((err = ue_held_init(&e->held))) {
         unmount_volume(vol, ctx);
         free(e);
