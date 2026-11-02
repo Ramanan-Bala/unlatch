@@ -10,6 +10,8 @@ on:
     paths:
       - 'site/**'
       - 'docs/brand/**'
+      - 'Bench/usb.svg'
+      - 'Bench/usb-dark.svg'
       - 'VERSION'
       - 'Scripts/build-site.sh'
       - '.github/workflows/pages.yml'

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Usage: Scripts/build-site.sh [outdir]
 # Builds the GitHub Pages site from site/ into outdir (default build/site): copies the pages,
-# the brand assets from docs/brand/, and fills in @VERSION@ from VERSION. Only these files are
-# published; nothing else under docs/ is. Preview: python3 -m http.server -d build/site 8000
+# the brand assets from docs/brand/ and the speed charts from Bench/, and fills in @VERSION@
+# from VERSION. Only these files are published; nothing else under docs/ or Bench/ is. Preview: python3 -m http.server -d build/site 8000
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,6 +18,10 @@ for f in site/*.html; do
 done
 for f in wordmark.svg wordmark-dark.svg app-icon.svg social-preview.png; do
     cp "docs/brand/$f" "$out/brand/"
+done
+mkdir -p "$out/bench"
+for f in usb.svg usb-dark.svg; do
+    cp "Bench/$f" "$out/bench/"
 done
 touch "$out/.nojekyll"
 
