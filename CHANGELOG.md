@@ -4,6 +4,8 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-11-02
+
 ### Fixed
 - After an upgrade, macOS asked every 10 seconds whether to move the helper to the Trash ("Apple could not verify…"): the installed helper kept the download's quarantine flag. `install-helper` now clears it.
 
