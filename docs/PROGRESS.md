@@ -774,18 +774,30 @@ build/DerivedData/Build/Products/Debug/unlatch-fuse -r build/wc.img build/m1 && 
 Tests/Fuse/rw-suite.sh --runs 1 && Tests/Fuse/rw-suite.sh --runs 1 --backend fskit && Tests/Fuse/rw-suite.sh --runs 1 --disk
 ```
 
+### Follow-up: FSKit refusals retried, leftover mount points reused (D-84) — done 2026-11-02
+
+- `MountService.mount` retries when the daemon's last line is the FSKit refusal (after 2, 5, 10 s). `mountPoint(for:volumes:)` reuses an empty, unmounted `/Volumes/<label>`; `isLeftover`. Tests: `mountPointReusesLeftoverFolder` (unit), `fskitRefusalIsRetried` (integration: a fake daemon refuses twice, then runs the real one).
+- Checked by hand: an image labelled `seagate` mounted with `unlatch mount` on the leftover `/Volumes/seagate` from this morning's Seagate run (not `seagate disk6`), and the unmount removed the folder. `/Volumes/COREREAP` (a test leftover) went the same way.
+
+```sh
+swift test --package-path Shared && swift test --package-path CLI
+UNLATCH_INTEGRATION=1 swift test --package-path Shared --no-parallel     # 16 passed (twice)
+```
+
+Surprise: run in parallel, two integration tests at a time failed to eject ("DiskArbitration status 0xc010", busy), a different pair each run; serially all pass. AGENTS.md now says `--no-parallel`.
+
 ## Carry-overs
+
+- **Parallel integration tests (2026-11-02):** ejecting several attached images at once fails "busy" now and then. Either serialize the integration tests in code (`@Suite(.serialized)`) or retry the eject in the tests.
 
 - **Mixed-form names (D-83):** a name with one composed and one decomposed accent is reachable through readdir only, not when typed in NFC. Fix with normalization-insensitive matching in the engine's lookup if it matters.
 
-- **Failed FSKit mount leaves its mount point (2026-11-02, Seagate HDD):** `unlatch mount` through FSKit straight after `unlatch unmount` failed ("did not take the mount") and left an empty `/Volumes/seagate`; the next mount landed on `/Volumes/seagate disk6s1`, and the user cannot remove the leftover (`/Volumes` is root's). Remove the mount point on failure, and retry with a pause (see the FSKit transient failure below).
 - **Kext warm read not cached (2026-11-02, Seagate HDD):** `Bench/run.sh` through the kernel extension read the 1 GiB file again at 109 MB/s, the drive's speed, where the stick and SSD runs read it from the page cache. Find out why (memory pressure after a 123 GB copy, or the mount's options).
 - **FSKit shows 0 used (2026-11-02):** on FSKit mounts `df` (and so Finder) shows Used 0 while Available is right; the kext shows both. Our statfs reply fills `f_blocks`/`f_bfree`/`f_bavail`; check what macFUSE's FSKit backend maps to FSKit's used bytes, and report upstream if it is theirs.
 - **Helper Full Disk Access on the app (owner's request, D-74):** try registering the helper as an `SMAppService` daemon, a bare executable in `Unlatch.app/Contents/MacOS` with its plist in `Contents/Library/LaunchDaemons`, so that the grant given to "Unlatch" covers it. Undocumented; check that SMAppService registers an ad-hoc-signed app at all; test with a disposable USB stick (the only removable disk here holds real data). Keep the current helper as the fallback.
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07:** Windows-made Fast Startup, dirty and fragmented-MFT images are still wanted (`Tests/Images/README.md`).
-- **FSKit transient failure (D-78):** after macFUSE's background service restarts, mounts fail for about a minute ("not found"/"not enabled"). Consider a retry with backoff in `MountService.mount` for auto-mounts.
 - **macFUSE 5.6.0:** when released, rerun the FSKit suites; `reply_bytes()` can stay.
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).

@@ -126,8 +126,20 @@ public actor MountService {
             // The raw node (/dev/rdiskN): unlatch-fuse caches in front of it itself (D-62).
             let fd = try opener.open(Self.rawPath(info.devicePath), writable: !readOnly)
             defer { close(fd) }
-            let point = Self.mountPoint(for: info)
-            try runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly)
+            var point = Self.mountPoint(for: info)
+            // macFUSE's FSKit backend can refuse a mount for a moment: right after an unmount,
+            // and for about a minute after its background service restarts (D-78). Try again
+            // after a pause; a failed try's mount point is empty and is used again (D-84).
+            for (attempt, pause) in Self.fskitRetryPauses.enumerated() {
+                do {
+                    try runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly)
+                    break
+                } catch MountError.daemonFailed(let why) where Self.isFSKitRefusal(why) && attempt < Self.fskitRetryPauses.count - 1 {
+                    log.notice("macFUSE did not take \(info.bsdName, privacy: .public); trying again in \(pause, privacy: .public) s")
+                    try await Task.sleep(for: .seconds(pause))
+                    point = Self.mountPoint(for: info)
+                }
+            }
             let st = status(info.bsdName)
             log.notice("mounted \(info.bsdName, privacy: .public) on \(point, privacy: .public)")
             return Result(mountPoint: point, readOnly: st?.readOnly ?? readOnly, status: st)
@@ -140,16 +152,36 @@ public actor MountService {
         }
     }
 
-    /// /Volumes/<label>, or /Volumes/<label> <bsd> when the name is taken.
+    /// Pauses before each FSKit retry; the last entry only ends the loop.
+    static let fskitRetryPauses: [Int] = [2, 5, 10, 0]
+
+    /// The daemon's last line when macFUSE's FSKit backend refused the mount (FSKIT_HINT).
+    static func isFSKitRefusal(_ why: String) -> Bool {
+        why.contains("file system extension did not take the mount")
+    }
+
     /// `/dev/diskN` → `/dev/rdiskN`; other paths unchanged.
     static func rawPath(_ path: String) -> String {
         path.hasPrefix("/dev/disk") ? "/dev/r" + path.dropFirst(5) : path
     }
 
-    static func mountPoint(for info: DiskInfo) -> String {
+    /// /Volumes/<label>, or /Volumes/<label> <bsd> when the name is taken. A leftover of a
+    /// failed FSKit mount (an empty folder nothing is mounted on) is used again: only root can
+    /// remove it, and mount_macfuse removes it after the next mount is unmounted (D-84).
+    static func mountPoint(for info: DiskInfo, volumes: String = "/Volumes") -> String {
         let base = (info.label.isEmpty ? "NTFS" : info.label).replacingOccurrences(of: "/", with: ":")
-        let first = "/Volumes/\(base)"
-        return FileManager.default.fileExists(atPath: first) ? "/Volumes/\(base) \(info.bsdName)" : first
+        let first = "\(volumes)/\(base)"
+        let fm = FileManager.default
+        return !fm.fileExists(atPath: first) || isLeftover(first) ? first : "\(volumes)/\(base) \(info.bsdName)"
+    }
+
+    /// An empty real directory that is not a mount point.
+    static func isLeftover(_ path: String) -> Bool {
+        var st = stat(), fs = statfs()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, statfs(path, &fs) == 0,
+              let entries = try? FileManager.default.contentsOfDirectory(atPath: path), entries.isEmpty else { return false }
+        let mountedOn = withUnsafeBytes(of: fs.f_mntonname) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        return mountedOn != path
     }
 
     /// Runs `unlatch-fuse --fd 3 --backend B [-r] <device> <mountpoint>`; it returns once mounted.

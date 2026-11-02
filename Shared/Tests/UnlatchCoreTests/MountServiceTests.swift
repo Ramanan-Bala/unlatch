@@ -49,6 +49,23 @@ import Testing
     #expect(MountService.mountPoint(for: d) == "/Volumes/a:b")
 }
 
+@Test func mountPointReusesLeftoverFolder() throws {
+    let vols = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+    defer { try? FileManager.default.removeItem(atPath: vols) }
+    let d = DiskInfo(bsdName: "disk9s1", wholeDisk: nil, label: "L", size: 0, volumeUUID: nil, isInternal: false,
+                     isRemovable: true, isEjectable: true, owner: .none, mountPoint: nil)
+    try FileManager.default.createDirectory(atPath: "\(vols)/L", withIntermediateDirectories: true)
+    #expect(MountService.mountPoint(for: d, volumes: vols) == "\(vols)/L")            // empty leftover: reused
+    try "x".write(toFile: "\(vols)/L/f", atomically: true, encoding: .utf8)
+    #expect(MountService.mountPoint(for: d, volumes: vols) == "\(vols)/L disk9s1")    // not empty
+    try FileManager.default.removeItem(atPath: "\(vols)/L")
+    try FileManager.default.createSymbolicLink(atPath: "\(vols)/L", withDestinationPath: "/tmp")
+    #expect(MountService.mountPoint(for: d, volumes: vols) == "\(vols)/L disk9s1")    // a link
+    #expect(!MountService.isLeftover("/"))                                              // a mount point
+    #expect(MountService.isFSKitRefusal("macFUSE's file system extension did not take the mount; try again in a minute"))
+    #expect(!MountService.isFSKitRefusal("this volume (serial 1) is already mounted; unmount it first"))
+}
+
 // MARK: integration (attached images; needs macFUSE's file system extension on and a built unlatch-fuse)
 
 private let integration = ProcessInfo.processInfo.environment["UNLATCH_INTEGRATION"] == "1"
@@ -116,6 +133,34 @@ func appleMountComesBackAfterAFailure() async throws {
     await #expect(throws: MountError.self) { try await broken.mount(bsd) }
     #expect(try await broken.disk(bsd).owner == .apple)
     try await broken.eject(bsd)
+}
+
+/// A daemon that fails twice as macFUSE's FSKit backend does when it refuses a mount, then
+/// runs the real one: MountService tries again and mounts (D-84).
+@Test(.enabled(if: integration), .timeLimit(.minutes(2)))
+func fskitRefusalIsRetried() async throws {
+    let dir = root.appendingPathComponent("build/core-test")
+    let count = dir.appendingPathComponent("flaky.count")
+    let script = dir.appendingPathComponent("flaky-daemon.sh")
+    let real = root.appendingPathComponent("build/DerivedData/Build/Products/Debug/unlatch-fuse")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try? FileManager.default.removeItem(at: count)
+    try """
+        #!/bin/sh
+        n=$(cat '\(count.path)' 2>/dev/null || echo 0); echo $((n + 1)) > '\(count.path)'
+        if [ "$n" -lt 2 ]; then
+            echo "unlatch-fuse: macFUSE's file system extension did not take the mount; try again in a minute" >&2
+            exit 1
+        fi
+        exec '\(real.path)' "$@"
+        """.write(to: script, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    let service = try MountService(daemon: script)
+    let bsd = try attachFreshImage("coreflaky", mount: false)
+    let r = try await service.mount(bsd)
+    #expect(try String(contentsOf: count, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) == "3")
+    #expect(try await service.disk(bsd).owner == .unlatch && r.mountPoint.hasPrefix("/Volumes/"))
+    try await service.eject(bsd)
 }
 
 @Test(.enabled(if: integration), .timeLimit(.minutes(1)))

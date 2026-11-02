@@ -33,7 +33,7 @@ Each step updates this list.
 | Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk) | `Tests/Fuse/rw-suite.sh --runs 3 [--backend kext\|fskit] [--no-git] [--disk]` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
-| Test UnlatchCore | `swift test --package-path Shared`; with attached images and macFUSE: `UNLATCH_INTEGRATION=1 swift test --package-path Shared` |
+| Test UnlatchCore | `swift test --package-path Shared`; with attached images and macFUSE: `UNLATCH_INTEGRATION=1 swift test --package-path Shared --no-parallel` (in parallel, ejects of several images at once can fail "busy") |
 | Build CLI | `swift build --package-path CLI` |
 | Run CLI | `swift run --package-path CLI unlatch --help`; commands in `docs/cli.md` |
 | Test CLI | `swift test --package-path CLI` |
