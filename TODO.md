@@ -17,6 +17,7 @@ Background: Apple DTS says a daemon generally does not inherit its app's TCC gra
 
 ## Other open items
 
+- [ ] The app's `CFBundleShortVersionString` reads `1.0` for `1.0.0-beta.2` (the build cuts off the pre-release part). Set it to the numeric `X.Y.Z` explicitly and keep the full version elsewhere (for example a custom Info.plist key, or `CFBundleVersion`), so Finder and About show the real version.
 - [ ] Full benchmark rerun (`Bench/baselines.sh`, all setups) and record it in `docs/M0-gate.md`.
 - [ ] Hardware tests in `docs/test-matrix.md`: USB stick pulled mid-copy, sleep and wake, a large real disk, the 24-hour soak, a clean-Mac install.
 - [ ] Windows-made images still wanted: Fast Startup, dirty, fragmented `$MFT` (`Tests/Images/README.md`).
