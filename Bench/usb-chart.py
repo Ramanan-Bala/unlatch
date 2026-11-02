@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Draws the USB stick benchmark chart in the README from Bench/results/*-usb-sandisk.json:
-# Bench/usb.svg and Bench/usb-dark.svg.
+# Draws the real-drive benchmark charts in the README: the USB stick from
+# Bench/results/*-usb-sandisk.json (Bench/usb.svg, usb-dark.svg) and the Seagate hard drive from
+# Bench/results/*-usb-seagate.json (Bench/seagate-bench.svg, seagate-bench-dark.svg).
 #
 #   Bench/usb-chart.py
 import json
@@ -62,7 +63,7 @@ def bar(x, y, w, h, color):
             f'a{r},{r} 0 0 1 -{r},{r} h-{w - r:.1f} z" fill="{color}"/>')
 
 
-def svg(t):
+def svg(t, SERIES, PANELS, aria):
     out, y0 = [], 44
     # Legend, one row at the top.
     lx = 0
@@ -74,7 +75,7 @@ def svg(t):
     for i, (title, unit, vals) in enumerate(PANELS):
         col, rowi = i % 2, i // 2
         px = col * (PANEL_W + GAP_X)
-        py = y0 + rowi * (36 + 4 * ROW + 24)
+        py = y0 + rowi * (36 + len(SERIES) * ROW + 24)
         top = max(vals.values())
         plot_w = PANEL_W - LABEL_W - VALUE_W
         out.append(f'<text x="{px}" y="{py + 12}" fill="{t["ink"]}" font-size="14" font-weight="600">'
@@ -95,13 +96,30 @@ def svg(t):
         panel_h.append(py + 26 + len(rows) * ROW)
     h = max(panel_h) + 6
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{h}" viewBox="-12 -4 {W + 24} {h + 8}" '
-            f'font-family="{FONT}" role="img" aria-label="Unlatch through FSKit and through the kernel extension, versus exFAT and the raw device on a USB 2.0 stick">\n'
+            f'font-family="{FONT}" role="img" aria-label="{aria}">\n'
             f'<rect x="-12" y="-4" width="{W + 24}" height="{h + 8}" rx="8" fill="{t["surface"]}"/>\n'
             + "\n".join(out) + "\n</svg>\n")
 
 
 out_dir = root / "Bench"
+USB_ARIA = "Unlatch through FSKit and through the kernel extension, versus exFAT and the raw device on a USB 2.0 stick"
 for name, theme in THEMES.items():
     path = out_dir / ("usb.svg" if name == "light" else "usb-dark.svg")
-    path.write_text(svg(theme))
+    path.write_text(svg(theme, SERIES, PANELS, USB_ARIA))
+    print(path.relative_to(root))
+
+hk, hf = newest("unlatch-usb-seagate"), newest("unlatch-fskit-usb-seagate")
+HDD_SERIES = [("fskit", "Unlatch, FSKit"), ("unlatch", "Unlatch, kernel ext.")]
+HDD_PANELS = [
+    ("Sequential read, cold", "MB/s", {"fskit": hf["mb_per_s"]["seq_read_cold"],
+                                      "unlatch": hk["mb_per_s"]["seq_read_cold"]}),
+    ("Sequential write", "MB/s", {"fskit": hf["mb_per_s"]["seq_write"], "unlatch": hk["mb_per_s"]["seq_write"]}),
+    ("Small files, 1–16 KiB", "files/s", {"fskit": hf["small_files_per_s"], "unlatch": hk["small_files_per_s"]}),
+    ("Metadata: create, rename, delete", "ops/s", {"fskit": hf["metadata_ops_per_s"],
+                                                   "unlatch": hk["metadata_ops_per_s"]}),
+]
+HDD_ARIA = "Unlatch through FSKit and through the kernel extension on a Seagate USB 3.0 portable hard drive"
+for name, theme in THEMES.items():
+    path = out_dir / ("seagate-bench.svg" if name == "light" else "seagate-bench-dark.svg")
+    path.write_text(svg(theme, HDD_SERIES, HDD_PANELS, HDD_ARIA))
     print(path.relative_to(root))

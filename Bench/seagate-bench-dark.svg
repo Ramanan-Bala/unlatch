@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="240" viewBox="-12 -4 824 248" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" role="img" aria-label="Unlatch through FSKit and through the kernel extension on a Seagate USB 3.0 portable hard drive">
+<rect x="-12" y="-4" width="824" height="248" rx="8" fill="#1a1a19"/>
+<rect x="0" y="8" width="12" height="12" rx="3" fill="#c98500"/>
+<text x="18" y="18" fill="#c3c2b7" font-size="13">Unlatch, FSKit</text>
+<rect x="130.8" y="8" width="12" height="12" rx="3" fill="#3987e5"/>
+<text x="148.8" y="18" fill="#c3c2b7" font-size="13">Unlatch, kernel ext.</text>
+<text x="0" y="56" fill="#f0efec" font-size="14" font-weight="600">Sequential read, cold <tspan fill="#c3c2b7" font-weight="400">(MB/s)</tspan></text>
+<text x="140" y="82.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 114.8 MB/s</title><path d="M150,70 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#c98500"/></g>
+<text x="316.0" y="82.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">114.8</text>
+<text x="140" y="108.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 103.4 MB/s</title><path d="M150,96 h140.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-140.1 z" fill="#3987e5"/></g>
+<text x="300.1" y="108.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">103.4</text>
+<line x1="150" y1="67" x2="150" y2="115" stroke="#383835" stroke-width="1"/>
+<text x="420" y="56" fill="#f0efec" font-size="14" font-weight="600">Sequential write <tspan fill="#c3c2b7" font-weight="400">(MB/s)</tspan></text>
+<text x="560" y="82.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 114.7 MB/s</title><path d="M570,70 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#c98500"/></g>
+<text x="736.0" y="82.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">114.7</text>
+<text x="560" y="108.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 105.2 MB/s</title><path d="M570,96 h142.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-142.7 z" fill="#3987e5"/></g>
+<text x="722.7" y="108.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">105.2</text>
+<line x1="570" y1="67" x2="570" y2="115" stroke="#383835" stroke-width="1"/>
+<text x="0" y="168" fill="#f0efec" font-size="14" font-weight="600">Small files, 1–16 KiB <tspan fill="#c3c2b7" font-weight="400">(files/s)</tspan></text>
+<text x="140" y="194.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 271 files/s</title><path d="M150,182 h56.4 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-56.4 z" fill="#c98500"/></g>
+<text x="216.4" y="194.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">271</text>
+<text x="140" y="220.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 718 files/s</title><path d="M150,208 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#3987e5"/></g>
+<text x="316.0" y="220.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">718</text>
+<line x1="150" y1="179" x2="150" y2="227" stroke="#383835" stroke-width="1"/>
+<text x="420" y="168" fill="#f0efec" font-size="14" font-weight="600">Metadata: create, rename, delete <tspan fill="#c3c2b7" font-weight="400">(ops/s)</tspan></text>
+<text x="560" y="194.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, FSKit</text>
+<g><title>Unlatch, FSKit: 503 ops/s</title><path d="M570,182 h13.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-13.6 z" fill="#c98500"/></g>
+<text x="593.6" y="194.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">503</text>
+<text x="560" y="220.5" text-anchor="end" fill="#c3c2b7" font-size="12">Unlatch, kernel ext.</text>
+<g><title>Unlatch, kernel ext.: 4,560 ops/s</title><path d="M570,208 h156.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-156.0 z" fill="#3987e5"/></g>
+<text x="736.0" y="220.5" fill="#f0efec" font-size="12" font-variant-numeric="tabular-nums">4,560</text>
+<line x1="570" y1="179" x2="570" y2="227" stroke="#383835" stroke-width="1"/>
+</svg>

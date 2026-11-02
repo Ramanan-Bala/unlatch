@@ -164,19 +164,37 @@ A Finder copy of a GoPro footage folder (364 files, 123 GB, mostly multi-GB clip
 
 The copy ran at 82% of the drive's rated maximum from start to finish, with no slowdown as it went. That rating is the maker's best case for sequential transfers on the drive's outer tracks; this drive was a third full, so the copy landed further in, where a spinning disk is slower. The drive itself, not Unlatch, set the pace. Sampling began 6.5 minutes into the copy; the whole-copy average uses the folder's creation time on the drive as the start.
 
+The benchmark on the same drive, run in a scratch folder next to the existing files (median of 3 runs, 1 GiB file, 5,000 small files, 5,000 metadata files):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Bench/seagate-bench-dark.svg">
+    <img src="Bench/seagate-bench.svg" alt="Bar charts on a Seagate USB 3.0 portable hard drive. Cold sequential read: 114.8 MB/s FSKit, 103.4 kernel extension. Sequential write: 114.7 MB/s FSKit, 105.2 kernel extension. Small files: 271 per second FSKit, 718 kernel extension. Metadata: 503 operations per second FSKit, 4,560 kernel extension" width="800">
+  </picture>
+</p>
+
+| | Unlatch, FSKit | Unlatch, kernel ext. |
+|---|---|---|
+| Sequential write | 114.7 MB/s | 105.2 MB/s |
+| Sequential read, cold | 114.8 MB/s | 103.4 MB/s |
+| Small files (1–16 KiB, create + delete) | 271 files/s | 718 files/s |
+| Metadata (create, rename, delete) | 503 ops/s | 4,560 ops/s |
+
+Large files run at the drive's speed with either backend; the 10% between them is within what a spinning disk varies by where on the platter a file lands (the FSKit run came second and wrote elsewhere). Small files and metadata pay FSKit's per-operation cost even on a hard drive.
+
 ### What FSKit costs
 
 FSKit needs no kernel extension, but every file operation then passes through Apple's `fskitd` and macFUSE's extension process before it reaches Unlatch. Compared with the kernel extension, on the same disk and day:
 
-| | Fast SSD | USB 2.0 stick |
-|---|---|---|
-| Small files (create + delete) | **7.9× slower** (368 vs 2,891 files/s) | 8% slower (82 vs 89) |
-| Metadata (create, rename, delete) | **8.5× slower** (510 vs 4,358 ops/s) | **2.9× slower** (400 vs 1,157) |
-| Sequential read, cold | 41% slower (1,109 vs 1,891 MB/s) | same (the stick is the limit) |
-| Sequential write | 21% slower (2,183 vs 2,747 MB/s) | same (the stick is the limit) |
-| Sequential read, warm (cached) | same | same |
+| | Fast SSD | USB hard drive | USB 2.0 stick |
+|---|---|---|---|
+| Small files (create + delete) | **7.9× slower** (368 vs 2,891 files/s) | **2.6× slower** (271 vs 718) | 8% slower (82 vs 89) |
+| Metadata (create, rename, delete) | **8.5× slower** (510 vs 4,358 ops/s) | **9.1× slower** (503 vs 4,560) | **2.9× slower** (400 vs 1,157) |
+| Sequential read, cold | 41% slower (1,109 vs 1,891 MB/s) | same (the drive is the limit) | same (the stick is the limit) |
+| Sequential write | 21% slower (2,183 vs 2,747 MB/s) | same (the drive is the limit) | same (the stick is the limit) |
+| Sequential read, warm (cached) | same | not compared: the kernel ext. read missed the cache here | same |
 
-The slower the disk, the less this matters: a USB 2.0 stick hides almost all of it, a fast SSD shows all of it. Copying a source tree, a photo library or anything else with thousands of small files is where you notice. Besides speed: if Unlatch's daemon crashes, an FSKit mount stays listed until the app or `unlatch list` removes it. How these are measured, and every raw result: [Bench/README.md](Bench/README.md).
+The slower the disk, the less this matters for large files: a USB 2.0 stick hides almost all of it, a fast SSD shows all of it. A hard drive hides it for large files but not for small ones, where each operation's cost still shows. Copying a source tree, a photo library or anything else with thousands of small files is where you notice. Besides speed: if Unlatch's daemon crashes, an FSKit mount stays listed until the app or `unlatch list` removes it. How these are measured, and every raw result: [Bench/README.md](Bench/README.md).
 
 ## Building
 

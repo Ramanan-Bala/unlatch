@@ -1,0 +1,22 @@
+{
+  "label": "unlatch-usb-seagate",
+  "commit": "4a0f93a",
+  "date": "2026-11-02T09:32:21Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "unlatch@disk6s1 on /Volumes/seagate (macfuse, nodev, nosuid, synchronous, mounted by ramanan)",
+  "runs": 3, "mib": 1024, "small_files": 5000, "metadata_files": 5000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 10.205869,
+    "seq_read_cold": 10.385805,
+    "seq_read_warm": 9.822582,
+    "small_files": 6.959040,
+    "metadata": 3.289296
+  },
+  "mb_per_s": {
+    "seq_write": 105.2, "seq_read_cold": 103.4, "seq_read_warm": 109.3
+  },
+  "small_files_per_s": 718,
+  "metadata_ops_per_s": 4560
+}

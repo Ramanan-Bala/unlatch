@@ -274,6 +274,25 @@ unlatch setup</code></pre>
       </table>
     </div>
     <p>The copy ran at 82% of the drive's rated maximum from start to finish, with no slowdown as it went. That rating is the maker's best case on the drive's outer tracks; this drive was a third full, so the copy landed further in, where a spinning disk is slower. The drive itself, not Unlatch, set the pace.</p>
+    <p>The benchmark on the same drive, run in a scratch folder next to the existing files. Median of 3 runs, 1 GiB file, 5,000 small files, 5,000 metadata files.</p>
+    <figure class="chart">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="bench/seagate-bench-dark.svg">
+        <img src="bench/seagate-bench.svg" width="800" height="240" alt="Bar charts on a Seagate USB 3.0 portable hard drive. Cold sequential read: 114.8 MB/s FSKit, 103.4 kernel extension. Sequential write: 114.7 MB/s FSKit, 105.2 kernel extension. Small files: 271 per second FSKit, 718 kernel extension. Metadata: 503 operations per second FSKit, 4,560 kernel extension">
+      </picture>
+    </figure>
+    <div class="table">
+      <table>
+        <thead><tr><th>Test</th><th class="num">Unlatch, FSKit</th><th class="num">Unlatch, kernel ext.</th></tr></thead>
+        <tbody>
+          <tr><td>Sequential write</td><td class="num">114.7 MB/s</td><td class="num">105.2 MB/s</td></tr>
+          <tr><td>Sequential read, cold</td><td class="num">114.8 MB/s</td><td class="num">103.4 MB/s</td></tr>
+          <tr><td>Small files (1–16 KiB, create + delete)</td><td class="num">271 files/s</td><td class="num">718 files/s</td></tr>
+          <tr><td>Metadata (create, rename, delete)</td><td class="num">503 ops/s</td><td class="num">4,560 ops/s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Large files run at the drive's speed with either backend; the 10% between them is within what a spinning disk varies by where on the platter a file lands (the FSKit run came second and wrote elsewhere). Small files and metadata pay FSKit's per-operation cost even on a hard drive.</p>
 
     <h3>Fast SSD</h3>
     <p>A 4 GiB image on the internal SSD, attached as a disk, the way a real drive is used. Median of 5 runs, 1 GiB file, 30,000 small files, 10,000 metadata files.</p>
@@ -294,13 +313,13 @@ unlatch setup</code></pre>
     <p>FSKit needs no kernel extension, but every file operation then passes through Apple's <code>fskitd</code> and macFUSE's extension process before it reaches Unlatch. Compared with the kernel extension, on the same disk and day:</p>
     <div class="table">
       <table>
-        <thead><tr><th>Test</th><th>Fast SSD</th><th>USB 2.0 stick</th></tr></thead>
+        <thead><tr><th>Test</th><th>Fast SSD</th><th>USB hard drive</th><th>USB 2.0 stick</th></tr></thead>
         <tbody>
-          <tr><td>Small files (create + delete)</td><td><strong>7.9× slower</strong> (368 vs 2,891 files/s)</td><td>8% slower (82 vs 89)</td></tr>
-          <tr><td>Metadata (create, rename, delete)</td><td><strong>8.5× slower</strong> (510 vs 4,358 ops/s)</td><td><strong>2.9× slower</strong> (400 vs 1,157)</td></tr>
-          <tr><td>Sequential read, cold</td><td>41% slower (1,109 vs 1,891 MB/s)</td><td>same (the stick is the limit)</td></tr>
-          <tr><td>Sequential write</td><td>21% slower (2,183 vs 2,747 MB/s)</td><td>same (the stick is the limit)</td></tr>
-          <tr><td>Sequential read, warm (cached)</td><td>same</td><td>same</td></tr>
+          <tr><td>Small files (create + delete)</td><td><strong>7.9× slower</strong> (368 vs 2,891 files/s)</td><td><strong>2.6× slower</strong> (271 vs 718)</td><td>8% slower (82 vs 89)</td></tr>
+          <tr><td>Metadata (create, rename, delete)</td><td><strong>8.5× slower</strong> (510 vs 4,358 ops/s)</td><td><strong>9.1× slower</strong> (503 vs 4,560)</td><td><strong>2.9× slower</strong> (400 vs 1,157)</td></tr>
+          <tr><td>Sequential read, cold</td><td>41% slower (1,109 vs 1,891 MB/s)</td><td>same (the drive is the limit)</td><td>same (the stick is the limit)</td></tr>
+          <tr><td>Sequential write</td><td>21% slower (2,183 vs 2,747 MB/s)</td><td>same (the drive is the limit)</td><td>same (the stick is the limit)</td></tr>
+          <tr><td>Sequential read, warm (cached)</td><td>same</td><td>not compared: the kernel ext. read missed the cache here</td><td>same</td></tr>
         </tbody>
       </table>
     </div>

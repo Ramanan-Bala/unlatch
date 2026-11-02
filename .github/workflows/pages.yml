@@ -14,6 +14,8 @@ on:
       - 'Bench/usb-dark.svg'
       - 'Bench/seagate.svg'
       - 'Bench/seagate-dark.svg'
+      - 'Bench/seagate-bench.svg'
+      - 'Bench/seagate-bench-dark.svg'
       - 'VERSION'
       - 'Scripts/build-site.sh'
       - '.github/workflows/pages.yml'

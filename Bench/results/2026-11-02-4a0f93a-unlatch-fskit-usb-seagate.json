@@ -1,0 +1,22 @@
+{
+  "label": "unlatch-fskit-usb-seagate",
+  "commit": "4a0f93a",
+  "date": "2026-11-02T09:41:32Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "macfuse://FAC637CA-0887-49AC-8611-3D422794B4C3 on /Volumes/seagate disk6s1 (macfuse, nodev, nosuid, noowners, noatime, fskit, mounted by ramanan)",
+  "runs": 3, "mib": 1024, "small_files": 5000, "metadata_files": 5000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 9.360767,
+    "seq_read_cold": 9.352422,
+    "seq_read_warm": 0.081351,
+    "small_files": 18.439757,
+    "metadata": 29.813279
+  },
+  "mb_per_s": {
+    "seq_write": 114.7, "seq_read_cold": 114.8, "seq_read_warm": 13198.9
+  },
+  "small_files_per_s": 271,
+  "metadata_ops_per_s": 503
+}

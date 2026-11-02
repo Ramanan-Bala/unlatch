@@ -64,6 +64,18 @@ Reads run at the stick's full speed and writes lose about a tenth with either ba
 
 Seagate Expansion 1 TB portable hard drive (2.5", 5400 rpm, USB 3.0 at 5 Gb/s), NTFS, a third full, Apple M2, macOS 27.0.1, Unlatch 1.0.0-beta.5 installed app (kernel extension backend). A Finder copy of a GoPro footage folder (364 files, 123.1 GB, 19 files over 1 GiB) from the internal SSD. Not a `run.sh` benchmark: `df -k` of the mounted volume every 5 s, from 6.5 minutes into the copy until it finished; the whole-copy time runs from the copied folder's creation time on the drive (`stat -f %B`) to the last sample that grew. The drive holds real data, so there is no raw `dd` baseline; the comparison is the maker's "up to 130 MB/s". Result: [`unlatch-seagate-gopro`](results/2026-11-02-unlatch-seagate-gopro.json), 123.1 GB in 1,161 s, 106.1 MB/s (sampled stretch: 104.3 MB/s, 30 s averages 92–112 MB/s). `Bench/seagate-chart.py --from-log <log>` writes the result file from the samples, and `Bench/seagate-chart.py` draws `seagate.svg` and `seagate-dark.svg` (the chart in the top-level README) from it.
 
+Then `Bench/run.sh` on the same drive, in its `unlatch-bench` scratch folder (the script deletes it when done; a listing of every other file's name, size, time and mode before and after matched): `UNLATCH_BACKEND=kext|fskit Bench/run.sh <mountpoint> <label> --runs 3 --mib 1024 --small 5000 --meta 5000 --remount "unlatch unmount disk6s1 && sleep 10 && { unlatch mount disk6s1 || { sleep 30; unlatch mount disk6s1; }; }"` with labels `unlatch-usb-seagate` (kext) and `unlatch-fskit-usb-seagate`. The FSKit run needed the pause and the retry: a remount straight after an unmount failed ("did not take the mount"), and the failed attempt left an empty `/Volumes/seagate`, so the FSKit run used `/Volumes/seagate disk6s1`. No raw `dd` and no exFAT baseline: the drive holds real data. Results: [`unlatch`](results/2026-11-02-4a0f93a-unlatch-usb-seagate.json), [`unlatch-fskit`](results/2026-11-02-4a0f93a-unlatch-fskit-usb-seagate.json); `Bench/usb-chart.py` also draws `seagate-bench.svg` and `seagate-bench-dark.svg`.
+
+| | Unlatch, FSKit | Unlatch, kernel ext. |
+|---|---|---|
+| Sequential write | 114.7 MB/s | 105.2 MB/s |
+| Sequential read (cold) | 114.8 MB/s | 103.4 MB/s |
+| Sequential read (warm) | 13,199 MB/s | 109.3 MB/s |
+| Small files (1–16 KiB, create + delete) | 271 files/s | 718 files/s |
+| Metadata (create, rename, delete) | 503 ops/s | 4,560 ops/s |
+
+The kext run's warm read came from the drive, not the page cache (the stick's and the SSD's kext runs cached); unexplained, see the carry-over in `docs/PROGRESS.md`. The 10% sequential gap in FSKit's favour is within a hard drive's spread across the platter; the runs wrote to different places.
+
 ## Running
 
 ```sh
