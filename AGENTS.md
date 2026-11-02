@@ -26,6 +26,7 @@ Each step updates this list.
 | Set or check the version (VERSION and every copy) | `Scripts/set-version.sh X.Y.Z`; `Scripts/set-version.sh --check` |
 | Build a release: DMG, source tarball, SHA256SUMS, Homebrew files (publishes nothing) | `Scripts/release.sh [--allow-dirty]` → `build/release/<version>/`; steps in `docs/release.md` |
 | Notices bundle (licenses, source offer) | `Scripts/make-notices.sh <dir> [version]` |
+| Build the project website (GitHub Pages; `.github/workflows/pages.yml` deploys it from `main`) | `Scripts/build-site.sh [outdir]` → `build/site/`; preview: `python3 -m http.server -d build/site 8000` |
 | Build unlatch-fuse and the helper with clang only (the Homebrew formula's path) | `Scripts/build-tools.sh <outdir>` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
 | Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
@@ -80,6 +81,7 @@ App/         SwiftUI menu-bar app (LSUIElement), embeds the extension
 Tests/       Engine/ C tests (run by Scripts/test-engine.sh), Images/ (golden images, Git LFS)
 Bench/       benchmark scripts and results
 Scripts/     build and release scripts
+site/        the GitHub Pages website (built by Scripts/build-site.sh)
 ```
 
 ## Code conventions
