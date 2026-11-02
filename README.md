@@ -97,9 +97,29 @@ unlatch doctor
 - **No journal replay.** Like ntfs-3g, Unlatch does not replay the NTFS journal. Always eject before unplugging; if a disk was pulled out mid-write, run `chkdsk` on Windows before relying on it.
 - **Not indexed by Spotlight**, and not usable for Time Machine.
 - Permissions: files belong to the user who mounted the disk; NTFS access lists are not mapped.
-- Speed depends on the disk; on this project's test Mac, sequential copies run at about 1.5–2.7 GB/s on a fast SSD image ([docs/M0-gate.md](docs/M0-gate.md)). On a real USB 2.0 stick (SanDisk Cruzer Blade), reads run at the stick's full 33 MB/s and writes at 5.5 MB/s of its 6.7 MB/s ([Bench/README.md](Bench/README.md#real-drive-usb-20-stick)).
+- Speed depends on the disk; see [Speed](#speed) below.
 
 When something goes wrong: [docs/troubleshooting.md](docs/troubleshooting.md). Security issues: [SECURITY.md](SECURITY.md).
+
+## Speed
+
+On a real USB 2.0 stick (SanDisk Cruzer Blade 16 GB, Apple M2, Unlatch 1.0.0-beta.3), next to the stick's own speed and Apple's exFAT driver on the same stick:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Bench/usb-dark.svg">
+    <img src="Bench/usb.svg" alt="Bar charts: cold sequential read 32.9 MB/s raw, 33.1 Unlatch, 32.5 exFAT; sequential write 6.7 MB/s raw, 5.5 Unlatch, 6.2 exFAT; small files 94 per second Unlatch, 61 exFAT; metadata 1,405 operations per second Unlatch, 122 exFAT" width="800">
+  </picture>
+</p>
+
+| | Stick itself (raw `dd`) | Unlatch (NTFS) | exFAT (Apple) |
+|---|---|---|---|
+| Sequential read, cold | 32.9 MB/s | 33.1 MB/s | 32.5 MB/s |
+| Sequential write | 6.7 MB/s | 5.5 MB/s | 6.2 MB/s |
+| Small files (1–16 KiB, create + delete) | | 94 files/s | 61 files/s |
+| Metadata (create, rename, delete) | | 1,405 ops/s | 122 ops/s |
+
+Reads run at the stick's full speed; sequential writes reach 82% of it (exFAT 93%); small files and metadata are faster than exFAT, helped by the engine's write-back cache for NTFS's small metadata writes. Median of 3 runs, 512 MiB files. On a fast SSD image, sequential copies run at about 1.5–2.7 GB/s ([docs/M0-gate.md](docs/M0-gate.md)). How these are measured: [Bench/README.md](Bench/README.md).
 
 ## Building
 

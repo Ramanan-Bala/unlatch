@@ -1,0 +1,22 @@
+{
+  "label": "exfat-usb-sandisk",
+  "commit": "c0452df",
+  "date": "2026-11-02T05:32:19Z",
+  "macos": "27.0.1 (26A434)",
+  "machine": "Apple M2, 8 GiB",
+  "mount": "/dev/disk7s2 on /Volumes/SANDISK (exfat, local, nodev, nosuid, noowners, noatime, fskit)",
+  "runs": 3, "mib": 512, "small_files": 5000, "metadata_files": 5000,
+  "cold_reads": "remount + F_NOCACHE",
+  "seconds": {
+    "seq_write": 86.830464,
+    "seq_read_cold": 16.513075,
+    "seq_read_warm": 0.048854,
+    "small_files": 82.454713,
+    "metadata": 122.712699
+  },
+  "mb_per_s": {
+    "seq_write": 6.2, "seq_read_cold": 32.5, "seq_read_warm": 10989.3
+  },
+  "small_files_per_s": 61,
+  "metadata_ops_per_s": 122
+}

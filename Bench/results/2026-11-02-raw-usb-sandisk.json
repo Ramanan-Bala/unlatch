@@ -1,0 +1,11 @@
+{
+  "label": "raw-usb-sandisk",
+  "date": "2026-11-02",
+  "device": "SanDisk Cruzer Blade 16 GB, USB 2.0",
+  "method": "sudo dd bs=4m count=128 (512 MiB) on /dev/rdiskNs2, median of 3",
+  "seconds": {
+    "raw_read": [16.310119, 16.300726, 16.300139],
+    "raw_write": [83.368275, 79.576346, 80.014700]
+  },
+  "mb_per_s": { "raw_read": 32.9, "raw_write": 6.7 }
+}
