@@ -65,7 +65,7 @@ import Foundation
     #expect(MacFUSE.expectedSHA256(listing, file: "macfuse-5.6.0.dmg") == nil)
     #expect(MacFUSE.needsInstall(installed: nil))
     #expect(MacFUSE.needsInstall(installed: "4.8.0"))
-    #expect(!MacFUSE.needsInstall(installed: "5.4.0") && !MacFUSE.needsInstall(installed: "5.5.0"))
+    #expect(MacFUSE.needsInstall(installed: "5.4.0") && !MacFUSE.needsInstall(installed: "5.5.0"))
 }
 
 /// Downloads the real latest macFUSE release and verifies it, without installing anything.

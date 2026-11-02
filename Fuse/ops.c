@@ -25,6 +25,18 @@
 #define UF_TIMEOUT(fs) ((fs)->read_only ? UF_TIMEOUT_RO : UF_TIMEOUT_RW)
 #define UF_NAME_MAX 1024              // UTF-8 bytes for 255 UTF-16 units, with room to spare
 
+// MARK: replies
+
+// Byte replies go through fuse_reply_data: macFUSE 5.5.0's FSKit backend loses fuse_reply_buf
+// and fuse_reply_iov replies to requests of 64 KiB or more (EIO; macfuse/macfuse#1225, D-78).
+static int reply_bytes(fuse_req_t req, const void *buf, size_t len)
+{
+    struct fuse_bufvec bv = FUSE_BUFVEC_INIT(len);
+
+    bv.buf[0].mem = (void *)buf;
+    return fuse_reply_data(req, &bv, 0);
+}
+
 // MARK: node table (engine reference -> lookup count)
 
 static size_t slot_of(const uf_fs_t *fs, uint64_t ino)
@@ -184,6 +196,17 @@ static void fill_attr(const uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_
         st->flags |= UF_HIDDEN;
 }
 
+// A link's size is the length of its target (POSIX). FSKit reads exactly that many bytes, so
+// size 0 made every link read back empty (D-78). Not used from readdir callbacks: those run
+// inside an engine call.
+static void fill_link_size(const uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_attr *st)
+{
+    char target[PATH_MAX];
+
+    if (a->type == UE_T_LNK && !ue_readlink(fs->engine, a->ino, fs->mountpoint, target, sizeof(target)))
+        st->size = (off_t)strlen(target);
+}
+
 // Takes a lookup reference for the kernel and fills the entry. Returns 0 or errno.
 static int make_entry(uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_entry_param *e)
 {
@@ -195,6 +218,7 @@ static int make_entry(uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_entry_
     e->ino = to_fuse(fs, a->ino);
     e->generation = a->ino >> 48;
     fill_attr(fs, a, &e->attr);
+    fill_link_size(fs, a, &e->attr);
     e->attr_timeout = UF_TIMEOUT(fs);
     e->entry_timeout = UF_TIMEOUT(fs);
     return 0;
@@ -316,6 +340,7 @@ static void uf_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
         return;
     }
     fill_attr(fs, &a, &st);
+    fill_link_size(fs, &a, &st);
     fuse_reply_attr(req, &st, UF_TIMEOUT(fs));
 }
 
@@ -436,7 +461,7 @@ static void uf_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, s
             break;
         used += n;
     }
-    fuse_reply_buf(req, buf, used);
+    reply_bytes(req, buf, used);
     free(buf);
 }
 
@@ -490,7 +515,7 @@ static void uf_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, stru
     if ((err = ue_read(fs->engine, to_engine(fs, ino), (uint64_t)off, buf, size, &done)))
         fuse_reply_err(req, err);
     else
-        fuse_reply_buf(req, buf, done);
+        reply_bytes(req, buf, done);
 }
 
 static void uf_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
@@ -529,6 +554,7 @@ static void reply_attr_of(fuse_req_t req, uf_fs_t *fs, const ue_attr_t *a)
     struct fuse_darwin_attr st;
 
     fill_attr(fs, a, &st);
+    fill_link_size(fs, a, &st);
     fuse_reply_attr(req, &st, UF_TIMEOUT(fs));
 }
 
@@ -826,7 +852,7 @@ static void uf_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name, size_t
     else if (!size)
         fuse_reply_xattr(req, len);
     else
-        fuse_reply_buf(req, buf, len);
+        reply_bytes(req, buf, len);
     free(buf);
 }
 
@@ -847,7 +873,7 @@ static void uf_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
     else if (!size)
         fuse_reply_xattr(req, needed);
     else
-        fuse_reply_buf(req, buf, needed);
+        reply_bytes(req, buf, needed);
     free(buf);
 }
 

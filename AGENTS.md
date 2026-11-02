@@ -20,8 +20,8 @@ Each step updates this list.
 | Check tools, build libntfs-3g if missing, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
 | Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
-| Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; `--backend fskit` needs a mount point under `/Volumes`) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--no-cache] [--backend kext\|fskit] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
-| Interruption tests (kill the daemon mid-copy, force-eject) | `Tests/Fuse/interrupt.sh [kill\|detach]` |
+| Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; the default backend is fskit directly under `/Volumes`, kext elsewhere) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--no-cache] [--backend auto\|fskit\|kext] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
+| Interruption tests (kill the daemon mid-copy, force-eject) | `Tests/Fuse/interrupt.sh [--backend kext\|fskit] [kill\|detach]` |
 | Test matrix (Step 17 results) | `docs/test-matrix.md` |
 | Set or check the version (VERSION and every copy) | `Scripts/set-version.sh X.Y.Z`; `Scripts/set-version.sh --check` |
 | Build a release: DMG, source tarball, SHA256SUMS, Homebrew files (publishes nothing) | `Scripts/release.sh [--allow-dirty]` → `build/release/<version>/`; steps in `docs/release.md` |
@@ -30,7 +30,7 @@ Each step updates this list.
 | Build unlatch-fuse and the helper with clang only (the Homebrew formula's path) | `Scripts/build-tools.sh <outdir>` |
 | Daemon and engine logs | `log show --last 5m --info --predicate 'subsystem == "io.github.ramanan-bala.unlatch"'` (or `-f` for stderr) |
 | Compare a read-only mount (`unlatch-fuse -r`) with the harness | `Tests/Fuse/check-readonly.sh <img> <mountpoint>` |
-| Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk) | `Tests/Fuse/rw-suite.sh --runs 3 [--no-git] [--disk]` |
+| Read-write suite through a mount (fresh images; xattrs, links, git clone; `--disk` mounts an attached disk) | `Tests/Fuse/rw-suite.sh --runs 3 [--backend kext\|fskit] [--no-git] [--disk]` |
 | Build engine and harness only | `xcodebuild -scheme unlatch-engine build` |
 | Build UnlatchCore | `swift build --package-path Shared` |
 | Test UnlatchCore | `swift test --package-path Shared`; with attached images and macFUSE: `UNLATCH_INTEGRATION=1 swift test --package-path Shared` |
@@ -62,7 +62,7 @@ ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster nt
 
 `Unlatch.xcodeproj` is generated from `project.yml` and is not committed. After changing `project.yml`, run `Scripts/bootstrap.sh` again.
 
-Mounting goes through macFUSE (D-39), by default its kext backend (D-43): install macFUSE (`brew install --cask macfuse`) and allow its kernel extension. `unlatch-fuse` builds against `/usr/local` (`MACFUSE_PREFIX`). Builds are ad-hoc signed (`Config/Base.xcconfig`); the dormant FSKit module in `Extension/` needs a paid team (D-37, D-38). `docs/dev-setup.md` covers macFUSE, mounting and logs.
+Mounting goes through macFUSE (D-39), through its FSKit backend for mounts under `/Volumes` (D-78) and its kext backend elsewhere (tests, benchmarks): install macFUSE 5.5+ (`brew install --cask macfuse`), turn on its file system extension, and, for the kext-backed test mounts, allow its kernel extension. Test scripts that attach disks race the installed app's auto-mount: turn it off while they run. `unlatch-fuse` builds against `/usr/local` (`MACFUSE_PREFIX`). Builds are ad-hoc signed (`Config/Base.xcconfig`); the dormant FSKit module in `Extension/` needs a paid team (D-37, D-38). `docs/dev-setup.md` covers macFUSE, mounting and logs.
 
 ## Layout
 

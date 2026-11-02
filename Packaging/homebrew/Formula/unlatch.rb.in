@@ -29,7 +29,7 @@ class Unlatch < Formula
 
   def caveats
     <<~EOS
-      Finish the one-time setup (macFUSE's kernel extension approval, the helper for real disks):
+      Finish the one-time setup (turn on macFUSE's file system extension, the helper for real disks):
         unlatch setup
       Steps: https://github.com/Ramanan-Bala/unlatch#one-time-setup
       `sudo unlatch uninstall-helper` removes the helper again.

@@ -8,7 +8,7 @@ public enum Exit: Int32, Sendable {
     case error = 1
     case usage = 2
     case readOnly = 3          // mounted, but forced read-only (dirty, hibernated, ...)
-    case macFUSE = 4           // macFUSE missing or its kernel extension not allowed
+    case macFUSE = 4           // macFUSE missing or too old
 
     static func of(_ error: Error) -> Exit {
         if case MountError.macFUSEMissing = error { return .macFUSE }

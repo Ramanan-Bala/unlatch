@@ -148,10 +148,9 @@ struct Doctor: AsyncParsableCommand {
         let fuseVersion = (info?["CFBundleShortVersionString"] ?? info?["CFBundleVersion"]) as? String ?? "?"
         check(fuse && !MacFUSE.needsInstall, "macFUSE installed\(fuse ? " (\(fuseVersion))" : "")",
               fuse ? "macFUSE \(MacFUSE.minimumVersion) or later is needed: unlatch setup" : "unlatch setup (or brew install --cask macfuse)", .macFUSE)
-        // The loaded bundle carries a macOS-major suffix (io.macfuse.filesystems.macfuse.25).
-        let kext = shell(["/usr/bin/kmutil", "showloaded", "--list-only"]).1.contains("io.macfuse.filesystems.macfuse")
-        check(kext || !fuse, "macFUSE kernel extension loaded",
-              "Allow it once: System Settings > Privacy & Security (Apple Silicon: Reduced Security in Recovery first). It loads on the first mount.", .macFUSE)
+        // Whether macFUSE's file system extension is on cannot be read (FSKit's FSClient does
+        // not list it); the first mount shows it, and a failed mount says how to turn it on.
+        if fuse { print("     macFUSE's file system extension must be on: \(MacFUSE.approvalSteps.joined(separator: " "))") }
         let daemon = Paths.daemon
         check(FileManager.default.isExecutableFile(atPath: daemon.path), "unlatch-fuse at \(daemon.path)",
               "Build it (xcodebuild -scheme Unlatch build) or set UNLATCH_FUSE.")
@@ -178,7 +177,7 @@ func interactive(_ args: [String]) -> Int32 {
 
 /// `unlatch setup`: everything a new Mac needs, in order (D-73). It installs or updates macFUSE
 /// (downloaded from macFUSE's GitHub releases, checksum, signature and notarization checked),
-/// explains the one-time approval of macFUSE's kernel extension, installs the helper, and points
+/// shows how to turn on macFUSE's file system extension, installs the helper, and points
 /// at Full Disk Access. Each step that changes the system asks first, unless --yes.
 struct SetupCmd: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -223,13 +222,12 @@ struct SetupCmd: AsyncParsableCommand {
             print("1. macFUSE \(MacFUSE.installedVersion ?? "") is installed.")
         }
 
-        // 2. macFUSE's kernel extension: approval cannot be automated (Recovery and System Settings).
-        if shell(["/usr/bin/kmutil", "showloaded", "--list-only"]).1.contains("io.macfuse.filesystems.macfuse") {
-            print("2. macFUSE's kernel extension is allowed and loaded.")
-        } else {
-            print("2. macFUSE's kernel extension has to be allowed once. If it already is, it simply loads at the first mount.")
-            print("   On Apple Silicon, if you have not done this before:")
-            for (i, s) in MacFUSE.approvalSteps.enumerated() { print("   \(Character(UnicodeScalar(UInt8(97 + i))))) \(s)") }
+        // 2. macFUSE's file system extension (FSKit, D-78): only the user can turn it on. No
+        // kernel extension, so no Recovery and no restart.
+        print("2. macFUSE's file system extension has to be on (once; skip this if it already is):")
+        for (i, s) in MacFUSE.approvalSteps.enumerated() { print("   \(Character(UnicodeScalar(UInt8(97 + i))))) \(s)") }
+        if confirm("   Open Login Items & Extensions now?") {
+            _ = shell(["/usr/bin/open", MacFUSE.extensionSettingsURL.absoluteString])
         }
 
         // 3. The helper, for real disks.

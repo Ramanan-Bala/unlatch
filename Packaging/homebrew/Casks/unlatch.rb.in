@@ -48,8 +48,8 @@ cask "unlatch" do
     with a right-click on Unlatch in Applications > Open, or allow it in System Settings >
     Privacy & Security > "Open Anyway". Until then macOS also stops the `unlatch` command.
 
-    macFUSE's kernel extension must be allowed once (Recovery > Reduced Security, then Allow in
-    System Settings > Privacy & Security); Unlatch's setup window walks through it:
+    macFUSE's file system extension must be turned on once (System Settings > General > Login
+    Items & Extensions > File System Extensions > macFUSE); Unlatch's setup window walks through it:
     https://github.com/Ramanan-Bala/unlatch#one-time-setup
     Upgrades keep the disk helper. `brew uninstall --cask --zap unlatch` (or Unlatch's Settings >
     Uninstall) also removes the helper; a plain uninstall leaves it, unused.

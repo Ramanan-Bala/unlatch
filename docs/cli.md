@@ -26,7 +26,7 @@ sudo unlatch uninstall-helper
 | 1 | error (the message says why) |
 | 2 | usage: unknown command or option, missing argument |
 | 3 | mounted, but read-only although read-write was asked for. The reason is on stderr, for example `dirty: volume is marked dirty; run chkdsk on Windows before writing to it` |
-| 4 | macFUSE missing or its kernel extension not allowed (`doctor` says which) |
+| 4 | macFUSE missing or older than 5.5 |
 
 ## JSON (`"schema": 1`)
 
@@ -79,6 +79,6 @@ Finding the other binaries: `$UNLATCH_FUSE` and `$UNLATCH_HELPER`, else next to 
 
 Runs the one-time setup in order, asking before each change (`--yes` skips the questions):
 
-1. macFUSE: if it is missing or older than 5.4, downloads the newest release from github.com/macfuse/macfuse, checks the published SHA-256, the package signature (Developer ID Installer, team 3T5GSNBU6W) and Apple's notarization, and runs `sudo installer -pkg … -target /`.
-2. macFUSE's kernel extension: reports whether it is loaded, and prints the approval steps when it is not (Recovery and System Settings; cannot be automated).
+1. macFUSE: if it is missing or older than 5.5, downloads the newest release from github.com/macfuse/macfuse, checks the published SHA-256, the package signature (Developer ID Installer, team 3T5GSNBU6W) and Apple's notarization, and runs `sudo installer -pkg … -target /`.
+2. macFUSE's file system extension: prints how to turn it on (System Settings > General > Login Items & Extensions > File System Extensions > macFUSE) and offers to open that pane. Only the user can switch it on, and FSKit does not report whether it is on, so the first mount shows it; a failed mount says how to turn it on (D-78).
 3. The helper: `sudo unlatch install-helper`, then opens Full Disk Access in System Settings.

@@ -52,14 +52,12 @@ The first time, Unlatch's setup window opens and checks each step; most of them 
 
 1. **Open Unlatch.** It is not signed with an Apple Developer ID (the project has no paid Apple membership), so macOS asks first. In Applications, right-click **Unlatch** > **Open** > **Open**. If there is no Open button: System Settings > Privacy & Security > **Open Anyway**. Needed once per version. Do this before using `unlatch` in Terminal: until the app has been opened once, macOS stops its bundled programs without a message (`zsh: killed`).
 
-2. **macFUSE.** In the setup window, click **Install macFUSE**. Unlatch downloads the latest release from macFUSE's GitHub page, checks it against the checksum macFUSE publishes, checks that the installer is signed by macFUSE's developer (Benjamin Fleischer, team 3T5GSNBU6W) and notarized by Apple, and then installs it. macOS asks for your password. If macFUSE is older than 5.4, the button says **Update macFUSE**. Homebrew users already have it.
+2. **macFUSE.** In the setup window, click **Install macFUSE**. Unlatch downloads the latest release from macFUSE's GitHub page, checks it against the checksum macFUSE publishes, checks that the installer is signed by macFUSE's developer (Benjamin Fleischer, team 3T5GSNBU6W) and notarized by Apple, and then installs it. macOS asks for your password. If macFUSE is older than 5.5, the button says **Update macFUSE**. Homebrew users already have it.
 
-3. **Allow macFUSE's kernel extension.** Apple Silicon Macs only load extensions from other developers after you allow it, once. Unlatch cannot do this for you:
-   1. Shut down the Mac. Press and hold the power button until "Loading startup options" appears, then choose **Options** > **Continue**.
-   2. In Recovery: **Utilities** > **Startup Security Utility** > select your startup disk > **Security Policy** > **Reduced Security**, and turn on **"Allow user management of kernel extensions from identified developers"**. Click OK, enter your password, and restart.
-   3. Back in macOS, run the setup window's self-test (or mount any disk). macOS reports a blocked system extension: open System Settings > **Privacy & Security**, click **Allow** next to "Benjamin Fleischer", and restart when asked.
-
-   If you used macFUSE before, this is already done. Reduced Security only lets you approve extensions yourself; FileVault and other protections stay on.
+3. **Turn on macFUSE's file system extension.** Unlatch mounts through macOS's own file system extension framework (FSKit), so there is no kernel extension to allow, no Recovery and no restart. Only you can switch it on, once:
+   1. Click **Open Login Items & Extensions** in the setup window (or System Settings > **General** > **Login Items & Extensions**).
+   2. Under Extensions, click the info button next to **File System Extensions**. If the switch is greyed out, choose to view the list **By Category**.
+   3. Turn on **macFUSE**, then click **Done**. The self-test (step 5) confirms it.
 
 4. **The helper, for real disks.** Disk images work without it. For USB drives and internal disks, click **Install…** in the setup window (or answer yes in `unlatch setup`); macOS asks for your password. Then click **Allow in Full Disk Access**: System Settings opens at Privacy & Security > **Full Disk Access**, and a Finder window shows **Unlatch Helper**. Drag it into the list and turn it on. Without it, macOS keeps the helper from opening removable disks.
 

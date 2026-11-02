@@ -7,8 +7,9 @@ import Foundation
 /// package is signed by macFUSE's developer and notarized by Apple, and only then hands it to
 /// Apple's `installer` (D-73). Nothing of macFUSE is redistributed.
 public enum MacFUSE {
-    /// The oldest macFUSE Unlatch is tested with (libfuse3 low-level API, Darwin extensions).
-    public static let minimumVersion = "5.4.0"
+    /// The oldest macFUSE Unlatch is tested with: 5.5.0 is the first whose FSKit backend
+    /// honours read-only mounts and survives empty read replies (D-78).
+    public static let minimumVersion = "5.5.0"
     /// Benjamin Fleischer's Developer ID team, which signs macFUSE's installer.
     public static let teamID = "3T5GSNBU6W"
     public static let releasesAPI = URL(string: "https://api.github.com/repos/macfuse/macfuse/releases/latest")!
@@ -161,10 +162,13 @@ public enum MacFUSE {
         return String(decoding: data, as: UTF8.self)
     }
 
-    /// The one-time approval of macFUSE's kernel extension, in order (Apple Silicon).
+    /// The one-time step that lets macFUSE mount: turning on its file system extension (FSKit
+    /// backend, D-78). No kernel extension, no Recovery, no restart.
     public static let approvalSteps = [
-        "Shut down the Mac. Press and hold the power button until \"Loading startup options\" appears, choose Options, then Continue.",
-        "In Recovery: Utilities > Startup Security Utility > select the startup disk > Security Policy > Reduced Security, and turn on \"Allow user management of kernel extensions from identified developers\". Restart.",
-        "Mount a disk with Unlatch (or run the self-test). macOS says the system extension was blocked: open System Settings > Privacy & Security, click Allow next to \"Benjamin Fleischer\", and restart when asked.",
+        "Open System Settings > General > Login Items & Extensions.",
+        "Under Extensions, click the info button next to File System Extensions.",
+        "Turn on macFUSE, then click Done.",
     ]
+    /// System Settings > General > Login Items & Extensions.
+    public static let extensionSettingsURL = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!
 }

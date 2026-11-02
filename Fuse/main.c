@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // unlatch-fuse: mounts an NTFS image or device through macFUSE (plan Step 08, D-40).
 //
-//   unlatch-fuse [-f] [-d] [-r] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>
+//   unlatch-fuse [-f] [-d] [-r] [--backend auto|fskit|kext] [-o opt,...] <image-or-device> <mountpoint>
 //
-// The default backend is macFUSE's kernel extension: its FSKit backend fails large reads on
-// macOS 27 (D-42, D-43).
+// The default backend is macFUSE's FSKit backend, which needs no kernel extension and so no
+// trip to Recovery. It mounts only directly under /Volumes, so other mount points (tests,
+// benchmarks) use the kernel extension (D-78).
 //
 // The safety decision is made here, before mounting: CORRUPT and NOT_NTFS are refused;
 // read-write only when the volume probes CLEAN, the device opens writable and -r was not
@@ -32,14 +33,15 @@
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: unlatch-fuse [-f] [-d] [-r] [--backend kext|fskit] [-o opt,...] <image-or-device> <mountpoint>\n"
+            "usage: unlatch-fuse [-f] [-d] [-r] [--backend auto|fskit|kext] [-o opt,...] <image-or-device> <mountpoint>\n"
             "  -f            stay in the foreground\n"
             "  -d            FUSE debug output (implies -f)\n"
             "  -r            mount read-only even when the volume could be written\n"
             "  --fd N        use the already open descriptor N for the device (from the privileged\n"
             "                helper); the path then only names the volume\n"
-            "  --backend B   macFUSE backend: kext (default) or fskit (no kernel extension;\n"
-            "                mounts only under /Volumes; large reads fail on macOS 27, D-42)\n"
+            "  --backend B   macFUSE backend: fskit (no kernel extension; mounts only directly\n"
+            "                under /Volumes), kext (macFUSE's kernel extension, allowed once in\n"
+            "                Recovery), or auto (default: fskit under /Volumes, else kext)\n"
             "  -o opt,...    extra macFUSE mount options\n"
             "  --no-cache    no engine page cache (for comparisons)\n");
 }
@@ -125,9 +127,9 @@ static void raw_path(const char *in, char *out, size_t cap)
         snprintf(out, cap, "%s", in);
 }
 
-static void record_status(const char *bsd_name, const ue_probe_t *p, bool read_only, bool mounted)
+static void record_status(const char *bsd_name, const ue_probe_t *p, bool read_only, const char *mount_point)
 {
-    int err = status_write(bsd_name, p, read_only, mounted);
+    int err = status_write(bsd_name, p, read_only, mount_point);
 
     if (err)
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "status record for %s: %s", bsd_name, strerror(err));
@@ -146,7 +148,19 @@ static bool is_mounted(const char *path)
            strcmp(st.f_fstypename, "macfuse") == 0;
 }
 
-static int run_in_background(int argc, char **argv, const char *mountpoint)
+// Printed last when an FSKit mount fails, which the CLI and the app show. Usual causes: the
+// extension is off, or macFUSE's daemon just restarted and reports it "not found" or "not
+// enabled" for a minute or so (D-78).
+#define FSKIT_HINT "macFUSE's file system extension did not take the mount; try again in a minute, and check " \
+                   "that it is on: System Settings > General > Login Items & Extensions > File System " \
+                   "Extensions > macFUSE"
+
+static bool directly_in_volumes(const char *path)
+{
+    return !strncmp(path, "/Volumes/", 9) && path[9] && !strchr(path + 9, '/');
+}
+
+static int run_in_background(int argc, char **argv, const char *mountpoint, bool fskit)
 {
     extern char **environ;
     char fdarg[16], **cargv;
@@ -179,14 +193,17 @@ static int run_in_background(int argc, char **argv, const char *mountpoint)
     }
     if (read(pipefd[0], &ok, 1) == 1 && ok == '0') {
         // The mount appears once the child's loop has answered FUSE_INIT; wait up to 10 s.
+        // With FSKit, macFUSE can still refuse after the child's mount call returned.
         for (int i = 0; i < 1000; i++) {
             if (is_mounted(mountpoint))
                 return 0;             // mounted; the child carries on
             if (waitpid(pid, &status, WNOHANG) == pid)
-                return 1;
+                break;
             usleep(10000);
         }
         fprintf(stderr, "unlatch-fuse: %s did not appear as a mount\n", mountpoint);
+        if (fskit)
+            fprintf(stderr, "unlatch-fuse: " FSKIT_HINT "\n");
         return 1;
     }
     waitpid(pid, &status, 0);         // it failed and has already said why
@@ -217,7 +234,7 @@ int main(int argc, char **argv)
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
-    const char *backend = "kext", *extra = NULL;
+    const char *backend = "auto", *extra = NULL;
     bool foreground = false, debug = false, want_ro = false, cache = true;
     int ch, ready_fd = -1, dev_fd = -1;
 
@@ -234,12 +251,13 @@ int main(int argc, char **argv)
         default: usage(); return ch == 'h' ? 0 : 2;
         }
     }
-    if (argc - optind != 2 || (strcmp(backend, "fskit") && strcmp(backend, "kext"))) {
+    if (argc - optind != 2 || (strcmp(backend, "auto") && strcmp(backend, "fskit") && strcmp(backend, "kext"))) {
         usage();
         return 2;
     }
     if (!foreground)
-        return run_in_background(argc, argv, argv[optind + 1]);
+        return run_in_background(argc, argv, argv[optind + 1],
+                                 strcmp(backend, "kext") && directly_in_volumes(argv[optind + 1]));
     uf_log_init();
     char source_raw[PATH_MAX];
     raw_path(argv[optind], source_raw, sizeof(source_raw));
@@ -252,6 +270,13 @@ int main(int argc, char **argv)
         snprintf(mountpoint, sizeof(mountpoint), "%s", argv[optind + 1]);
     else if (!realpath(argv[optind + 1], mountpoint)) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s", argv[optind + 1], strerror(errno));
+        return 1;
+    }
+    bool in_volumes = directly_in_volumes(mountpoint);
+    if (!strcmp(backend, "auto"))
+        backend = in_volumes ? "fskit" : "kext";
+    else if (!strcmp(backend, "fskit") && !in_volumes) {
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: the fskit backend mounts only directly under /Volumes", mountpoint);
         return 1;
     }
     // basename() may return a static buffer that later calls overwrite (libfuse's own use of
@@ -277,7 +302,7 @@ int main(int argc, char **argv)
     }
     if (p.state == UE_VOL_CORRUPT || p.state == UE_VOL_NOT_NTFS) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s (%s), not mounting", source, ue_vol_state_name(p.state), p.reason);
-        record_status(bsd_name, &p, true, false);
+        record_status(bsd_name, &p, true, NULL);
         file_io_close(&f);
         return 1;
     }
@@ -348,9 +373,11 @@ int main(int argc, char **argv)
         goto destroy;
     if (fuse_session_mount(se, mountpoint) != 0) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "mounting %s on %s failed (%s backend)", source, mountpoint, backend);
+        if (!strcmp(backend, "fskit"))
+            uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, FSKIT_HINT);
         goto signals;
     }
-    record_status(bsd_name, &p, fs.read_only, true);
+    record_status(bsd_name, &p, fs.read_only, mountpoint);
     uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "mounted %s on %s %s (%s, %s backend)", source, mountpoint,
            fs.read_only ? "read-only" : "read-write", ue_vol_state_name(p.state), backend);
     if (ready_fd >= 0) {              // tell the parent, then detach from its terminal
@@ -379,7 +406,7 @@ close:
         rc = 1;
     free(fs.rbuf);
     free(fs.nodes);
-    record_status(bsd_name, &p, fs.read_only, false);
+    record_status(bsd_name, &p, fs.read_only, NULL);
     file_io_close(&f);
     return rc;
 }

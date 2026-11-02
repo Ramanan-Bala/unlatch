@@ -21,6 +21,9 @@ public struct VolumeStatus: Codable, Equatable, Sendable {
     public var timestamp: Date
     /// The daemon's process ID while mounted (absent in records from before Step 17).
     public var pid: Int32?
+    /// Where the volume is mounted, while it is (absent before D-78). An FSKit mount's source is
+    /// "macfuse://<uuid>", so this is how Unlatch knows the mount is its own.
+    public var mountPoint: String?
 
     public init(bsdName: String, serial: String, label: String, state: State, reason: String,
                 readOnly: Bool, mounted: Bool, engineABI: Int, timestamp: Date = Date()) {

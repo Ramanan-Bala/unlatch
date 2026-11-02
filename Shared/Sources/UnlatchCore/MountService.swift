@@ -64,7 +64,7 @@ public actor MountService {
     /// by a daemon that died are cleaned up first (`reapDeadMounts`).
     public func list() -> [DiskInfo] {
         reapDeadMounts()
-        let mounts = Mount.table()
+        let mounts = Mount.table(status: statusStore)
         return DA.leafBSDNames().compactMap { name in
             DADiskCreateFromBSDName(kCFAllocatorDefault, session, name).flatMap { DA.info($0, mounts: mounts) }
         }
@@ -76,7 +76,7 @@ public actor MountService {
     @discardableResult
     public func reapDeadMounts() -> [String] {
         var reaped: [String] = []
-        for m in Mount.table() where m.type == "macfuse" && m.from.hasPrefix("unlatch@") {
+        for m in Mount.table(status: statusStore) where m.type == "macfuse" && m.from.hasPrefix("unlatch@") {
             let bsd = String(m.from.dropFirst("unlatch@".count))
             // Records claiming this disk is mounted (timestamps have 1 s resolution, so a record
             // of an earlier volume on the same diskN can tie with the current one).
@@ -98,7 +98,7 @@ public actor MountService {
     public func disk(_ bsdName: String) throws -> DiskInfo {
         let name = bsdName.hasPrefix("/dev/") ? String(bsdName.dropFirst(5)) : bsdName
         guard let d = DADiskCreateFromBSDName(kCFAllocatorDefault, session, name) else { throw MountError.notFound(name) }
-        guard let info = DA.info(d, mounts: Mount.table()) else {
+        guard let info = DA.info(d, mounts: Mount.table(status: statusStore)) else {
             throw DADiskCopyDescription(d) == nil ? MountError.notFound(name) : MountError.notNTFS(name)
         }
         return info

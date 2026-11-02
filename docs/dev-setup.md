@@ -4,14 +4,16 @@ Never use a drive that holds real data. Use image files (`Scripts/make-image.sh`
 
 Unlatch mounts through **macFUSE** (D-39): macFUSE forwards file system calls to the `unlatch-fuse` daemon, which runs the engine. Nothing of ours needs signing. macFUSE has two backends:
 
-- **kext** (the default, D-43): macFUSE's kernel extension. Mature, mounts anywhere, honours read-only. It must be allowed once: on Apple Silicon, Reduced Security in Recovery, then approval in System Settings → Privacy & Security, then a restart.
-- **fskit** (`--backend fskit`): no kernel extension, mounts only under `/Volumes`. On macOS 27 its uncached reads of 256 KiB or more fail (D-42, `Tests/Fuse/macfuse-repro/`), so don't use it for real data yet.
+- **fskit** (what the app and CLI use, D-78): no kernel extension, so users never visit Recovery; they only turn on macFUSE's file system extension. It mounts only directly under `/Volumes`. macFUSE 5.5.0 loses `fuse_reply_buf` replies to reads of 64 KiB or more (macfuse/macfuse#1225, fixed in 5.6.0), so `unlatch-fuse` replies with `fuse_reply_data`.
+- **kext** (`--backend kext`): macFUSE's kernel extension. Mounts anywhere, so the test and benchmark scripts use it for mount points outside `/Volumes`. It must be allowed once: on Apple Silicon, Reduced Security in Recovery, then approval in System Settings → Privacy & Security, then a restart.
+
+`unlatch-fuse`'s default, `--backend auto`, is fskit for a mount point directly under `/Volumes` and kext anywhere else.
 
 ## 1. Install and enable macFUSE (once per machine)
 
 1. Install macFUSE 5.5 or later: `brew install --cask macfuse`, or the installer from macfuse.github.io.
-2. For the kext backend, allow the kernel extension as the installer describes. Check with `kmutil showloaded | grep macfuse` after the first mount.
-3. For the FSKit backend, enable its file system extension: System Settings → General → Login Items & Extensions → File System Extensions → **macFUSE**. If the switch is greyed out, view the list "By Category". Quick mount/unmount cycles can switch it off again (D-42).
+2. Enable its file system extension (FSKit backend): System Settings → General → Login Items & Extensions → File System Extensions → **macFUSE**. If the switch is greyed out, view the list "By Category". With 5.4.0, quick mount/unmount cycles switched it off again (D-42); 15 quick cycles with 5.5.0 did not.
+3. Only for test and benchmark mounts outside `/Volumes`: allow the kernel extension as the installer describes. Check with `kmutil showloaded | grep macfuse` after the first mount.
 
 Allowing the kext and enabling extensions are security settings, so a person always does them.
 

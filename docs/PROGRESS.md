@@ -690,13 +690,45 @@ UNLATCH_INTEGRATION=1 swift test --package-path Shared     # macFUSERelease, mac
 CLI/.build/debug/unlatch setup --no-helper                   # on a Mac that has everything: three "ok" steps
 ```
 
+### Follow-up: FSKit backend by default; no kernel extension (D-78) — done 2026-11-02
+
+- Cause of D-42 found: macfuse/macfuse#1225 (FSKit loses `fuse_reply_buf` replies to reads of 64 KiB or more; fixed in macFUSE 5.6.0). Reproduced with `Tests/Fuse/macfuse-repro/hello.c` on macFUSE 5.5.0 (fails from 64 KiB, `max_read` and `iosize` are ignored); `fuse_reply_data` returns the right bytes. `Fuse/ops.c` sends every byte reply (read, readdir, getxattr, listxattr) through `reply_bytes()` → `fuse_reply_data`.
+- Symlinks read back empty over FSKit because their `st_size` was 0: lookup, getattr and setattr replies now carry the target's length (`fill_link_size`; not from readdir, which runs inside an engine call).
+- `unlatch-fuse --backend auto|fskit|kext`, default auto: fskit directly under `/Volumes`, kext elsewhere; `--backend fskit` elsewhere is refused with a message. A failed FSKit mount prints how to fix it as its last line (the CLI and app show it).
+- FSKit mounts show `macfuse://<uuid>`: the status record gains `mountPoint`, and `Mount.table()` maps a matching mount to `unlatch@<bsd>`, so list, status, unmount and dead-mount reaping work (they failed in the integration tests before).
+- Setup: `MacFUSE.approvalSteps` are the Login Items & Extensions steps; the app's row is "macFUSE file system extension on" (marked by the self-test, since `FSClient` does not list macFUSE's module) with "Open Login Items & Extensions"; `unlatch setup` offers to open that pane; `doctor` prints the step instead of checking the kext. Minimum macFUSE 5.5.0. README, install, troubleshooting, cli, dev-setup, AGENTS, Homebrew caveats and the DMG's Read Me First updated.
+- `Tests/Fuse/interrupt.sh` takes `--backend`.
+
+```sh
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+swift test --package-path Shared && swift test --package-path CLI
+defaults write io.github.ramanan-bala.Unlatch automount.enabled -bool false   # the installed app races attached-disk tests
+UNLATCH_INTEGRATION=1 swift test --package-path Shared       # 14 passed (mounts through FSKit)
+Tests/Fuse/rw-suite.sh --runs 2 --backend fskit               # passed; also with --disk, and the kext backend
+Tests/Fuse/interrupt.sh --backend fskit kill                  # passed (mount stays listed after SIGKILL until umount -f)
+defaults delete io.github.ramanan-bala.Unlatch automount.enabled
+# read-only compare (golden images decompressed with zstd -d): content-ntfs3g and dirty-ntfs3g pass
+build/DerivedData/Build/Products/Debug/unlatch-fuse -r build/c.img /Volumes/C && Tests/Fuse/check-readonly.sh build/c.img /Volumes/C
+```
+
+Surprises:
+- The installed Unlatch.app (auto-mount on) mounted a freshly attached test disk at the same moment as `unlatch mount`: two daemons had disk6 read-write at once (carry-over below).
+- macFUSE's FSKit extension read "not found", then "not enabled", for about a minute after macFUSE's background service restarted (once, during these tests), and then worked again with no change in System Settings.
+- With FSKit, a SIGKILLed daemon's mount stays listed (with the kext it disappears); `reapDeadMounts` removes it.
+- `diskutil unmount` (Finder's path) unmounts FSKit mounts. 15 quick mount/unmount cycles did not switch the extension off.
+- `windows-content.img`: `names/éte-nfd.txt` is missing from listings on both backends (pre-existing; carry-over).
+
 ## Carry-overs
 
 - **Helper Full Disk Access on the app (owner's request, D-74):** try registering the helper as an `SMAppService` daemon, a bare executable in `Unlatch.app/Contents/MacOS` with its plist in `Contents/Library/LaunchDaemons`, so that the grant given to "Unlatch" covers it. Undocumented; check that SMAppService registers an ad-hoc-signed app at all; test with a disposable USB stick (the only removable disk here holds real data). Keep the current helper as the fallback.
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07:** Windows-made Fast Startup, dirty and fragmented-MFT images are still wanted (`Tests/Images/README.md`).
-- **Owner:** report the macFUSE FSKit read bug upstream with `Tests/Fuse/macfuse-repro/` (public post; needs the owner's OK). When fixed, rerun Step 08's checks with `--backend fskit` and switch the default back (D-43).
+- **Two mounts of one disk (data integrity):** the app's auto-mount and `unlatch mount` both mounted disk6 read-write within 0.1 s (2026-11-02). `unlatch-fuse` should take an exclusive lock on the device (or MountService a per-disk lock) and refuse a second mount.
+- **NFD name on the Windows-made image:** `names/éte-nfd.txt` in `windows-content.img` is missing from mount listings (kext and FSKit alike), so `check-readonly.sh` fails there.
+- **FSKit transient failure (D-78):** after macFUSE's background service restarts, mounts fail for about a minute ("not found"/"not enabled"). Consider a retry with backoff in `MountService.mount` for auto-mounts.
+- **Benchmarks (D-78):** users now mount through FSKit; `Bench/baselines.sh` mounts under `build/bench/m` (kext). Add an FSKit run under `/Volumes` and refresh the README charts.
+- **macFUSE 5.6.0:** when released, rerun the FSKit suites; `reply_bytes()` can stay.
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.
 - **Upstream:** send patches 0001 and 0002 to tuxera/ntfs-3g (a public PR or issue; needs the owner's OK).
 - **Scripts (any step):** `hdiutil attach/detach` are deprecated. Move `attach-image.sh` to `diskutil image attach --noMount` if hdiutil goes away.

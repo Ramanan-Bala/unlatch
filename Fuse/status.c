@@ -57,7 +57,7 @@ static int mkdirs(char *path)
     return 0;
 }
 
-int status_write(const char *bsd_name, const ue_probe_t *p, bool read_only, bool mounted)
+int status_write(const char *bsd_name, const ue_probe_t *p, bool read_only, const char *mount_point)
 {
     const char *home = getenv("HOME");
     char dir[1024], path[1100], tmp[1100], when[32];
@@ -82,9 +82,15 @@ int status_write(const char *bsd_name, const ue_probe_t *p, bool read_only, bool
     put_string(f, bsd_name);
     fprintf(f, ",\n  \"engineABI\" : %d,\n  \"label\" : ", UE_ABI_VERSION);
     put_string(f, p->label);
-    // pid: the app and CLI force-unmount a mount whose daemon is gone (Step 17, D-68).
+    // mountPoint: an FSKit mount shows "macfuse://<uuid>", not our fsname, so the app and CLI
+    // find their mounts by mount point (D-78). pid: they force-unmount a mount whose daemon is
+    // gone (Step 17, D-68).
+    if (mount_point) {
+        fprintf(f, ",\n  \"mountPoint\" : ");
+        put_string(f, mount_point);
+    }
     fprintf(f, ",\n  \"mounted\" : %s,\n  \"pid\" : %d,\n  \"readOnly\" : %s,\n  \"reason\" : ",
-            mounted ? "true" : "false", (int)getpid(), read_only ? "true" : "false");
+            mount_point ? "true" : "false", (int)getpid(), read_only ? "true" : "false");
     put_string(f, p->reason);
     fprintf(f, ",\n  \"serial\" : \"%016llX\",\n  \"state\" : \"%s\",\n  \"timestamp\" : \"%s\",\n"
                "  \"unlatchVersion\" : \"%s\"\n}\n",

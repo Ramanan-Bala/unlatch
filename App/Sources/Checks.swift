@@ -11,7 +11,7 @@ final class Checks {
 
     var macOS: State = .unknown
     var macFUSE: State = .unknown
-    var kext: State = .unknown
+    var fsExtension: State = .unknown
     var helper: State = .unknown
     var selfTest: State = .unknown
 
@@ -38,22 +38,8 @@ final class Checks {
         } else {
             macFUSE = .failed("Unlatch mounts disks through macFUSE (free, installed separately).")
         }
-        kext = Self.kextLoaded() ? .ok : .failed("If you allowed macFUSE before, it loads at the first mount. Otherwise, allow it once:")
         helper = HelperOpener.installed ? .ok : .failed("Needed for real disks, not for disk images.")
         if macFUSE == .ok, selfTest != .ok { await runSelfTest() }
-    }
-
-    static func kextLoaded() -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/kmutil")
-        p.arguments = ["showloaded", "--list-only"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return false }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return String(decoding: data, as: UTF8.self).contains("io.macfuse.filesystems.macfuse")
     }
 
     /// Downloads macFUSE from its GitHub releases, checks the checksum, signature and
@@ -80,15 +66,20 @@ final class Checks {
         await run(model: model)
     }
 
-    static func openPrivacySecurity() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+    /// System Settings > General > Login Items & Extensions, where macFUSE's file system
+    /// extension is turned on (D-78).
+    static func openExtensionSettings() {
+        NSWorkspace.shared.open(MacFUSE.extensionSettingsURL)
     }
 
     static let approvalHelp = URL(string: "https://github.com/Ramanan-Bala/unlatch#one-time-setup")!
 
-    /// Mounts the bundled tiny NTFS image read-only, reads its marker file, and ejects it.
+    /// Mounts the bundled tiny NTFS image read-only, reads its marker file, and ejects it. FSKit
+    /// cannot tell whether macFUSE's extension is on (FSClient does not list it), so a passing
+    /// self-test is what marks it on.
     func runSelfTest() async {
         selfTest = .running
+        if fsExtension != .ok { fsExtension = .running }
         guard let img = Bundle.main.url(forResource: "selftest", withExtension: "img") else {
             selfTest = .failed("The test image is missing from the app.")
             return
@@ -101,9 +92,10 @@ final class Checks {
             let marker = try String(contentsOfFile: r.mountPoint + "/unlatch-selftest.txt", encoding: .utf8)
             try await service.eject(bsd)
             selfTest = marker.hasPrefix("Unlatch self-test") ? .ok : .failed("The test volume read back wrong.")
-            kext = Self.kextLoaded() ? .ok : kext
+            fsExtension = selfTest == .ok ? .ok : .failed("Turn it on once:")
         } catch {
             selfTest = .failed(error.localizedDescription)
+            fsExtension = .failed("If it is off, the self-test cannot mount. Turn it on once:")
         }
     }
 

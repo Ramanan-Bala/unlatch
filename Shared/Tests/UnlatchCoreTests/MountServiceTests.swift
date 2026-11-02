@@ -49,7 +49,7 @@ import Testing
     #expect(MountService.mountPoint(for: d) == "/Volumes/a:b")
 }
 
-// MARK: integration (attached images; needs macFUSE's kext and a built unlatch-fuse)
+// MARK: integration (attached images; needs macFUSE's file system extension on and a built unlatch-fuse)
 
 private let integration = ProcessInfo.processInfo.environment["UNLATCH_INTEGRATION"] == "1"
 

@@ -67,8 +67,8 @@ Unlatch $version: read-write NTFS for macOS 27+ on Apple Silicon.
 2. Open it: right-click Unlatch in Applications > Open > Open (it is not signed with an Apple
    Developer ID). If there is no Open button: System Settings > Privacy & Security > Open Anyway.
 3. The setup window installs macFUSE for you (from macFUSE's own releases, signature checked),
-   explains the one-time approval of macFUSE's kernel extension (Recovery > Reduced Security,
-   then Allow in Privacy & Security), and installs the helper real disks need.
+   shows how to turn on macFUSE's file system extension (System Settings > General > Login
+   Items & Extensions; no Recovery, no restart), and installs the helper real disks need.
 
 Step by step: https://github.com/Ramanan-Bala/unlatch#one-time-setup
 Licenses and the source offer are in the Notices folder. Unlatch does not include macFUSE.

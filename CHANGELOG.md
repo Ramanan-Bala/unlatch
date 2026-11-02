@@ -4,6 +4,14 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+- **No more kernel extension, Recovery or restart.** Unlatch mounts through macFUSE's FSKit backend. The one-time setup step is now turning on macFUSE in System Settings > General > Login Items & Extensions > File System Extensions. If you allowed macFUSE's kernel extension for an earlier version, Unlatch no longer needs it.
+- Needs macFUSE 5.5 or later; the setup window and `unlatch setup` offer the update.
+- In our tests, large reads and writes are faster than through the kernel extension.
+
+### Fixed
+- Symbolic links report their target's length as their size, as POSIX expects.
+
 ## [1.0.0-beta.4] - 2026-11-02
 
 ### Fixed

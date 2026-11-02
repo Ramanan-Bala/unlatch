@@ -31,7 +31,7 @@ The README's [one-time setup](../README.md#one-time-setup) has every step. In sh
 
 1. **Open the app anyway** (right-click > Open; it is not signed with a Developer ID).
 2. **Install macFUSE** with the setup window's button, or `unlatch setup`. Unlatch fetches the newest release from github.com/macfuse/macfuse, compares its SHA-256 with the list macFUSE publishes next to it, requires the package to be signed by macFUSE's developer (team 3T5GSNBU6W) and notarized by Apple, and runs Apple's `installer` with your password. Prefer to do it yourself? Install it from https://macfuse.github.io or with `brew install --cask macfuse`; Unlatch then finds it.
-3. **Allow macFUSE's kernel extension** once: Recovery > Startup Security Utility > Reduced Security with "Allow user management of kernel extensions from identified developers", then System Settings > Privacy & Security > Allow, and restart. Only Apple can show those screens, so Unlatch shows the steps and opens the right pane.
+3. **Turn on macFUSE's file system extension** once: System Settings > General > Login Items & Extensions > File System Extensions (info button) > **macFUSE**. No kernel extension, no Recovery, no restart. Only you can switch it on, so Unlatch shows the steps and opens the pane.
 4. **Real disks: the helper** (setup window or `unlatch setup`; password), then **Full Disk Access** for `/Library/PrivilegedHelperTools/Unlatch Helper`.
 5. **Self-test**: the setup window mounts a tiny built-in volume and reads it back.
 

@@ -3,7 +3,7 @@
 # Interruption tests (plan Step 17): a copy onto an attached disk is cut off part way, then
 # the volume is checked the way the next mount would see it.
 #
-#   Tests/Fuse/interrupt.sh [kill|detach ...]      default: both
+#   Tests/Fuse/interrupt.sh [--backend kext|fskit] [kill|detach ...]      default: kext; both
 #
 #   kill     SIGKILL the daemon mid-copy (a crash): the mount must go away, the next probe
 #            must not say CORRUPT, ntfsfix -n must accept the volume, and a read-write mount
@@ -17,9 +17,11 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 products="$root/build/DerivedData/Build/Products/Debug"
 fuse="$products/unlatch-fuse" engine="$products/unlatch-engine" ntfsfix="$root/build/ntfs3g/bin/ntfsfix"
 work="$root/build/interrupt"
-mnt="$work/mnt"
 src="$root/Engine/vendor/ntfs-3g"
-mkdir -p "$mnt"
+backend=kext
+[ "${1:-}" = --backend ] && { backend="$2"; shift 2; }
+if [ "$backend" = fskit ]; then mnt=/Volumes/UnlatchINTR; else mnt="$work/mnt"; fi
+mkdir -p "$work"; [ "$backend" = fskit ] || mkdir -p "$mnt"
 fails=0
 
 note() { printf '  %-10s %s\n' "$1" "$2"; }
@@ -35,7 +37,7 @@ check_after() {         # scenario, disk; the image is attached as disk, nothing
     else
         note "$name" "FAIL: ntfsfix -n: $(tail -1 "$work/fix.txt")"; rc=1
     fi
-    if "$fuse" "/dev/$disk" "$mnt" 2>/dev/null; then
+    if "$fuse" --backend "$backend" "/dev/$disk" "$mnt" 2>/dev/null; then
         local n; n=$(find "$mnt/copy" -type f 2>/dev/null | wc -l | tr -d ' ')
         note "$name" "remounted ($(mount | grep " on $mnt " | grep -q read-only && echo read-only || echo read-write)); $n files of the copy present"
         cp -R "$src/include" "$mnt/after" && diff -r "$src/include" "$mnt/after" > /dev/null \
@@ -60,11 +62,11 @@ scenario() {
     rm -f "$img"
     (cd "$work" && "$root/Scripts/make-image.sh" "$name" 1g INTR > /dev/null)
     disk=$("$root/Scripts/attach-image.sh" "$img" 2>/dev/null)
-    "$fuse" "/dev/$disk" "$mnt" 2>/dev/null || { note "$name" "FAIL: mount"; return 1; }
+    "$fuse" --backend "$backend" "/dev/$disk" "$mnt" 2>/dev/null || { note "$name" "FAIL: mount"; return 1; }
     mkdir -p "$mnt/copy"
     pid=$(start_copy)
     sleep 3                 # part way: some files complete and written back, some not
-    daemon=$(pgrep -f "unlatch-fuse -f --ready-fd [0-9]+ /dev/$disk ")
+    daemon=$(pgrep -f "unlatch-fuse -f --ready-fd [0-9]+ .*/dev/$disk ")
     case "$name" in
         kill)
             kill -9 "$daemon"
@@ -95,5 +97,5 @@ scenario() {
 }
 
 kinds=("$@"); [ ${#kinds[@]} -gt 0 ] || kinds=(kill detach)
-for k in "${kinds[@]}"; do echo "interrupt: $k"; scenario "$k"; done
+for k in "${kinds[@]}"; do echo "interrupt: $k ($backend backend)"; scenario "$k"; done
 [ $fails = 0 ] && echo "interrupt: passed" || { echo "interrupt: FAILED"; exit 1; }

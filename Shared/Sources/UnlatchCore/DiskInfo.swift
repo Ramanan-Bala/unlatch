@@ -96,7 +96,21 @@ struct Mount: Sendable {
     let on: String
     let type: String
 
-    static func table() -> [Mount] {
+    /// The mount table, with Unlatch's FSKit mounts named like its kext mounts. The kext shows
+    /// unlatch-fuse's fsname, "unlatch@<bsd>"; FSKit shows "macfuse://<uuid>", so those are
+    /// matched to the newest mounted status record with the same mount point (D-78).
+    static func table(status: StatusStore = StatusStore()) -> [Mount] {
+        let raw = rawTable()
+        guard raw.contains(where: { $0.type == "macfuse" && !$0.from.hasPrefix("unlatch@") }) else { return raw }
+        let records = status.all().filter { $0.mounted && $0.mountPoint != nil }
+        return raw.map { m in
+            guard m.type == "macfuse", !m.from.hasPrefix("unlatch@"),
+                  let r = records.first(where: { $0.mountPoint == m.on }) else { return m }
+            return Mount(from: "unlatch@\(r.bsdName)", on: m.on, type: m.type)
+        }
+    }
+
+    static func rawTable() -> [Mount] {
         var buf: UnsafeMutablePointer<statfs>?
         let n = getmntinfo(&buf, MNT_NOWAIT)
         guard n > 0, let buf else { return [] }
