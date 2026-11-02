@@ -879,11 +879,12 @@ UNLATCH_FUSE=... unlatch mount diskN; unlatch mount --mark-checked diskN; unlatc
 
 Not checked: the app's alert and menu item by hand (built only).
 
+Resolved: the app "found not running" twice during the real-disk tests had been quit by the owner from its menu; no crash. Carry-over removed.
+
 Owner's report after beta.9: right after Mark as Checked the badge said "Read-write, unchecked" and the menu offered it again (the status record kept the probe's DIRTY). The daemon now records the mount as CLEAN, "marked as checked"; `unlatch status` shows it at once, and the disk probes clean after the eject.
 
 ## Carry-overs
 
-- **The Unlatch app stops (2026-11-02):** twice during the real-disk tests the app was not running, with no crash report (started again at 18:29, gone before 18:56). Find out why: `/usr/bin/log show --predicate 'process == "Unlatch"'`, launchd, or a quit from the menu.
 - **Write-back order after a crash:** a SIGKILL mid-`cp -R` left directories whose MFT records point at index blocks that were never written. The page cache writes dirty pages back sorted by offset (D-62). Writing index and data blocks before the MFT records that point at them would shrink the damage. The dirty mark (D-86) already makes it safe (read-only until chkdsk).
 
 - **Audit item 10, lock files (2026-11-02):** the D-81 locks are in a world-writable folder, so another local user can hold a volume's lock, and two disks with one serial (a clone) cannot both be mounted read-write. Not changed: keying by device name would let an image and its attached device both be mounted read-write (what D-81 prevents), and a root-owned folder needs the helper to create the lock files (a new helper command). Decide whether shared Macs matter enough for that.
