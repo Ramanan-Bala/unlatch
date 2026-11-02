@@ -111,12 +111,12 @@ final class AppModel {
 
     // MARK: actions
 
-    func mount(_ bsdName: String, readOnly: Bool, automatic: Bool = false) async {
+    func mount(_ bsdName: String, readOnly: Bool, automatic: Bool = false, dirtyReadWrite: Bool = false) async {
         guard let service, !busy.contains(bsdName) else { return }
         busy.insert(bsdName)
         defer { busy.remove(bsdName) }
         do {
-            let r = try await service.mount(bsdName, readOnly: readOnly)
+            let r = try await service.mount(bsdName, readOnly: readOnly, dirtyReadWrite: dirtyReadWrite)
             let name = (try? await service.disk(bsdName).label).flatMap { $0.isEmpty ? nil : $0 } ?? bsdName
             if r.readOnly && !readOnly {
                 let why = r.status?.reason ?? "it could not be opened for writing"
@@ -136,6 +136,28 @@ final class AppModel {
             }
         }
         await refresh()
+    }
+
+    /// Mounts a volume marked dirty read-write after the user confirms the risk (D-90).
+    func mountDirtyReadWrite(_ v: Volume) async {
+        let name = v.disk.label.isEmpty ? v.disk.bsdName : v.disk.label
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Write to \(name) without checking it?"
+        alert.informativeText = """
+            This disk was not ejected cleanly, so some of its records may be half-written. Writing to it \
+            before it is checked can damage files on it, including files you do not touch.
+
+            Copy anything important off it first. The disk stays marked as needing a check, so Windows \
+            will still offer to check it.
+            """
+        alert.addButton(withTitle: "Cancel")
+        let write = alert.addButton(withTitle: "Mount Read-Write")
+        write.hasDestructiveAction = true
+        NSApp.activate()
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        log.notice("\(v.disk.bsdName, privacy: .public): mounting read-write although marked dirty, as confirmed")
+        await mount(v.disk.bsdName, readOnly: false, dirtyReadWrite: true)
     }
 
     func unmount(_ bsdName: String) async {

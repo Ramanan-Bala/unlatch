@@ -113,19 +113,25 @@ public actor MountService {
 
     /// Mounts with unlatch-fuse under /Volumes. If Apple's driver had the volume, it is
     /// unmounted first and mounted again when Unlatch fails, so the user never loses access.
+    /// `dirtyReadWrite` mounts a volume marked dirty read-write anyway, at the user's explicit
+    /// request (D-90); a read-only Unlatch mount of it is replaced.
     @discardableResult
-    public func mount(_ bsdName: String, readOnly: Bool = false) async throws -> Result {
+    public func mount(_ bsdName: String, readOnly: Bool = false, dirtyReadWrite: Bool = false) async throws -> Result {
         let key = bsdName.hasPrefix("/dev/") ? String(bsdName.dropFirst(5)) : bsdName
         if let running = mounting[key] { return try await running.value }
-        let task = Task { try await self.mountNow(key, readOnly: readOnly) }
+        let task = Task { try await self.mountNow(key, readOnly: readOnly, dirtyReadWrite: dirtyReadWrite && !readOnly) }
         mounting[key] = task
         defer { mounting[key] = nil }
         return try await task.value
     }
 
-    private func mountNow(_ bsdName: String, readOnly: Bool) async throws -> Result {
+    private func mountNow(_ bsdName: String, readOnly: Bool, dirtyReadWrite: Bool) async throws -> Result {
         guard Self.macFUSEInstalled else { throw MountError.macFUSEMissing }
         var info = try disk(bsdName)
+        if dirtyReadWrite, info.owner == .unlatch, status(info.bsdName)?.readOnly ?? true {
+            try await unmount(info.bsdName)
+            info = try disk(bsdName)
+        }
         if info.owner == .unlatch, let p = info.mountPoint {
             // Already ours: report the mode it has, not the one asked for.
             let st = status(info.bsdName)
@@ -148,7 +154,8 @@ public actor MountService {
             // used again (D-84).
             for (attempt, pause) in Self.fskitRetryPauses.enumerated() {
                 do {
-                    try await runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly)
+                    try await runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly,
+                                        dirtyReadWrite: dirtyReadWrite)
                     break
                 } catch MountError.daemonFailed(let why) where Self.isTransientRefusal(why) && attempt < Self.fskitRetryPauses.count - 1 {
                     log.notice("macFUSE did not take \(info.bsdName, privacy: .public); trying again in \(pause, privacy: .public) s")
@@ -210,17 +217,19 @@ public actor MountService {
     /// Runs `unlatch-fuse --fd 3 --backend B [-r] <device> <mountpoint>`; it returns once mounted.
     /// The wait (up to 10 s or more on a slow disk) runs off the actor, so list and status
     /// calls are answered meanwhile.
-    private func runDaemon(fd: Int32, device: String, mountPoint: String, readOnly: Bool) async throws {
+    private func runDaemon(fd: Int32, device: String, mountPoint: String, readOnly: Bool, dirtyReadWrite: Bool) async throws {
         let daemon = self.daemon, backend = MacFUSE.preferredBackend.rawValue
         try await Task.detached {
-            try Self.spawnDaemon(daemon, backend: backend, fd: fd, device: device, mountPoint: mountPoint, readOnly: readOnly)
+            try Self.spawnDaemon(daemon, backend: backend, fd: fd, device: device, mountPoint: mountPoint, readOnly: readOnly,
+                                 dirtyReadWrite: dirtyReadWrite)
         }.value
     }
 
     private static func spawnDaemon(_ daemon: URL, backend: String, fd: Int32, device: String, mountPoint: String,
-                                    readOnly: Bool) throws {
+                                    readOnly: Bool, dirtyReadWrite: Bool) throws {
         var args = [daemon.path, "--fd", "3", "--backend", backend]
         if readOnly { args.append("-r") }
+        if dirtyReadWrite { args.append("--dirty-rw") }
         args += [device, mountPoint]
         var errPipe: [Int32] = [0, 0]
         guard pipe(&errPipe) == 0 else { throw MountError.daemonFailed("pipe: \(String(cString: strerror(errno)))") }

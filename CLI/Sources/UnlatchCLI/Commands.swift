@@ -123,13 +123,22 @@ struct MountCmd: AsyncParsableCommand {
         commandName: "mount", abstract: "Mount a volume with Unlatch (read-write when it is safe).")
     @Argument(help: "The volume.") var disk: String
     @Flag(name: .shortAndLong, help: "Mount read-only.") var readOnly = false
+    @Flag(help: ArgumentHelp("Mount read-write even though the volume is marked dirty (risky; see docs/read-only.md).",
+                             discussion: "Writing to a disk that was cut off mid-write can damage files on it."))
+    var dirtyRw = false
     @Flag(help: "JSON output (schema 1).") var json = false
 
     func run() async throws {
         let s = try service()
         let d = try resolve(disk, in: await s.list())
+        if dirtyRw && !readOnly {
+            FileHandle.standardError.write(Data(("unlatch: warning: writing to a disk marked dirty can damage files on it. "
+                + "It stays marked, so Windows still checks it.\n").utf8))
+        }
         let r: MountService.Result
-        do { r = try await s.mount(d.bsdName, readOnly: readOnly) } catch { throw fail(error.localizedDescription, Exit.of(error)) }
+        do { r = try await s.mount(d.bsdName, readOnly: readOnly, dirtyReadWrite: dirtyRw) } catch {
+            throw fail(error.localizedDescription, Exit.of(error))
+        }
         let forced = r.readOnly && !readOnly
         if json {
             print(JSONOut.encode(JSONOut.Mounted(bsdName: d.bsdName, mountPoint: r.mountPoint, readOnly: r.readOnly,
@@ -141,6 +150,9 @@ struct MountCmd: AsyncParsableCommand {
             fflush(stdout)
             let why = r.status.map { "\($0.state.rawValue): \($0.reason)" } ?? "the volume could not be opened for writing"
             FileHandle.standardError.write(Data("unlatch: read-only because \(why)\n".utf8))
+            if r.status?.state == .dirty && !dirtyRw {
+                FileHandle.standardError.write(Data("unlatch: to write anyway (risky): unlatch mount --dirty-rw \(d.bsdName)\n".utf8))
+            }
             throw CLIExit(code: .readOnly)
         }
     }

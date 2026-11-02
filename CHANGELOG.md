@@ -4,6 +4,9 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+- **Mount Read-Write Anyway** for a disk marked as needing a check, for people without a Windows PC to run chkdsk: in the disk's ⋯ menu, after a warning, or `unlatch mount --dirty-rw <disk>`. Writing to such a disk risks damaging files on it; the disk stays marked, so Windows still checks it later. Hibernated disks and disks with unfinished Windows transactions stay read-only. See "Without Windows" in docs/read-only.md.
+
 ## [1.0.0-beta.7] - 2026-11-02
 
 ### Fixed

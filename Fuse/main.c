@@ -49,7 +49,10 @@ static void usage(void)
             "                under /Volumes), kext (macFUSE's kernel extension, allowed once in\n"
             "                Recovery), or auto (default: fskit under /Volumes, else kext)\n"
             "  -o opt,...    extra macFUSE mount options\n"
-            "  --no-cache    no engine page cache (for comparisons)\n");
+            "  --no-cache    no engine page cache (for comparisons)\n"
+            "  --dirty-rw    mount read-write even though the volume is marked dirty (only that\n"
+            "                state; hibernated, unclean or damaged volumes stay read-only). The\n"
+            "                mark stays, so Windows still checks the disk (D-90)\n");
 }
 
 // Dirty cached pages older than this are written back, so a crash or unplug loses at most
@@ -333,11 +336,12 @@ int main(int argc, char **argv)
         { "fd", required_argument, NULL, 'D' },
         { "ready-fd", required_argument, NULL, 'F' },
         { "no-cache", no_argument, NULL, 'C' },
+        { "dirty-rw", no_argument, NULL, 'W' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     const char *backend = "auto", *extra = NULL;
-    bool foreground = false, debug = false, want_ro = false, cache = true;
+    bool foreground = false, debug = false, want_ro = false, cache = true, dirty_rw = false;
     int ch, ready_fd = -1, dev_fd = -1;
 
     while ((ch = getopt_long(argc, argv, "fdro:h", longopts, NULL)) != -1) {
@@ -350,6 +354,7 @@ int main(int argc, char **argv)
         case 'F': ready_fd = atoi(optarg); break;
         case 'D': dev_fd = atoi(optarg); break;
         case 'C': cache = false; break;
+        case 'W': dirty_rw = true; break;
         default: usage(); return ch == 'h' ? 0 : 2;
         }
     }
@@ -419,7 +424,13 @@ int main(int argc, char **argv)
         fs.uid = (uid_t)strtoul(getenv("SUDO_UID"), NULL, 10);
         fs.gid = (gid_t)strtoul(getenv("SUDO_GID"), NULL, 10);
     }
-    if (p.state != UE_VOL_CLEAN) {
+    // --dirty-rw: the user accepted the risk of writing to an unchecked volume. Only DIRTY: a
+    // hibernated volume or an unfinished journal holds Windows' own changes, which writing loses.
+    bool forced = p.state == UE_VOL_DIRTY && dirty_rw && !want_ro;
+    if (forced)
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s (%s); read-write anyway, as asked (--dirty-rw)", source,
+               ue_vol_state_name(p.state), p.reason);
+    if (p.state != UE_VOL_CLEAN && !forced) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
     } else if (!want_ro && dev_fd >= 0) {
         if (fd_writable)

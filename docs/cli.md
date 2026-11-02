@@ -2,7 +2,7 @@
 
 ```
 unlatch list [--json]                      NTFS volumes and who has them mounted
-unlatch mount <disk> [-r|--read-only] [--json]
+unlatch mount <disk> [-r|--read-only] [--dirty-rw] [--json]
 unlatch unmount <disk> [--force]
 unlatch unmount --all [--force]            every volume Unlatch has mounted (before an update)
 unlatch eject <disk> [--force]             unmount, then eject the whole disk
@@ -16,7 +16,7 @@ sudo unlatch uninstall-helper
 
 `<disk>` is a BSD name (`disk6s1`), a device path (`/dev/disk6s1` or `/dev/rdisk6s1`), a mount path (`/Volumes/Seagate`), or a volume label (case-insensitive; must name one volume).
 
-`mount` mounts at `/Volumes/<label>`. It is read-write only when the volume is clean and nothing forces read-only. If Apple's read-only NTFS driver had the volume, Unlatch unmounts it first and gives it back if mounting fails.
+`mount` mounts at `/Volumes/<label>`. It is read-write only when the volume is clean and nothing forces read-only. `--dirty-rw` mounts a volume that is marked dirty read-write anyway (risky; it replaces a read-only Unlatch mount of it, and the mark stays; [read-only.md](read-only.md#without-windows)). Hibernated, unclean and damaged volumes stay read-only with it. If Apple's read-only NTFS driver had the volume, Unlatch unmounts it first and gives it back if mounting fails.
 
 ## Exit codes
 

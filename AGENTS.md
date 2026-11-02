@@ -20,7 +20,7 @@ Each step updates this list.
 | Check tools, build libntfs-3g if missing, generate `Unlatch.xcodeproj` | `Scripts/bootstrap.sh` |
 | Rebuild libntfs-3g and ntfsprogs into `build/ntfs3g/` | `Scripts/build-ntfs3g.sh` |
 | Build app, extension, engine, harness | `xcodebuild -scheme Unlatch build` |
-| Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; the default backend is fskit directly under `/Volumes`, kext elsewhere) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--no-cache] [--backend auto\|fskit\|kext] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
+| Mount an image through macFUSE (read-write when CLEAN; `-r` forces read-only; the default backend is fskit directly under `/Volumes`, kext elsewhere) | `build/DerivedData/Build/Products/Debug/unlatch-fuse [-f] [-d] [-r] [--dirty-rw] [--no-cache] [--backend auto\|fskit\|kext] <img-or-/dev/diskN> <dir>`; `umount <dir>` |
 | Interruption tests (kill the daemon mid-copy, force-eject) | `Tests/Fuse/interrupt.sh [--backend kext\|fskit] [kill\|detach]` |
 | Test matrix (Step 17 results) | `docs/test-matrix.md` |
 | Set or check the version (VERSION and every copy) | `Scripts/set-version.sh X.Y.Z`; `Scripts/set-version.sh --check` |

@@ -842,6 +842,19 @@ Scripts/test-real-disk.sh SANDISK --yes --no-physical --cut --only kill  # DIRTY
 
 Surprises: in zsh `log` is a shell builtin (use `/usr/bin/log show`), which hid every log query earlier today. The Unlatch app was found not running twice during the tests (no crash report): carry-over.
 
+### Follow-up: Mount read-write anyway for a dirty disk (D-90) — 2026-11-02
+
+- Owner's request: users without Windows had no way past "run chkdsk" after D-86. `unlatch-fuse --dirty-rw` (DIRTY only), `MountService.mount(dirtyReadWrite:)`, `unlatch mount --dirty-rw` (and a hint after a dirty read-only mount, exit 3), the app's "Mount Read-Write Anyway…" with a critical alert and an orange "Read-write, unchecked" badge. docs/read-only.md has "Without Windows".
+
+```sh
+build/test-engine/set_dirty <img>; unlatch-fuse <img> <dir>            # read-only (dirty)
+unlatch-fuse --dirty-rw <img> <dir>                                    # read-write; still dirty after umount
+unlatch-fuse --dirty-rw build/test-engine/hiber.img <dir>              # stays read-only
+UNLATCH_FUSE=build/DerivedData/Build/Products/Debug/unlatch-fuse CLI/.build/debug/unlatch mount --dirty-rw diskN   # replaces the read-only mount
+```
+
+Not checked: the app's alert and menu item by hand (built only). Surprise: the first CLI try over a fresh read-only mount failed "already mounted" once; three runs after it passed at once and the log showed no retries. Not reproduced.
+
 ## Carry-overs
 
 - **The Unlatch app stops (2026-11-02):** twice during the real-disk tests the app was not running, with no crash report (started again at 18:29, gone before 18:56). Find out why: `/usr/bin/log show --predicate 'process == "Unlatch"'`, launchd, or a quit from the menu.
