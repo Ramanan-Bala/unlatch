@@ -905,6 +905,24 @@ Findings:
 
 Not checked: the app's alerts by hand (built only; a second Unlatch app beside the installed one would race its auto-mount), `--repair` through the helper on a real disk, the owner's SanDisk snapshot.
 
+### Follow-up: ask at mount time when a disk needs checking (D-94) — done 2026-11-02
+
+- Owner's request: replace "Mount Read-Write Anyway…" and "Mark as Checked…" with a question at mount time. When an app mount (automatic or from the menu) comes up read-only because the volume is DIRTY, one dialog offers Keep Read-Only (default), **Check Disk and Enable Read-Write** (`MountService.check(repair: true)`; remounted read-write when nothing is left, otherwise read-only with the report and Copy Report) and **Enable Read-Write Without Checking** (`mount(markChecked: true)`). Asked once per plug-in for automatic mounts; the ⋯ menu's new **Enable Read-Write…** (dirty and not mounted read-write) asks again. **Check Disk…** stays. The "Read-write, unchecked" badge is gone (nothing mounts dirty read-write any more).
+- Removed: `unlatch-fuse --dirty-rw`, `MountService.mount(dirtyReadWrite:)`, `unlatch mount --dirty-rw`. `--mark-checked` keeps its name. After a dirty read-only `unlatch mount` the CLI points at `unlatch check --repair <disk>` and `unlatch mount --mark-checked <disk>`.
+
+```sh
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+swift test --package-path Shared; swift test --package-path CLI
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh
+# quit the installed app first; two 64 MiB images made dirty with build/test-engine/set_dirty, attached
+UNLATCH_FUSE=$PWD/build/DerivedData/Build/Products/Debug/unlatch-fuse CLI/.build/debug/unlatch mount diskA   # read-only, exit 3, both hints
+unlatch check --repair diskA            # no problems, mark cleared, remounted read-write; status clean
+unlatch mount --mark-checked diskB      # replaces the read-only mount, read-write; status "marked as checked"
+# write a file to each, unmount, mount again: both read-write; after detach both images probe clean
+```
+
+Not checked: the dialog in the app by hand (built only); the "problems remain" branch of Check Disk and Enable Read-Write in the app (the report path is D-93's, tested through the CLI).
+
 ## Carry-overs
 
 - **$MFTMirr after a cut-off write-back (D-93, 2026-11-02):** in `test_check_cut_copy`, 12 of 21 cuts mid-write-back leave `$MFTMirr` older than `$MFT`'s first records. libntfs-3g's mount compares the two and refuses the volume, so `ue_probe` says CORRUPT and Unlatch cannot mount it even read-only; Check Disk reports `mft_mirror` and sends the user to chkdsk. Options: write the mirror's pages in the same write-back right after `$MFT`'s (bcache, D-62), or let read-only opens skip the comparison (a patch in `Engine/vendor/patches/`). Either needs a decision; the read-only one also makes the files reachable for copying off.

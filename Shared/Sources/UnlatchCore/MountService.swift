@@ -113,29 +113,27 @@ public actor MountService {
 
     /// Mounts with unlatch-fuse under /Volumes. If Apple's driver had the volume, it is
     /// unmounted first and mounted again when Unlatch fails, so the user never loses access.
-    /// `dirtyReadWrite` mounts a volume marked dirty read-write anyway, at the user's explicit
-    /// request (D-90); a read-only Unlatch mount of it is replaced. `markChecked` does the same
-    /// and a clean unmount clears the mark, so the volume mounts read-write from then on (D-92).
+    /// `markChecked` mounts a volume marked dirty read-write without checking it, at the user's
+    /// explicit request, and its clean unmount clears the mark, so the volume mounts read-write
+    /// from then on (D-92, D-94). Any Unlatch mount of the volume is replaced.
     @discardableResult
-    public func mount(_ bsdName: String, readOnly: Bool = false, dirtyReadWrite: Bool = false,
-                      markChecked: Bool = false) async throws -> Result {
+    public func mount(_ bsdName: String, readOnly: Bool = false, markChecked: Bool = false) async throws -> Result {
         let key = bsdName.hasPrefix("/dev/") ? String(bsdName.dropFirst(5)) : bsdName
         if let running = mounting[key] { return try await running.value }
         let task = Task {
-            try await self.mountNow(key, readOnly: readOnly, dirtyReadWrite: (dirtyReadWrite || markChecked) && !readOnly,
-                                    markChecked: markChecked && !readOnly)
+            try await self.mountNow(key, readOnly: readOnly, markChecked: markChecked && !readOnly)
         }
         mounting[key] = task
         defer { mounting[key] = nil }
         return try await task.value
     }
 
-    private func mountNow(_ bsdName: String, readOnly: Bool, dirtyReadWrite: Bool, markChecked: Bool) async throws -> Result {
+    private func mountNow(_ bsdName: String, readOnly: Bool, markChecked: Bool) async throws -> Result {
         guard Self.macFUSEInstalled else { throw MountError.macFUSEMissing }
         var info = try disk(bsdName)
-        // A forced mount replaces a read-only Unlatch mount; marking checked replaces any, so
-        // the mark is cleared by this mount's clean unmount.
-        if dirtyReadWrite, info.owner == .unlatch, markChecked || (status(info.bsdName)?.readOnly ?? true) {
+        // Marking checked replaces any Unlatch mount, so the mark is cleared by this mount's
+        // clean unmount.
+        if markChecked, info.owner == .unlatch {
             try await unmount(info.bsdName)
             info = try disk(bsdName)
         }
@@ -162,7 +160,7 @@ public actor MountService {
             for (attempt, pause) in Self.fskitRetryPauses.enumerated() {
                 do {
                     try await runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly,
-                                        dirtyReadWrite: dirtyReadWrite, markChecked: markChecked)
+                                        markChecked: markChecked)
                     break
                 } catch MountError.daemonFailed(let why) where Self.isTransientRefusal(why) && attempt < Self.fskitRetryPauses.count - 1 {
                     log.notice("macFUSE did not take \(info.bsdName, privacy: .public); trying again in \(pause, privacy: .public) s")
@@ -224,20 +222,20 @@ public actor MountService {
     /// Runs `unlatch-fuse --fd 3 --backend B [-r] <device> <mountpoint>`; it returns once mounted.
     /// The wait (up to 10 s or more on a slow disk) runs off the actor, so list and status
     /// calls are answered meanwhile.
-    private func runDaemon(fd: Int32, device: String, mountPoint: String, readOnly: Bool, dirtyReadWrite: Bool,
+    private func runDaemon(fd: Int32, device: String, mountPoint: String, readOnly: Bool,
                            markChecked: Bool) async throws {
         let daemon = self.daemon, backend = MacFUSE.preferredBackend.rawValue
         try await Task.detached {
             try Self.spawnDaemon(daemon, backend: backend, fd: fd, device: device, mountPoint: mountPoint, readOnly: readOnly,
-                                 dirtyReadWrite: dirtyReadWrite, markChecked: markChecked)
+                                 markChecked: markChecked)
         }.value
     }
 
     private static func spawnDaemon(_ daemon: URL, backend: String, fd: Int32, device: String, mountPoint: String,
-                                    readOnly: Bool, dirtyReadWrite: Bool, markChecked: Bool) throws {
+                                    readOnly: Bool, markChecked: Bool) throws {
         var args = [daemon.path, "--fd", "3", "--backend", backend]
         if readOnly { args.append("-r") }
-        if markChecked { args.append("--mark-checked") } else if dirtyReadWrite { args.append("--dirty-rw") }
+        if markChecked { args.append("--mark-checked") }
         args += [device, mountPoint]
         let (st, _, errText) = try spawn(daemon, args: args, fd: fd, captureStdout: false)
         guard (st & 0x7f) == 0 && ((st >> 8) & 0xff) == 0 else {

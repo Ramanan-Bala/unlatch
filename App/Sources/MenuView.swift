@@ -92,9 +92,6 @@ struct VolumeRow: View {
             if st?.readOnly == true {
                 return ("Read-only", .orange, st.map { $0.reason.isEmpty ? $0.state.rawValue : $0.reason })
             }
-            if st?.state == .dirty {
-                return ("Read-write, unchecked", .orange, "Marked as needing a check; written to anyway.")
-            }
             return ("Read-write", .green, nil)
         case .apple:
             return ("Read-only (macOS)", .secondary, "macOS's own driver can only read NTFS.")
@@ -160,17 +157,12 @@ struct VolumeRow: View {
                 Button("Mount read-write") { Task { await model.mount(d.bsdName, readOnly: false) } }
                 Button("Mount read-only") { Task { await model.mount(d.bsdName, readOnly: true) } }
             }
-            // Check Disk (D-93): first, since it looks at the disk; the two choices after it do not.
+            // A disk marked dirty that is not mounted read-write: the mount-time question again (D-94).
+            if v.status?.state == .dirty, d.owner != .unlatch || v.status?.readOnly == true {
+                Button("Enable Read-Write…") { Task { await model.enableReadWrite(v) } }
+            }
             if v.status?.state == .dirty || v.status?.state == .corrupt {
                 Button("Check Disk…") { Task { await model.checkDisk(v) } }
-            }
-            // A disk marked dirty mounts read-only; the user may write anyway after a warning (D-90).
-            if v.status?.state == .dirty, d.owner != .unlatch || v.status?.readOnly == true {
-                Button("Mount Read-Write Anyway…") { Task { await model.mountDirtyReadWrite(v) } }
-            }
-            // The user decides the disk is fine: the next clean eject clears the mark (D-92).
-            if v.status?.state == .dirty {
-                Button("Mark as Checked…") { Task { await model.markChecked(v) } }
             }
             if d.isEjectable || d.isRemovable || !d.isInternal {
                 Button("Eject") { Task { await model.eject(d.bsdName) } }

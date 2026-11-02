@@ -2,7 +2,7 @@
 
 ```
 unlatch list [--json]                      NTFS volumes and who has them mounted
-unlatch mount <disk> [-r|--read-only] [--dirty-rw | --mark-checked] [--json]
+unlatch mount <disk> [-r|--read-only] [--mark-checked] [--json]
 unlatch unmount <disk> [--force]
 unlatch unmount --all [--force]            every volume Unlatch has mounted (before an update)
 unlatch eject <disk> [--force]             unmount, then eject the whole disk
@@ -19,7 +19,7 @@ sudo unlatch uninstall-helper
 
 `<disk>` is a BSD name (`disk6s1`), a device path (`/dev/disk6s1` or `/dev/rdisk6s1`), a mount path (`/Volumes/Seagate`), or a volume label (case-insensitive; must name one volume).
 
-`mount` mounts at `/Volumes/<label>`. It is read-write only when the volume is clean and nothing forces read-only. `--dirty-rw` mounts a volume that is marked dirty read-write anyway (risky; it replaces a read-only Unlatch mount of it, and the mark stays; [read-only.md](read-only.md#without-windows)). Hibernated, unclean and damaged volumes stay read-only with it. `--mark-checked` does the same, replaces any Unlatch mount of the volume, and its clean unmount or eject clears the mark, so the volume mounts read-write from then on (D-92). If Apple's read-only NTFS driver had the volume, Unlatch unmounts it first and gives it back if mounting fails.
+`mount` mounts at `/Volumes/<label>`. It is read-write only when the volume is clean and nothing forces read-only. A volume marked dirty mounts read-only (exit 3), and the CLI points at the two ways to enable read-write: `unlatch check --repair <disk>` checks it first and clears the mark when nothing is left (D-93), and `--mark-checked` enables read-write without checking: it replaces any Unlatch mount of the volume, and its clean unmount or eject clears the mark, so the volume mounts read-write from then on (D-92, D-94). It repairs nothing, so writing can damage files on a disk that was cut off mid-write ([read-only.md](read-only.md#without-windows)). Hibernated, unclean and damaged volumes stay read-only with it. If Apple's read-only NTFS driver had the volume, Unlatch unmounts it first and gives it back if mounting fails.
 
 `check` unmounts the volume (whoever has it), opens its device the way a mount does (through the helper for real disks; read-only unless `--repair`), runs `unlatch-fuse --check`, and mounts it again with Unlatch unless `--no-remount`. The check reads only. It looks for: records in use that `$MFT`'s bitmap marks free (`record_unmarked`), clusters files use that `$Bitmap` marks free (`clusters_unmarked`), clusters two files claim (`clusters_shared`), runlists that cannot be read or run past the volume (`bad_runlist`), records that cannot be read (`bad_record`), folders whose index cannot be read (`index_unreadable`), folder entries that point at a free record or the wrong sequence number (`entry_free_record`, `entry_wrong_seq`), named files no folder lists (`orphan`), and a `$MFTMirr` that does not match `$MFT` (`mft_mirror`; libntfs-3g cannot open such a volume at all, so that is all it reports). `--repair` sets the bitmap bits for the first two kinds, and only when nothing else was found; then it checks again and clears the dirty mark if nothing is left. Everything else is reported for Windows' chkdsk; [read-only.md](read-only.md#without-windows) says what to do.
 

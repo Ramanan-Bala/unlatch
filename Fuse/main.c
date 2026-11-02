@@ -54,11 +54,10 @@ static void usage(void)
             "                Recovery), or auto (default: fskit under /Volumes, else kext)\n"
             "  -o opt,...    extra macFUSE mount options\n"
             "  --no-cache    no engine page cache (for comparisons)\n"
-            "  --dirty-rw    mount read-write even though the volume is marked dirty (only that\n"
-            "                state; hibernated, unclean or damaged volumes stay read-only). The\n"
-            "                mark stays, so Windows still checks the disk (D-90)\n"
-            "  --mark-checked like --dirty-rw, and a clean unmount clears the mark: the user has\n"
-            "                decided the volume is fine, and it mounts read-write from then on (D-92)\n"
+            "  --mark-checked mount read-write even though the volume is marked dirty (only that\n"
+            "                state; hibernated, unclean or damaged volumes stay read-only), and a\n"
+            "                clean unmount clears the mark: the user chose to enable read-write\n"
+            "                without checking, and it mounts read-write from then on (D-92, D-94)\n"
             "\n"
             "       unlatch-fuse --check [--repair] [--fd N] <image-or-device>\n"
             "  --check       check the volume instead of mounting it; a JSON report on stdout (D-93).\n"
@@ -438,7 +437,6 @@ int main(int argc, char **argv)
         { "fd", required_argument, NULL, 'D' },
         { "ready-fd", required_argument, NULL, 'F' },
         { "no-cache", no_argument, NULL, 'C' },
-        { "dirty-rw", no_argument, NULL, 'W' },
         { "mark-checked", no_argument, NULL, 'K' },
         { "check", no_argument, NULL, 'X' },
         { "repair", no_argument, NULL, 'P' },
@@ -446,7 +444,7 @@ int main(int argc, char **argv)
         { NULL, 0, NULL, 0 },
     };
     const char *backend = "auto", *extra = NULL;
-    bool foreground = false, debug = false, want_ro = false, cache = true, dirty_rw = false, mark_checked = false;
+    bool foreground = false, debug = false, want_ro = false, cache = true, mark_checked = false;
     bool check = false, repair = false;
     int ch, ready_fd = -1, dev_fd = -1;
 
@@ -460,8 +458,7 @@ int main(int argc, char **argv)
         case 'F': ready_fd = atoi(optarg); break;
         case 'D': dev_fd = atoi(optarg); break;
         case 'C': cache = false; break;
-        case 'W': dirty_rw = true; break;
-        case 'K': dirty_rw = mark_checked = true; break;
+        case 'K': mark_checked = true; break;
         case 'X': check = true; break;
         case 'P': repair = true; break;
         default: usage(); return ch == 'h' ? 0 : 2;
@@ -540,12 +537,12 @@ int main(int argc, char **argv)
         fs.uid = (uid_t)strtoul(getenv("SUDO_UID"), NULL, 10);
         fs.gid = (gid_t)strtoul(getenv("SUDO_GID"), NULL, 10);
     }
-    // --dirty-rw: the user accepted the risk of writing to an unchecked volume. Only DIRTY: a
+    // --mark-checked: the user chose to write to an unchecked volume (D-94). Only DIRTY: a
     // hibernated volume or an unfinished journal holds Windows' own changes, which writing loses.
-    bool forced = p.state == UE_VOL_DIRTY && dirty_rw && !want_ro;
+    bool forced = p.state == UE_VOL_DIRTY && mark_checked && !want_ro;
     if (forced)
-        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s (%s); read-write anyway, as asked (%s)", source,
-               ue_vol_state_name(p.state), p.reason, mark_checked ? "--mark-checked: cleared at a clean unmount" : "--dirty-rw");
+        uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s: %s (%s); read-write without checking, as asked "
+               "(--mark-checked: cleared at a clean unmount)", source, ue_vol_state_name(p.state), p.reason);
     if (p.state != UE_VOL_CLEAN && !forced) {
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT, "%s: %s (%s), read-only", source, ue_vol_state_name(p.state), p.reason);
     } else if (!want_ro && dev_fd >= 0) {
@@ -580,7 +577,7 @@ int main(int argc, char **argv)
     ue_probe_t info;
     ue_attr_t root;
     uint32_t cflag = (cache ? UE_OPEN_CACHE : 0) | UE_OPEN_GHOST_OPEN_ONLY;   // D-82
-    if (forced && mark_checked)
+    if (forced)
         cflag |= UE_OPEN_CLEAR_DIRTY;    // D-92
     err = ue_open(&f.io, (fs.read_only ? UE_OPEN_RDONLY : 0) | cflag, &fs.engine, &info);
     if (err == EROFS && !fs.read_only) {
@@ -603,7 +600,7 @@ int main(int argc, char **argv)
     // The user marked the volume checked: from here on it is treated as clean, in the status
     // record (the app's badge and menu) as in the engine, which clears the mark at a clean
     // close like any read-write mount's (D-92).
-    if (forced && mark_checked && !fs.read_only) {
+    if (forced && !fs.read_only) {
         p.state = UE_VOL_CLEAN;
         snprintf(p.reason, sizeof(p.reason), "marked as checked");
     }

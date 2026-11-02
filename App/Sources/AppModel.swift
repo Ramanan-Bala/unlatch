@@ -35,6 +35,8 @@ final class AppModel {
     /// Volumes whose automatic mount failed and that were handed to macOS: no longer claimed
     /// until they are unplugged, so they stay visible, read-only, through Apple's driver.
     private let released = BSDNames()
+    /// Volumes already asked about since they were plugged in (D-94).
+    private var asked: Set<String> = []
 
     init() {
         service = try? MountService(daemon: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/unlatch-fuse"))
@@ -97,6 +99,7 @@ final class AppModel {
             }
         case .disappeared(let name):
             released.remove(name)
+            asked.remove(name)
             let was = volumes.first { $0.id == name }
             await refresh()
             if let was, was.disk.owner == .unlatch {
@@ -111,15 +114,19 @@ final class AppModel {
 
     // MARK: actions
 
-    func mount(_ bsdName: String, readOnly: Bool, automatic: Bool = false, dirtyReadWrite: Bool = false,
-               markChecked: Bool = false) async {
+    func mount(_ bsdName: String, readOnly: Bool, automatic: Bool = false) async {
         guard let service, !busy.contains(bsdName) else { return }
         busy.insert(bsdName)
-        defer { busy.remove(bsdName) }
+        var askDirty = false
         do {
-            let r = try await service.mount(bsdName, readOnly: readOnly, dirtyReadWrite: dirtyReadWrite, markChecked: markChecked)
+            defer { busy.remove(bsdName) }
+            let r = try await service.mount(bsdName, readOnly: readOnly)
             let name = (try? await service.disk(bsdName).label).flatMap { $0.isEmpty ? nil : $0 } ?? bsdName
-            if r.readOnly && !readOnly {
+            if r.readOnly && !readOnly && r.status?.state == .dirty {
+                // Marked as needing a check: ask instead of notifying, once per plug-in for
+                // automatic mounts; a mount the user asked for asks again (D-94).
+                askDirty = !automatic || !asked.contains(bsdName)
+            } else if r.readOnly && !readOnly {
                 let why = r.status?.reason ?? "it could not be opened for writing"
                 notify("\(name) is read-only", "\(why.prefix(1).uppercased() + why.dropFirst()).", learnMore: true)
             } else if automatic || !readOnly {
@@ -137,51 +144,81 @@ final class AppModel {
             }
         }
         await refresh()
+        // In a task of its own: the disk events behind this mount are not held up by the dialog.
+        if askDirty, let v = volumes.first(where: { $0.id == bsdName }) { Task { await enableReadWrite(v) } }
     }
 
-    /// Mounts a volume marked dirty read-write after the user confirms the risk (D-90).
-    func mountDirtyReadWrite(_ v: Volume) async {
+    /// A disk marked as needing a check came up read-only (D-94): the user may check it and
+    /// enable read-write, enable read-write without checking, or keep it read-only. Both
+    /// choices clear the mark (the check only when nothing is left).
+    func enableReadWrite(_ v: Volume) async {
+        asked.insert(v.disk.bsdName)
         let name = v.disk.label.isEmpty ? v.disk.bsdName : v.disk.label
         let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Write to \(name) without checking it?"
+        alert.messageText = "\(name) needs checking"
         alert.informativeText = """
-            This disk was not ejected cleanly, so some of its records may be half-written. Writing to it \
-            before it is checked can damage files on it, including files you do not touch.
+            It was not ejected cleanly, so some of its records may be half-written, and it was mounted read-only.
 
-            Copy anything important off it first. The disk stays marked as needing a check, so Windows \
-            will still offer to check it.
+            Check Disk looks for damage, repairs what is safe to repair, and enables read-write when nothing is left. \
+            Enabling read-write without checking repairs nothing: writing to a damaged disk can damage files on it, \
+            and Windows will no longer offer to check it.
             """
-        alert.addButton(withTitle: "Cancel")
-        let write = alert.addButton(withTitle: "Mount Read-Write")
-        write.hasDestructiveAction = true
+        alert.addButton(withTitle: "Keep Read-Only")
+        alert.addButton(withTitle: "Check Disk and Enable Read-Write")
+        let unchecked = alert.addButton(withTitle: "Enable Read-Write Without Checking")
+        unchecked.hasDestructiveAction = true
         NSApp.activate()
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        log.notice("\(v.disk.bsdName, privacy: .public): mounting read-write although marked dirty, as confirmed")
-        await mount(v.disk.bsdName, readOnly: false, dirtyReadWrite: true)
+        switch alert.runModal() {
+        case .alertSecondButtonReturn:
+            log.notice("\(v.disk.bsdName, privacy: .public): checking to enable read-write, as asked")
+            await checkAndEnable(v, name: name)
+        case .alertThirdButtonReturn:
+            log.notice("\(v.disk.bsdName, privacy: .public): read-write without checking, mark cleared at the clean eject, as asked")
+            await mountMarkChecked(v.disk.bsdName, name: name)
+        default:
+            return
+        }
     }
 
-    /// The user decides a disk marked dirty is fine (D-92): it is mounted read-write, and its
-    /// next clean eject clears the mark, so it mounts read-write from then on.
-    func markChecked(_ v: Volume) async {
-        let name = v.disk.label.isEmpty ? v.disk.bsdName : v.disk.label
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Mark \(name) as checked?"
-        alert.informativeText = """
-            Do this only after copying anything important off the disk. It was not ejected cleanly, \
-            and its records may still be half-written; marking it checked does not repair them.
-
-            Unlatch mounts it read-write now. When you eject it from Unlatch, it is marked as checked: \
-            it then mounts read-write every time, and Windows no longer offers to check it.
-            """
-        alert.addButton(withTitle: "Cancel")
-        let mark = alert.addButton(withTitle: "Mark as Checked")
-        mark.hasDestructiveAction = true
+    /// Check Disk with the safe repair; it clears the mark and mounts read-write when nothing is
+    /// left, and says what was found otherwise.
+    private func checkAndEnable(_ v: Volume, name: String) async {
+        guard let r = await runCheck(v.disk.bsdName, repair: true) else { return }
+        if r.remaining == 0 {
+            if v.disk.owner == .none { await mount(v.disk.bsdName, readOnly: false) }
+            let rw = volumes.first { $0.id == v.disk.bsdName }.map { $0.disk.owner == .unlatch && $0.status?.readOnly == false } ?? false
+            notify(rw ? "\(name) is ready" : "\(name) was checked",
+                   (r.found == 0 ? "No problems found. " : "Repaired. ") + (rw ? "Mounted read-write." : "The mark is cleared."))
+            return
+        }
+        let done = NSAlert()
+        done.alertStyle = .critical
+        done.messageText = r.problems.contains { $0.kind == "mft_mirror" }
+            ? "\(name) cannot be opened until Windows repairs it" : "\(name) needs Windows to repair it"
+        done.informativeText = Self.summary(r)
+        done.addButton(withTitle: "OK")
+        done.addButton(withTitle: "Copy Report")
         NSApp.activate()
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        log.notice("\(v.disk.bsdName, privacy: .public): marking checked at the next clean eject, as confirmed")
-        await mount(v.disk.bsdName, readOnly: false, markChecked: true)
+        if done.runModal() == .alertSecondButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(Self.fullReport(r, name: name), forType: .string)
+        }
+    }
+
+    /// Mounts read-write without checking; the clean eject clears the mark (D-92).
+    private func mountMarkChecked(_ bsdName: String, name: String) async {
+        guard let service, !busy.contains(bsdName) else { return }
+        busy.insert(bsdName)
+        do {
+            defer { busy.remove(bsdName) }
+            let r = try await service.mount(bsdName, markChecked: true)
+            if !r.readOnly { notify("\(name) is ready", "Mounted read-write. Eject it here before unplugging.") }
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+            log.error("mount \(bsdName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+        await refresh()
     }
 
     /// Check Disk (D-93): unmounts the disk, checks it (read-only), mounts it again, and says
