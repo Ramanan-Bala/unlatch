@@ -38,6 +38,9 @@ public actor MountService {
     nonisolated(unsafe) private let session: DASession
     private let queue = DispatchQueue(label: "\(Unlatch.bundlePrefix).unlatch.mountservice")
     private let log = Unlatch.logger("mount")
+    /// Mounts in progress by BSD name: a second request for the same volume waits for the first,
+    /// since the actor is free while the daemon starts.
+    private var mounting: [String: Task<Result, Error>] = [:]
 
     /// `daemon` is the `unlatch-fuse` binary; by default the one next to this executable.
     public init(daemon: URL? = nil, opener: DeviceOpener = AutoOpener(), statusStore: StatusStore = StatusStore()) throws {
@@ -112,10 +115,21 @@ public actor MountService {
     /// unmounted first and mounted again when Unlatch fails, so the user never loses access.
     @discardableResult
     public func mount(_ bsdName: String, readOnly: Bool = false) async throws -> Result {
+        let key = bsdName.hasPrefix("/dev/") ? String(bsdName.dropFirst(5)) : bsdName
+        if let running = mounting[key] { return try await running.value }
+        let task = Task { try await self.mountNow(key, readOnly: readOnly) }
+        mounting[key] = task
+        defer { mounting[key] = nil }
+        return try await task.value
+    }
+
+    private func mountNow(_ bsdName: String, readOnly: Bool) async throws -> Result {
         guard Self.macFUSEInstalled else { throw MountError.macFUSEMissing }
         var info = try disk(bsdName)
         if info.owner == .unlatch, let p = info.mountPoint {
-            return Result(mountPoint: p, readOnly: readOnly, status: status(info.bsdName))
+            // Already ours: report the mode it has, not the one asked for.
+            let st = status(info.bsdName)
+            return Result(mountPoint: p, readOnly: st?.readOnly ?? readOnly, status: st)
         }
         let hadApple = info.owner == .apple
         if hadApple || info.owner != .none {
@@ -134,7 +148,7 @@ public actor MountService {
             // used again (D-84).
             for (attempt, pause) in Self.fskitRetryPauses.enumerated() {
                 do {
-                    try runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly)
+                    try await runDaemon(fd: fd, device: info.devicePath, mountPoint: point, readOnly: readOnly)
                     break
                 } catch MountError.daemonFailed(let why) where Self.isTransientRefusal(why) && attempt < Self.fskitRetryPauses.count - 1 {
                     log.notice("macFUSE did not take \(info.bsdName, privacy: .public); trying again in \(pause, privacy: .public) s")
@@ -194,8 +208,18 @@ public actor MountService {
     }
 
     /// Runs `unlatch-fuse --fd 3 --backend B [-r] <device> <mountpoint>`; it returns once mounted.
-    private func runDaemon(fd: Int32, device: String, mountPoint: String, readOnly: Bool) throws {
-        var args = [daemon.path, "--fd", "3", "--backend", MacFUSE.preferredBackend.rawValue]
+    /// The wait (up to 10 s or more on a slow disk) runs off the actor, so list and status
+    /// calls are answered meanwhile.
+    private func runDaemon(fd: Int32, device: String, mountPoint: String, readOnly: Bool) async throws {
+        let daemon = self.daemon, backend = MacFUSE.preferredBackend.rawValue
+        try await Task.detached {
+            try Self.spawnDaemon(daemon, backend: backend, fd: fd, device: device, mountPoint: mountPoint, readOnly: readOnly)
+        }.value
+    }
+
+    private static func spawnDaemon(_ daemon: URL, backend: String, fd: Int32, device: String, mountPoint: String,
+                                    readOnly: Bool) throws {
+        var args = [daemon.path, "--fd", "3", "--backend", backend]
         if readOnly { args.append("-r") }
         args += [device, mountPoint]
         var errPipe: [Int32] = [0, 0]
@@ -287,6 +311,12 @@ public actor MountService {
         guard let d = DADiskCreateFromBSDName(kCFAllocatorDefault, session, bsdName) else { throw MountError.notFound(bsdName) }
         let opts = force ? kDADiskUnmountOptionForce : kDADiskUnmountOptionDefault
         try await withDACallback { box in DADiskUnmount(d, DADiskUnmountOptions(opts), daDone, box) }
+    }
+
+    /// Asks macOS to mount the volume itself (Apple's read-only NTFS driver), as the app does
+    /// after its own automatic mount failed.
+    public func mountWithMacOS(_ bsdName: String) async throws {
+        try await daMount(bsdName)
     }
 
     private func daMount(_ bsdName: String) async throws {

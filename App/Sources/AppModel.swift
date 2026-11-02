@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import Observation
+import Synchronization
 import UnlatchCore
 import UserNotifications
 
@@ -31,6 +32,9 @@ final class AppModel {
     private var watcher: DiskWatcher?
     private var tasks: [Task<Void, Never>] = []
     private let log = Unlatch.logger("app")
+    /// Volumes whose automatic mount failed and that were handed to macOS: no longer claimed
+    /// until they are unplugged, so they stay visible, read-only, through Apple's driver.
+    private let released = BSDNames()
 
     init() {
         service = try? MountService(daemon: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/unlatch-fuse"))
@@ -43,7 +47,10 @@ final class AppModel {
         let policy = self.policy
         // The onboarding self-test image is the self-test's to mount, never auto-mounted.
         let selfTest = Checks.selfTestLabel
-        watcher = DiskWatcher(claim: { $0.label != selfTest && policy.shouldAutoMount($0) })
+        let released = self.released
+        watcher = DiskWatcher(claim: {
+            $0.label != selfTest && policy.shouldAutoMount($0) && !released.contains($0.bsdName) && Self.canMount($0)
+        })
         guard let events = watcher?.events() else { return }
         tasks.append(Task { [weak self] in
             for await e in events {
@@ -67,6 +74,12 @@ final class AppModel {
         watcher = nil
     }
 
+    /// Whether Unlatch can mount the volume at all: refusing Apple's driver is only safe then.
+    /// A macOS update or a revoked permission otherwise made claimed drives vanish.
+    nonisolated static func canMount(_ d: DiskInfo) -> Bool {
+        MountService.macFUSEInstalled && (HelperOpener.installed || Darwin.access(d.devicePath, R_OK) == 0)
+    }
+
     func refresh() async {
         guard let service else { return }
         let disks = await service.list()
@@ -83,6 +96,7 @@ final class AppModel {
                 await mount(d.bsdName, readOnly: false, automatic: true)
             }
         case .disappeared(let name):
+            released.remove(name)
             let was = volumes.first { $0.id == name }
             await refresh()
             if let was, was.disk.owner == .unlatch {
@@ -114,7 +128,12 @@ final class AppModel {
         } catch {
             lastError = error.localizedDescription
             log.error("mount \(bsdName, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            if automatic { notify("Could not mount \(bsdName)", error.localizedDescription) }
+            if automatic {
+                // The claim turned Apple's driver away: hand the volume back so it stays visible.
+                released.insert(bsdName)
+                try? await service.mountWithMacOS(bsdName)
+                notify("Could not mount \(bsdName)", error.localizedDescription)
+            }
         }
         await refresh()
     }
@@ -182,4 +201,13 @@ final class AppModel {
     }
 
     static let readOnlyHelp = URL(string: "https://github.com/Ramanan-Bala/unlatch/blob/main/docs/read-only.md")!
+}
+
+/// A set of BSD names shared with DiskArbitration's queue.
+final class BSDNames: Sendable {
+    private let names = Mutex<Set<String>>([])
+
+    func contains(_ name: String) -> Bool { names.withLock { $0.contains(name) } }
+    func insert(_ name: String) { _ = names.withLock { $0.insert(name) } }
+    func remove(_ name: String) { _ = names.withLock { $0.remove(name) } }
 }

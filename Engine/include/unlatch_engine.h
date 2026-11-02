@@ -53,7 +53,9 @@ typedef struct {
 
 enum { UE_OPEN_RDONLY = 1,
        UE_OPEN_CACHE = 2 /* write-back page cache in front of the device (Step 15, D-62) */,
-       UE_OPEN_GHOST_OPEN_ONLY = 4 /* removed files are ghosts only while open (D-82) */ };
+       UE_OPEN_GHOST_OPEN_ONLY = 4 /* removed files are ghosts only while open (D-82) */,
+       UE_OPEN_CLEAR_DIRTY = 8 /* the caller has checked the volume: a clean read-write close
+                                  clears VOLUME_IS_DIRTY even if it was set at open (D-86) */ };
 enum { UE_SET_SIZE = 1, UE_SET_MTIME = 2, UE_SET_ATIME = 4, UE_SET_BIRTH = 8, UE_SET_CTIME = 16, UE_SET_FLAGS = 32, UE_SET_MODE = 64 };
 enum { UE_RENAME_EXCL = 1 };
 

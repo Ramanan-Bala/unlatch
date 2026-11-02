@@ -16,11 +16,13 @@
 #include <libgen.h>
 #include <limits.h>
 #include <pthread.h>
+#include <signal.h>
 #include <time.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <mach-o/dyld.h>
 #include <sys/disk.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -241,11 +243,18 @@ static bool directly_in_volumes(const char *path)
 static int run_in_background(int argc, char **argv, const char *mountpoint, bool fskit)
 {
     extern char **environ;
-    char fdarg[16], **cargv;
+    char fdarg[16], **cargv, self[PATH_MAX];
+    uint32_t self_size = sizeof(self);
     int pipefd[2], status;
     pid_t pid;
     char ok;
 
+    // Our own path, not argv[0]: posix_spawn does not search PATH, so `unlatch-fuse` run by
+    // name (Homebrew) would be looked for in the current directory.
+    if (_NSGetExecutablePath(self, &self_size) != 0) {
+        fprintf(stderr, "unlatch-fuse: cannot find its own path\n");
+        return 1;
+    }
     if (pipe(pipefd) < 0)
         return 1;
     snprintf(fdarg, sizeof(fdarg), "%d", pipefd[1]);
@@ -260,7 +269,7 @@ static int run_in_background(int argc, char **argv, const char *mountpoint, bool
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
-    int err = posix_spawn(&pid, argv[0], NULL, &attr, cargv, environ);
+    int err = posix_spawn(&pid, self, NULL, &attr, cargv, environ);
     posix_spawnattr_destroy(&attr);
     free(cargv);
     close(pipefd[1]);
@@ -272,12 +281,27 @@ static int run_in_background(int argc, char **argv, const char *mountpoint, bool
     if (read(pipefd[0], &ok, 1) == 1 && ok == '0') {
         // The mount appears once the child's loop has answered FUSE_INIT; wait up to 10 s.
         // With FSKit, macFUSE can still refuse after the child's mount call returned.
-        for (int i = 0; i < 1000; i++) {
+        bool exited = false;
+        for (int i = 0; i < 1000 && !exited; i++) {
             if (is_mounted(mountpoint))
                 return 0;             // mounted; the child carries on
-            if (waitpid(pid, &status, WNOHANG) == pid)
-                break;
-            usleep(10000);
+            exited = waitpid(pid, &status, WNOHANG) == pid;
+            if (!exited)
+                usleep(10000);
+        }
+        // A child still running could mount after we report failure, and the caller may then
+        // hand the disk to another driver: stop it (SIGTERM unmounts what it mounted).
+        if (!exited) {
+            kill(pid, SIGTERM);
+            for (int i = 0; i < 500 && !exited; i++) {
+                exited = waitpid(pid, &status, WNOHANG) == pid;
+                if (!exited)
+                    usleep(10000);
+            }
+            if (!exited) {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+            }
         }
         fprintf(stderr, "unlatch-fuse: %s did not appear as a mount\n", mountpoint);
         if (fskit)

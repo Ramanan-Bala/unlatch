@@ -808,7 +808,30 @@ Scripts/test-real-disk.sh SANDISK --only replug,pull,sleep  # at the Mac
 
 Surprise: during the run the Unlatch app was not running (no crash report), and Apple's driver mounted the stick read-only beside Unlatch's mount after a reaped dead mount. With the app running its claim refuses Apple's driver (checked with `diskutil mount`). The script now notes when the app is not running.
 
+### Follow-up: whole-repo audit fixes (docs/AUDIT.md, D-86 to D-88) — 2026-11-02
+
+- `docs/AUDIT.md` is the audit as given (a scanned printout, transcribed), with each item's status added.
+- Fixed: 1 (dirty mark while open for writing, D-86; `interrupt.sh` now requires DIRTY, a read-only remount, then `ntfsfix -d` standing in for chkdsk and a read-write remount), 2 (claim only when mountable; give back on failure, D-88), 3 (a timed-out background start is stopped with SIGTERM, then SIGKILL), 4, 5 and 13 (helper policy and its test, D-87; no uninitialised uid in the log), 6 (a failed entry drops the engine's hold; `ue_file_opened` checked), 7 (`mount` of a mounted volume reports its real mode), 8 (flush comment and D-46 note), 9 (the background start spawns `_NSGetExecutablePath`, not argv[0]), 11 (the daemon wait runs off the MountService actor; concurrent mounts of one volume share one attempt), 12 (`uf_read` returns the bytes read before an error).
+- Not fixed: 10 (carry-over below).
+- Done alongside another session (real-disk tests), which added `unlatch-engine mark-clean` (`UE_OPEN_CLEAR_DIRTY`) and made `test-real-disk.sh` expect DIRTY after a kill or pull.
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh       # incl. test_dirty_mark, helper policy
+Tests/Fuse/interrupt.sh kill                     # dirty, read-only remount, then read-write after ntfsfix -d
+swift test --package-path Shared && swift test --package-path CLI
+UNLATCH_INTEGRATION=1 swift test --package-path Shared --no-parallel     # 16 passed
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build && Scripts/build-tools.sh /tmp/t
+```
+
+By hand: `PATH=build/DerivedData/Build/Products/Debug:$PATH unlatch-fuse <img> <dir>` (no `-f`, run by name) mounts; the image probes dirty while mounted and clean after `umount`.
+
+Not checked: item 2 with the app running and macFUSE or the helper missing (needs the installed app); item 3's kill path (needs a mount that hangs past 10 s); the audit's open question, whether `F_FULLFSYNC` on a raw disk empties the drive's own cache.
+
+Surprise: libntfs-3g's read-write mount resets `$LogFile` before `ue_open` can set the mark, so that one write is not covered. It leaves the journal empty and consistent, so it is harmless.
+
 ## Carry-overs
+
+- **Audit item 10, lock files (2026-11-02):** the D-81 locks are in a world-writable folder, so another local user can hold a volume's lock, and two disks with one serial (a clone) cannot both be mounted read-write. Not changed: keying by device name would let an image and its attached device both be mounted read-write (what D-81 prevents), and a root-owned folder needs the helper to create the lock files (a new helper command). Decide whether shared Macs matter enough for that.
 
 - **Apple's driver beside a CLI mount (S2, 2026-11-02):** without the app running, macOS mounts an NTFS disk read-only about 1.5 s after a dead daemon's mount is reaped (`reapDeadMounts`), and an `unlatch mount` in that window leaves both mounted (Unlatch read-write, Apple read-only, two volumes in Finder). DiskArbitration does not see the macFUSE mount as using the device (its source is `unlatch@diskNsM`). Options: hold a mount-approval claim in MountService while it mounts and briefly after a reap, or re-check for an Apple mount after mounting and unmount it.
 

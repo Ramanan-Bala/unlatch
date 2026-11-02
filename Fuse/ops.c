@@ -236,8 +236,13 @@ static int make_entry(uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_entry_
 {
     int err;
 
-    if ((err = node_ref(fs, a->ino)))
+    // node_ref fails only for a node the kernel does not have yet, so the engine's hold from
+    // the lookup or create that found it is the only one: drop it too.
+    if ((err = node_ref(fs, a->ino))) {
+        if (a->ino != fs->root)
+            ue_release(fs->engine, a->ino);
         return err;
+    }
     memset(e, 0, sizeof(*e));
     e->ino = to_fuse(fs, a->ino);
     e->generation = a->ino >> 48;
@@ -543,7 +548,8 @@ static void uf_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, stru
         fs->rbuf_cap = size;
     }
     buf = fs->rbuf;
-    if ((err = ue_read(fs->engine, to_engine(fs, ino), (uint64_t)off, buf, size, &done)))
+    // Like uf_write: the bytes read before an error are returned, and the next read gets it.
+    if ((err = ue_read(fs->engine, to_engine(fs, ino), (uint64_t)off, buf, size, &done)) && !done)
         fuse_reply_err(req, err);
     else
         reply_bytes(req, buf, done);
@@ -699,7 +705,11 @@ static void uf_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
         return;
     }
     fi->keep_cache = 0;
-    ue_file_opened(fs->engine, a.ino);    // held since ue_create
+    if ((err = ue_file_opened(fs->engine, a.ino))) {   // held since ue_create
+        unmake_entry(fs, &a);
+        fuse_reply_err(req, err);
+        return;
+    }
     if (fuse_reply_create(req, &e, fi) != 0) {
         ue_file_closed(fs->engine, a.ino);
         unmake_entry(fs, &a);
@@ -780,7 +790,9 @@ static void uf_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t siz
         fuse_reply_write(req, done);
 }
 
-// Engine writes go straight to the device, so close needs nothing; fsync flushes the device
+// Close needs nothing: engine writes sit in the write-back cache (D-62) and reach the disk on
+// the 1 s timer, on fsync, or at unmount, whichever comes first. A failed write-back marks the
+// engine failed, which close reports. fsync writes the cache back and flushes the device
 // cache (F_FULLFSYNC on the image or disk).
 static void uf_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {

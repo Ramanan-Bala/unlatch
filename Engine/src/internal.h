@@ -70,6 +70,7 @@ struct ue_engine {
     ue_dev_t *dev_ctx;
     bool readonly;
     bool ghost_open_only;             // UE_OPEN_GHOST_OPEN_ONLY (D-82)
+    bool marked_dirty;                // ue_open set VOLUME_IS_DIRTY; a clean close clears it (D-86)
     ue_held_map_t held;
     uint64_t next_tmp_id;             // ghost and rename temp names
     ue_stats_t stats;

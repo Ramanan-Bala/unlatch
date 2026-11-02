@@ -26,6 +26,8 @@ cflags=(-std=c11 -Wall -Wextra -Werror -g -arch arm64 -mmacosx-version-min=27.0 
 clang "${cflags[@]}" -o "$out/test_engine" Tests/Engine/test_engine.c EngineTool/file_io.c EngineTool/walk.c \
     "$products/libUnlatchEngine.a"
 clang "${cflags[@]}" -o "$out/set_dirty" Tests/Engine/set_dirty.c
+clang "${cflags[@]}" -IHelper -o "$out/test_policy" Tests/Helper/test_policy.c Helper/policy.c
+"$out/test_policy"
 # Fixture builder: test tooling that uses libntfs-3g directly (D-20).
 clang "${cflags[@]}" -DHAVE_CONFIG_H=1 -Ibuild/ntfs3g/config -isystem build/ntfs3g/include \
     -o "$out/mkfixture" Engine/src/fixtures/mkfixture.c build/ntfs3g/lib/libntfs-3g.a

@@ -1235,6 +1235,9 @@ static void test_cache_engine(void)
     WCHECK(ue_writeback(w.e, 0) == 0, "writeback");
     ue_get_cache_stats(w.e, &st);
     WCHECK(st.dirty_pages == 0, "dirty after writeback");
+    // Open for writing, the volume is marked dirty on the device; a clean close clears it (D-86).
+    WCHECK(probe_file(w.path, &p) == 0 && p.state == UE_VOL_DIRTY, "not dirty while open: %s",
+           ue_vol_state_name(p.state));
     // A second, uncached reader of the same image sees every file now.
     file_io_t f2;
     ue_engine_t *e2;
@@ -1254,6 +1257,30 @@ static void test_cache_engine(void)
     WCHECK(err == 0, "second reader: %s", strerror(err));
     CHECK(wclose(&w) == 0, "close");
     CHECK(probe_file(w.path, &p) == 0 && p.state == UE_VOL_CLEAN, "probe");
+}
+
+// D-86: a dirty volume keeps its mark through a read-write open and close, unless the caller
+// says it has checked it (UE_OPEN_CLEAR_DIRTY).
+static void test_dirty_mark(void)
+{
+    wvol_t w;
+    ue_probe_t p;
+    uint32_t saved = wflags;
+
+    int err = wopen(&w, "dirty", "dirty-mark");
+    CHECK(err == 0, "open: %s", strerror(err));
+    CHECK(ue_close(w.e) == 0, "close");
+    file_io_close(&w.f);
+    CHECK(probe_file(w.path, &p) == 0 && p.state == UE_VOL_DIRTY, "lost the mark: %s",
+          ue_vol_state_name(p.state));
+    unlink(w.path);                    // the written-image checks expect every image clean
+    wflags = UE_OPEN_CLEAR_DIRTY;
+    err = wopen(&w, "dirty", "dirty-clear");
+    wflags = saved;
+    CHECK(err == 0, "open with CLEAR_DIRTY: %s", strerror(err));
+    CHECK(wclose(&w) == 0, "close");
+    CHECK(probe_file(w.path, &p) == 0 && p.state == UE_VOL_CLEAN, "still marked: %s",
+          ue_vol_state_name(p.state));
 }
 
 #define RUN(t)                                     \
@@ -1560,6 +1587,7 @@ int main(int argc, char **argv)
 
     RUN(test_cache_model);
     RUN(test_cache_engine);
+    RUN(test_dirty_mark);
     for (int pass = 0; pass < 2; pass++) {
         // Second pass: the same write tests with the page cache on (D-62).
         wflags = pass ? UE_OPEN_CACHE : 0;

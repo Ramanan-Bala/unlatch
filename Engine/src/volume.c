@@ -15,6 +15,7 @@
 #include <ntfs-3g/inode.h>
 #include <ntfs-3g/layout.h>
 #include <ntfs-3g/logfile.h>
+#include <ntfs-3g/security.h>
 
 const char *ue_vol_state_name(ue_vol_state_t state)
 {
@@ -71,6 +72,33 @@ static ntfs_volume *mount_volume(const ue_io_t *io, ntfs_mount_flags flags, bool
     }
     *ctx_out = ctx;
     return vol;
+}
+
+// Everything libntfs-3g holds goes to the device, written back and flushed.
+static int sync_volume(ntfs_volume *vol)
+{
+    ntfs_inode *sys[] = { vol->lcnbmp_ni, vol->mft_ni, vol->mftmirr_ni };
+
+    if (ntfs_close_secure(vol))       // its index contexts write on close; release skips it now
+        return errno ? errno : EIO;
+    for (size_t i = 0; i < sizeof(sys) / sizeof(sys[0]); i++)
+        if (sys[i] && NInoDirty(sys[i]) && ntfs_inode_sync(sys[i]))
+            return errno ? errno : EIO;
+    return vol->dev->d_ops->sync(vol->dev) ? (errno ? errno : EIO) : 0;
+}
+
+// Like Windows and Linux's ntfs3, VOLUME_IS_DIRTY is on the disk while the volume is open for
+// writing, so a crash, a pull mid-write-back or a failed write leaves it DIRTY and the next
+// mount is read-only until it is checked. libntfs-3g does not do this, and a stick pulled
+// mid-copy probed CLEAN with "inconsistent metadata" logged (D-86). Each change is flushed on
+// its own, so the mark never reaches the disk out of order with the metadata it covers.
+static int write_dirty(ntfs_volume *vol, bool dirty)
+{
+    le16 flags = dirty ? vol->flags | VOLUME_IS_DIRTY : vol->flags & ~VOLUME_IS_DIRTY;
+
+    if (ntfs_volume_write_flags(vol, flags))
+        return errno ? errno : EIO;
+    return vol->dev->d_ops->sync(vol->dev) ? (errno ? errno : EIO) : 0;
 }
 
 static int unmount_volume(ntfs_volume *vol, ue_dev_t *ctx)
@@ -237,6 +265,12 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
         unmount_volume(vol, ctx);
         return EROFS;
     }
+    // Before any other write. A volume that was dirty already keeps its mark at close.
+    bool was_dirty = (vol->flags & VOLUME_IS_DIRTY) != 0;
+    if (!readonly && !was_dirty && (err = write_dirty(vol, true))) {
+        unmount_volume(vol, ctx);
+        return err;
+    }
 
     ntfs_create_lru_caches(vol);       // ntfs_mount() does this; ntfs_device_mount() does not
     if (ntfs_set_ignore_case(vol) ||
@@ -253,6 +287,7 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
     e->vol = vol;
     e->dev_ctx = ctx;
     e->readonly = readonly;
+    e->marked_dirty = !readonly && (!was_dirty || (flags & UE_OPEN_CLEAR_DIRTY));
     e->ghost_open_only = (flags & UE_OPEN_GHOST_OPEN_ONLY) != 0;
     if ((err = ue_held_init(&e->held))) {
         unmount_volume(vol, ctx);
@@ -270,7 +305,7 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
     if (probe_out) {
         memset(probe_out, 0, sizeof(*probe_out));
         fill_info(vol, io, probe_out);
-        if (vol->flags & VOLUME_IS_DIRTY)
+        if (was_dirty)
             set_state(probe_out, UE_VOL_DIRTY, "volume is marked dirty");
         else
             set_state(probe_out, UE_VOL_CLEAN, "volume is clean");
@@ -285,11 +320,15 @@ int ue_close(ue_engine_t *e)
 
     if (!e)
         return EINVAL;
-    // libntfs-3g never sets VOLUME_IS_DIRTY on mount, so there is nothing to clear here;
     // __ntfs_volume_release syncs dirty system inodes and calls the device sync.
     // Files removed while held are deleted now; the host holds nothing past unmount.
-    // After a device failure nothing more is written; unmount fails and reports EIO.
+    // After a device failure nothing more is written; unmount fails and reports EIO, and the
+    // dirty mark stays (D-86).
     err = e->readonly || e->dev_ctx->failed ? 0 : ue_delete_ghosts(e);
+    // The dirty mark is cleared only once everything else is on the device, and only when
+    // nothing failed: a crash between the two leaves the volume DIRTY, never falsely CLEAN.
+    if (!err && e->marked_dirty && !e->dev_ctx->failed && !(err = sync_volume(e->vol)))
+        err = write_dirty(e->vol, false);
     ue_held_free(&e->held);
     int uerr = unmount_volume(e->vol, e->dev_ctx);
     if (!err)

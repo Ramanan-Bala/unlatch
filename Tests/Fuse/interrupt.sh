@@ -6,8 +6,10 @@
 #   Tests/Fuse/interrupt.sh [--backend kext|fskit] [kill|detach ...]      default: kext; both
 #
 #   kill     SIGKILL the daemon mid-copy (a crash): the mount must go away, the next probe
-#            must not say CORRUPT, ntfsfix -n must accept the volume, and a read-write mount
-#            must work and see the files that were complete before the last write-back.
+#            must say DIRTY (D-86), ntfsfix -n must accept the volume, the next mount must be
+#            read-only and see the files that were complete before the last write-back, and
+#            once the mark is cleared (ntfsfix -d, standing in for chkdsk) a read-write mount
+#            must work and leave the volume clean.
 #   detach   force-eject the disk mid-copy (a surprise unplug): the daemon must exit without
 #            hanging, and the same checks apply after re-attaching the image.
 # Prints one line per scenario; exits 1 if any check failed.
@@ -28,18 +30,32 @@ note() { printf '  %-10s %s\n' "$1" "$2"; }
 gone() { for _ in $(seq 1 40); do mount | grep -q " on $mnt " || return 0; sleep 0.25; done; return 1; }
 
 check_after() {         # scenario, disk; the image is attached as disk, nothing mounted
-    local name="$1" disk="$2" state rc=0
+    local name="$1" disk="$2" state rc=0 n
     state=$("$engine" probe "/dev/$disk" | awk '/^state:/ {print $2}')
     note "$name" "probe after: $state"
-    case "$state" in clean|dirty) ;; *) note "$name" "FAIL: probe says $state"; rc=1 ;; esac
+    # Cut off while open for writing, the volume must say so (D-86).
+    [ "$state" = dirty ] || { note "$name" "FAIL: probe says $state, not dirty"; rc=1; }
     if "$ntfsfix" -n "/dev/$disk" > "$work/fix.txt" 2>&1; then
         note "$name" "ntfsfix -n: ok"
     else
         note "$name" "FAIL: ntfsfix -n: $(tail -1 "$work/fix.txt")"; rc=1
     fi
     if "$fuse" --backend "$backend" "/dev/$disk" "$mnt" 2>/dev/null; then
-        local n; n=$(find "$mnt/copy" -type f 2>/dev/null | wc -l | tr -d ' ')
-        note "$name" "remounted ($(mount | grep " on $mnt " | grep -q read-only && echo read-only || echo read-write)); $n files of the copy present"
+        n=$(find "$mnt/copy" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if mount | grep " on $mnt " | grep -q read-only; then
+            note "$name" "remounted read-only; $n files of the copy present"
+        else
+            note "$name" "FAIL: remounted read-write while dirty"; rc=1
+        fi
+        for _ in 1 2 3 4 5 6 7 8; do umount "$mnt" 2>/dev/null && break; sleep 0.5; done
+        gone || { note "$name" "FAIL: unmount"; rc=1; }
+    else
+        note "$name" "FAIL: read-only remount"; rc=1
+    fi
+    # Stands in for chkdsk on Windows: the checks above found nothing wrong.
+    "$ntfsfix" -d "/dev/$disk" > "$work/fix.txt" 2>&1 || { note "$name" "FAIL: ntfsfix -d: $(tail -1 "$work/fix.txt")"; return 1; }
+    if "$fuse" --backend "$backend" "/dev/$disk" "$mnt" 2>/dev/null; then
+        mount | grep " on $mnt " | grep -q read-only && { note "$name" "FAIL: read-only after the mark was cleared"; rc=1; }
         cp -R "$src/include" "$mnt/after" && diff -r "$src/include" "$mnt/after" > /dev/null \
             && note "$name" "writing after the interruption: ok" || { note "$name" "FAIL: write after"; rc=1; }
         for _ in 1 2 3 4 5 6 7 8; do umount "$mnt" 2>/dev/null && break; sleep 0.5; done

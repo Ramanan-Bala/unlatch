@@ -10,7 +10,7 @@
 //   client:  open <bsd-name> ro|rw\n
 //   helper:  ok\n (plus the descriptor)  |  err <errno> <message>\n
 // Refused: callers other than the console user; names that are not diskN or diskNsM; volumes
-// DiskArbitration does not call NTFS (or that look like one by partition type).
+// DiskArbitration does not call NTFS, except read-only for an NTFS partition type (policy.c).
 #include <CoreFoundation/CoreFoundation.h>
 #include <DiskArbitration/DiskArbitration.h>
 #include <errno.h>
@@ -24,6 +24,8 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include "policy.h"
 
 #define HELPER_LABEL "io.github.ramanan-bala.unlatch.helper"
 
@@ -60,8 +62,14 @@ static int reply(int s, int fd, int err, const char *msg)
     return sendmsg(s, &m, 0) < 0 ? errno : 0;
 }
 
-// True if DiskArbitration describes bsd as an NTFS volume (or an NTFS-typed partition).
-static bool is_ntfs(const char *bsd)
+// Copies a CFString into buf; NULL when there is none.
+static const char *cstr(CFStringRef str, char *buf, size_t size)
+{
+    return str && CFStringGetCString(str, buf, (CFIndex)size, kCFStringEncodingUTF8) ? buf : NULL;
+}
+
+// Whether DiskArbitration's description of bsd lets it be opened in this mode (policy.c).
+static bool is_ntfs(const char *bsd, bool rw)
 {
     bool ok = false;
     DASessionRef session = DASessionCreate(kCFAllocatorDefault);
@@ -71,13 +79,10 @@ static bool is_ntfs(const char *bsd)
     if (disk) {
         CFDictionaryRef d = DADiskCopyDescription(disk);
         if (d) {
-            CFStringRef kind = CFDictionaryGetValue(d, kDADiskDescriptionVolumeKindKey);
-            CFStringRef content = CFDictionaryGetValue(d, kDADiskDescriptionMediaContentKey);
-            if (kind)
-                ok = CFStringCompare(kind, CFSTR("ntfs"), 0) == kCFCompareEqualTo;
-            else if (content)
-                ok = CFStringCompare(content, CFSTR("Windows_NTFS"), 0) == kCFCompareEqualTo ||
-                     CFStringCompare(content, CFSTR("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"), 0) == kCFCompareEqualTo;
+            char kind[64], content[64];
+            ok = helper_kind_allowed(cstr(CFDictionaryGetValue(d, kDADiskDescriptionVolumeKindKey), kind, sizeof(kind)),
+                                     cstr(CFDictionaryGetValue(d, kDADiskDescriptionMediaContentKey), content, sizeof(content)),
+                                     rw);
             CFRelease(d);
         }
         CFRelease(disk);
@@ -99,8 +104,12 @@ static void serve(int s)
         return;
     }
     // Only the user at the screen; not other local or remote users.
-    if (stat("/dev/console", &console) < 0 || console.st_uid != uid || uid == 0) {
-        os_log_error(hlog, "refused uid %d (console uid %d)", uid, (int)console.st_uid);
+    bool console_ok = stat("/dev/console", &console) == 0;
+    if (!helper_peer_allowed(uid, console_ok, console_ok ? console.st_uid : 0)) {
+        if (console_ok)
+            os_log_error(hlog, "refused uid %d (console uid %d)", uid, (int)console.st_uid);
+        else
+            os_log_error(hlog, "refused uid %d: cannot stat /dev/console: %{public}s", uid, strerror(errno));
         reply(s, -1, EPERM, "only the console user may open disks");
         return;
     }
@@ -117,8 +126,8 @@ static void serve(int s)
         reply(s, -1, EINVAL, "not a disk name");
         return;
     }
-    if (!is_ntfs(bsd)) {
-        os_log(hlog, "refused %{public}s for uid %d: not NTFS", bsd, uid);
+    if (!is_ntfs(bsd, strcmp(mode, "rw") == 0)) {
+        os_log(hlog, "refused %{public}s %{public}s for uid %d: not NTFS", bsd, mode, uid);
         reply(s, -1, EPERM, "not an NTFS volume");
         return;
     }
