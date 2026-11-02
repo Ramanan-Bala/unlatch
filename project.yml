@@ -204,7 +204,7 @@ targets:
         # macFUSE's headers and libfuse3 (D-40); -isystem keeps -Werror off its headers.
         OTHER_CFLAGS: [-Wall, -Wextra, -Werror, -isystem, $(MACFUSE_PREFIX)/include/fuse3]
         LIBRARY_SEARCH_PATHS: $(MACFUSE_PREFIX)/lib
-        OTHER_LDFLAGS: [-lfuse3, -framework, CoreFoundation]
+        OTHER_LDFLAGS: [-lfuse3, -framework, CoreFoundation, -framework, DiskArbitration]
         MACFUSE_PREFIX: /usr/local
     dependencies:
       - target: UnlatchEngine

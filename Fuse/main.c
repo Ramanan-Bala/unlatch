@@ -10,6 +10,8 @@
 // The safety decision is made here, before mounting: CORRUPT and NOT_NTFS are refused;
 // read-write only when the volume probes CLEAN, the device opens writable and -r was not
 // given; everything else mounts read-only. The verdict goes to the status record (status.c).
+#include <DiskArbitration/DiskArbitration.h>
+#include <dispatch/dispatch.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -144,10 +146,13 @@ static void record_status(const char *bsd_name, const ue_probe_t *p, bool read_o
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "status record for %s: %s", bsd_name, strerror(err));
 }
 
-// A disk pulled out without ejecting: macOS tells the FUSE daemon nothing, and the mount and
-// its lock (D-81) stayed until something touched the volume, 20-40 s on a USB stick, so the
-// next mount of the same disk was refused. A thread asks the device for its size every
-// second; ENXIO/ENODEV means it is gone, and the daemon force-unmounts itself (D-85).
+// A disk pulled out without ejecting: the kernel tells the FUSE daemon nothing, and the mount
+// and its lock (D-81) stayed until something touched the volume, 20-40 s on a USB stick, so the
+// next mount of the same disk was refused. DiskArbitration's disappeared callback for the
+// disk's BSD name is the signal (D-91): the open descriptor can go on answering after the disk
+// is gone, so read-only mounts of a pulled stick stayed and piled up in Finder. A thread also
+// asks the device for its size every second, and any error means it is gone (D-85). Either
+// way the daemon force-unmounts itself and its session loop ends.
 typedef struct {
     int fd;
     const char *mountpoint;
@@ -169,7 +174,7 @@ static void *watchdog(void *arg)
         pthread_cond_timedwait(&w->cond, &w->lock, &ts);
         if (w->stop)
             break;
-        if (ioctl(w->fd, DKIOCGETBLOCKCOUNT, &count) < 0 && (errno == ENXIO || errno == ENODEV)) {
+        if (ioctl(w->fd, DKIOCGETBLOCKCOUNT, &count) < 0 && errno != EINTR && errno != EAGAIN) {
             uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "the disk under %s went away; unmounting", w->mountpoint);
             unmount(w->mountpoint, MNT_FORCE);   // the session loop then ends
             break;
@@ -177,6 +182,54 @@ static void *watchdog(void *arg)
     }
     pthread_mutex_unlock(&w->lock);
     return NULL;
+}
+
+static void disk_disappeared(DADiskRef disk, void *ctx)
+{
+    const char *mountpoint = ctx;
+
+    (void)disk;
+    uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "the disk under %s disappeared; unmounting", mountpoint);
+    unmount(mountpoint, MNT_FORCE);
+}
+
+// Watches DiskArbitration for bsd_name (diskNsM; a leading r is dropped) to disappear.
+// Returns the session to pass to stop_disappear_watch, or NULL.
+static DASessionRef start_disappear_watch(const char *bsd_name, const char *mountpoint, dispatch_queue_t *queue)
+{
+    const char *name = !strncmp(bsd_name, "rdisk", 5) ? bsd_name + 1 : bsd_name;
+    DASessionRef session = DASessionCreate(kCFAllocatorDefault);
+    CFStringRef cfname = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
+    CFDictionaryRef match = NULL;
+
+    if (session && cfname) {
+        const void *k[] = { kDADiskDescriptionMediaBSDNameKey }, *v[] = { cfname };
+        match = CFDictionaryCreate(kCFAllocatorDefault, k, v, 1, &kCFTypeDictionaryKeyCallBacks,
+                                   &kCFTypeDictionaryValueCallBacks);
+    }
+    if (!match) {
+        if (cfname)
+            CFRelease(cfname);
+        if (session)
+            CFRelease(session);
+        return NULL;
+    }
+    *queue = dispatch_queue_create("io.github.ramanan-bala.unlatch.disappear", DISPATCH_QUEUE_SERIAL);
+    DARegisterDiskDisappearedCallback(session, match, disk_disappeared, (void *)mountpoint);
+    DASessionSetDispatchQueue(session, *queue);
+    CFRelease(match);
+    CFRelease(cfname);
+    return session;
+}
+
+static void stop_disappear_watch(DASessionRef session, dispatch_queue_t queue)
+{
+    if (!session)
+        return;
+    DASessionSetDispatchQueue(session, NULL);
+    dispatch_sync(queue, ^{});            // a callback already running finishes first
+    CFRelease(session);
+    dispatch_release(queue);
 }
 
 // One mount per volume: a read-write mount holds an exclusive flock on a file named after the
@@ -524,7 +577,10 @@ int main(int argc, char **argv)
     pthread_t wd_thread = NULL;
     bool have_wd = fstat(f.fd, &dst) == 0 && (S_ISBLK(dst.st_mode) || S_ISCHR(dst.st_mode)) &&
                    pthread_create(&wd_thread, NULL, watchdog, &wd) == 0;
+    dispatch_queue_t da_queue = NULL;
+    DASessionRef da = have_wd ? start_disappear_watch(bsd_name, mountpoint, &da_queue) : NULL;
     rc = session_loop(se, &fs) == 0 ? 0 : 1;
+    stop_disappear_watch(da, da_queue);
     if (have_wd) {
         pthread_mutex_lock(&wd.lock);
         wd.stop = true;

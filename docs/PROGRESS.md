@@ -855,6 +855,18 @@ UNLATCH_FUSE=build/DerivedData/Build/Products/Debug/unlatch-fuse CLI/.build/debu
 
 Not checked: the app's alert and menu item by hand (built only). Surprise: the first CLI try over a fresh read-only mount failed "already mounted" once; three runs after it passed at once and the log showed no retries. Not reproduced.
 
+### Follow-up: pulled read-only disks pile up in Finder (D-91) — done 2026-11-02
+
+- Owner's report: each pull and replug of the SanDisk stick (dirty, so read-only) left another `SANDISK` mount; three daemons were alive for disks that were gone, and none had logged the D-85 watchdog. A detached disk image showed why: the old descriptor still answers DKIOCGETBLOCKCOUNT and reads. `unlatch-fuse` now also listens for DiskArbitration's disappeared callback.
+- Checked on the real stick (mounted read-only with the new build through the CLI and helper, then pulled): "disappeared; unmounting" 11 ms later, the daemon exited, /Volumes empty. An attached image cannot stand in: macOS refuses to detach it while the daemon holds it.
+
+```sh
+UNLATCH_FUSE=build/DerivedData/Build/Products/Debug/unlatch-fuse CLI/.build/debug/unlatch mount diskNsM   # then pull the disk
+/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.ramanan-bala.unlatch"' --style compact | grep disappeared
+```
+
+Surprise: the installed app auto-mounted `interrupt.sh`'s test image while the gates ran (AGENTS.md says to turn auto-mount off for tests); the test then deleted the image under the app's mount.
+
 ## Carry-overs
 
 - **The Unlatch app stops (2026-11-02):** twice during the real-disk tests the app was not running, with no crash report (started again at 18:29, gone before 18:56). Find out why: `/usr/bin/log show --predicate 'process == "Unlatch"'`, launchd, or a quit from the menu.
