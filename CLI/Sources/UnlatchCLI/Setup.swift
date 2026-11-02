@@ -78,9 +78,14 @@ struct InstallHelper: ParsableCommand {
         let fm = FileManager.default
         try? fm.createDirectory(atPath: "/Library/PrivilegedHelperTools", withIntermediateDirectories: true)
         try? fm.removeItem(atPath: Paths.installedHelper)
+        try? fm.removeItem(atPath: HelperOpener.legacyInstalledPath)
         try fm.copyItem(atPath: src.path, toPath: Paths.installedHelper)
         try fm.setAttributes([.posixPermissions: 0o755, .ownerAccountID: 0, .groupOwnerAccountID: 0],
                              ofItemAtPath: Paths.installedHelper)
+        // The copy keeps the download's quarantine flag, but not the approval the user gave the app,
+        // so Gatekeeper would block every launch (and launchd retry it every 10 s). The user is
+        // installing Unlatch's own helper with administrator rights here, so the flag goes (D-75).
+        removexattr(Paths.installedHelper, "com.apple.quarantine", 0)
         try helperPlist.write(toFile: Paths.launchdPlist, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0],
                              ofItemAtPath: Paths.launchdPlist)
@@ -89,7 +94,7 @@ struct InstallHelper: ParsableCommand {
         print("""
             Installed the Unlatch helper (\(Paths.installedHelper)).
             Allow it once in System Settings > Privacy & Security > Full Disk Access: drag it there from
-            Finder (open -R \(Paths.installedHelper)), or click +, press ⌘⇧G and enter that path.
+            Finder (open -R "\(Paths.installedHelper)"), or click +, press ⌘⇧G and enter that path.
             macOS does not let a background helper open removable disks otherwise.
             """)
     }
@@ -104,6 +109,7 @@ struct UninstallHelper: ParsableCommand {
         shell(["/bin/launchctl", "bootout", "system/\(HelperOpener.label)"])
         try? FileManager.default.removeItem(atPath: Paths.launchdPlist)
         try? FileManager.default.removeItem(atPath: Paths.installedHelper)
+        try? FileManager.default.removeItem(atPath: HelperOpener.legacyInstalledPath)
         try? FileManager.default.removeItem(atPath: HelperOpener.socketPath)
         print("Removed the Unlatch helper.")
     }

@@ -6,7 +6,7 @@ Start with the menu bar's **Setup & Health…** window, or `unlatch doctor` in a
 
 - **Read-only with a reason:** see [read-only.md](read-only.md).
 - **"macFUSE is not installed" / exit code 4:** install it (`brew install --cask macfuse`), then allow its system extension: on Apple Silicon, Reduced Security in Recovery once, then System Settings > Privacy & Security > Allow. Restart if macOS asks.
-- **"macOS blocked the Unlatch helper"** (real disks only): give the helper Full Disk Access: System Settings > Privacy & Security > Full Disk Access > + > ⌘⇧G > `/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper`.
+- **"macOS blocked the Unlatch helper"** (real disks only): give the helper Full Disk Access: System Settings > Privacy & Security > Full Disk Access > + > ⌘⇧G > `/Library/PrivilegedHelperTools/Unlatch Helper`.
 - **"needs the helper":** run Unlatch's setup again (menu > Finish setting up), or `sudo unlatch install-helper`.
 - **Apple's read-only NTFS driver got the disk first:** `unlatch mount <disk>` takes it over (and gives it back if mounting fails). Turning auto-mount on in Settings makes Unlatch claim NTFS disks as they appear.
 - **The disk is not listed at all:** `diskutil list` should show a `Windows_NTFS` or `Microsoft Basic Data` partition. BitLocker-encrypted partitions are not supported.

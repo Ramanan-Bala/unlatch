@@ -31,6 +31,7 @@ cask "unlatch" do
             quit:         "io.github.ramanan-bala.Unlatch",
             delete:       [
               "/Library/LaunchDaemons/io.github.ramanan-bala.unlatch.helper.plist",
+              "/Library/PrivilegedHelperTools/Unlatch Helper",
               "/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper",
             ]
 

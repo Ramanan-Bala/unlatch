@@ -71,7 +71,7 @@ Example: `unlatch status --json | jq -r '.volumes[] | select(.owner == "unlatch"
 
 Real disks' device nodes are readable only by root. `sudo unlatch install-helper` installs a launchd job, `io.github.ramanan-bala.unlatch.helper`, that listens on `/var/run/io.github.ramanan-bala.unlatch.helper.sock`. It opens an NTFS volume's node, for the console user only, and hands the descriptor back. `unlatch-fuse` then runs as you. The helper never reads or writes the disk itself (D-57). Disk images you attach are yours and do not need it.
 
-macOS's privacy protection (TCC) also requires the helper to have **Full Disk Access**: System Settings → Privacy & Security → Full Disk Access, then drag the helper in from Finder (`open -R /Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper`), or **+** → ⌘⇧G → that path. `unlatch setup` opens both for you. The grant is the helper's, not the app's: the helper is what opens the disk (D-74). Without it, macOS refuses the helper's open of a removable disk, even as root, and `unlatch mount` says so (D-60).
+macOS's privacy protection (TCC) also requires the helper to have **Full Disk Access**: System Settings → Privacy & Security → Full Disk Access, then drag the helper in from Finder (`open -R "/Library/PrivilegedHelperTools/Unlatch Helper"`), or **+** → ⌘⇧G → that path. `unlatch setup` opens both for you. The grant is the helper's, not the app's: the helper is what opens the disk (D-74). Without it, macOS refuses the helper's open of a removable disk, even as root, and `unlatch mount` says so (D-60).
 
 Finding the other binaries: `$UNLATCH_FUSE` and `$UNLATCH_HELPER`, else next to `unlatch`, else the repository's Debug build.
 

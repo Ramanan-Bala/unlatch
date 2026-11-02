@@ -110,7 +110,8 @@ extension AppModel {
         stop()
 
         var problems: [String] = []
-        if FileManager.default.fileExists(atPath: HelperOpener.installedPath) || HelperOpener.installed {
+        if FileManager.default.fileExists(atPath: HelperOpener.installedPath) ||
+            FileManager.default.fileExists(atPath: HelperOpener.legacyInstalledPath) || HelperOpener.installed {
             let cmd = "'\(Checks.bundledCLI.path)' uninstall-helper"
             let script = "do shell script \"\(cmd.replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
             var err: NSDictionary?

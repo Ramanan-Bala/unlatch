@@ -10,7 +10,7 @@
     <key>AssociatedBundleIdentifiers</key>
     <string>io.github.ramanan-bala.Unlatch</string>
     <key>Program</key>
-    <string>/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper</string>
+    <string>/Library/PrivilegedHelperTools/Unlatch Helper</string>
     <key>Sockets</key>
     <dict>
         <key>Listeners</key>

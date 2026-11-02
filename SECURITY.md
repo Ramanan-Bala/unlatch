@@ -15,7 +15,7 @@ Problems that belong to libntfs-3g itself are also reported upstream (https://gi
 Unlatch reads disks that may come from anyone, so the most important surface is **parsing an untrusted NTFS volume**:
 
 - `unlatch-fuse` and the engine run **as the logged-in user**, never as root. A malicious disk that exploits a parser bug gets that user's rights, not the system's.
-- The **privileged helper** (`/Library/PrivilegedHelperTools/io.github.ramanan-bala.unlatch.helper`, runs as root) does one thing: for the console user, it opens the device node of a volume DiskArbitration reports as NTFS (name checked against `^disk[0-9]+(s[0-9]+)?$`) and passes the descriptor back. It never reads or parses the disk (D-57). Bugs that let another user, a non-NTFS device, or a crafted request through are in scope.
+- The **privileged helper** (`/Library/PrivilegedHelperTools/Unlatch Helper`, runs as root) does one thing: for the console user, it opens the device node of a volume DiskArbitration reports as NTFS (name checked against `^disk[0-9]+(s[0-9]+)?$`) and passes the descriptor back. It never reads or parses the disk (D-57). Bugs that let another user, a non-NTFS device, or a crafted request through are in scope.
 - The engine and libntfs-3g are fuzzed continuously in CI with AddressSanitizer and UndefinedBehaviorSanitizer (`Scripts/fuzz.sh`); crashing inputs are kept in `Tests/Fuzz/crashes/`.
 - The app's update check sends one unauthenticated HTTPS request to api.github.com and parses the reply as data only; it never downloads or runs anything.
 

@@ -4,6 +4,12 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Fixed
+- After an upgrade, macOS asked every 10 seconds whether to move the helper to the Trash ("Apple could not verify…"): the installed helper kept the download's quarantine flag. `install-helper` now clears it.
+
+### Changed
+- The helper is installed as **Unlatch Helper** (`/Library/PrivilegedHelperTools/Unlatch Helper`), the name Full Disk Access, Gatekeeper and Activity Monitor show; the old file is removed.
+
 ### Added
 - **Setup & Health…** in the menu-bar dropdown, always available, with a green or orange status icon; it opens the setup window, which reruns every check.
 

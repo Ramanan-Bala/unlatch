@@ -7,7 +7,11 @@ public struct HelperOpener: DeviceOpener {
     public static let label = "\(Unlatch.bundlePrefix).unlatch.helper"
     public static let socketPath = "/var/run/\(label).sock"
     public static var installed: Bool { FileManager.default.fileExists(atPath: socketPath) }
-    public static let installedPath = "/Library/PrivilegedHelperTools/\(label)"
+    /// The installed helper. Named for people: Gatekeeper, Full Disk Access and Activity Monitor
+    /// show this file name (D-75). The launchd label and the socket keep the reverse-DNS name.
+    public static let installedPath = "/Library/PrivilegedHelperTools/Unlatch Helper"
+    /// Where releases up to 1.0.0-beta.2 installed it; removed on install and uninstall.
+    public static let legacyInstalledPath = "/Library/PrivilegedHelperTools/\(label)"
 
     public init() {}
 
