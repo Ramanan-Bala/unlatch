@@ -17,7 +17,6 @@ Background: Apple DTS says a daemon generally does not inherit its app's TCC gra
 
 ## Other open items
 
-- [ ] Homebrew install: the bundled `unlatch` is killed (Gatekeeper, quarantine) when run from Terminal. Check whether approving the app once covers its bundled programs; otherwise decide between a cask step that clears quarantine and a documented manual step.
 - [ ] Full benchmark rerun (`Bench/baselines.sh`, all setups) and record it in `docs/M0-gate.md`.
 - [ ] Hardware tests in `docs/test-matrix.md`: USB stick pulled mid-copy, sleep and wake, a large real disk, the 24-hour soak, a clean-Mac install.
 - [ ] Windows-made images still wanted: Fast Startup, dirty, fragmented `$MFT` (`Tests/Images/README.md`).

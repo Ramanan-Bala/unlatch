@@ -4,8 +4,14 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.2] - 2026-11-02
+
 ### Changed
 - The helper is listed under Unlatch in Login Items, and "Allow in Full Disk Access" (setup window, `unlatch setup`) opens the right list and shows the helper in Finder to drag in.
+- Install docs and the Homebrew cask's message: open the app once before using `unlatch` in Terminal (until then macOS stops the bundled programs), and trust the tap first (Homebrew 7).
+
+### Fixed
+- Release workflow: the cask and the formula are attached under distinct names.
 
 ## [1.0.0-beta.1] - 2026-11-01
 

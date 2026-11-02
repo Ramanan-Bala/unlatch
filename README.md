@@ -50,7 +50,7 @@ unlatch setup
 
 The first time, Unlatch's setup window opens and checks each step; most of them it does for you. From a terminal, `unlatch setup` runs the same steps, and `unlatch doctor` checks them at any time.
 
-1. **Open Unlatch.** It is not signed with an Apple Developer ID (the project has no paid Apple membership), so macOS asks first. In Applications, right-click **Unlatch** > **Open** > **Open**. If there is no Open button: System Settings > Privacy & Security > **Open Anyway**. Needed once per version.
+1. **Open Unlatch.** It is not signed with an Apple Developer ID (the project has no paid Apple membership), so macOS asks first. In Applications, right-click **Unlatch** > **Open** > **Open**. If there is no Open button: System Settings > Privacy & Security > **Open Anyway**. Needed once per version. Do this before using `unlatch` in Terminal: until the app has been opened once, macOS stops its bundled programs without a message (`zsh: killed`).
 
 2. **macFUSE.** In the setup window, click **Install macFUSE**. Unlatch downloads the latest release from macFUSE's GitHub page, checks it against the checksum macFUSE publishes, checks that the installer is signed by macFUSE's developer (Benjamin Fleischer, team 3T5GSNBU6W) and notarized by Apple, and then installs it. macOS asks for your password. If macFUSE is older than 5.4, the button says **Update macFUSE**. Homebrew users already have it.
 

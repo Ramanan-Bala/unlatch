@@ -42,7 +42,7 @@ cask "unlatch" do
   caveats <<~EOS
     Unlatch is not signed with an Apple Developer ID. If macOS refuses to open it, open it once
     with a right-click on Unlatch in Applications > Open, or allow it in System Settings >
-    Privacy & Security > "Open Anyway".
+    Privacy & Security > "Open Anyway". Until then macOS also stops the `unlatch` command.
 
     macFUSE's kernel extension must be allowed once (Recovery > Reduced Security, then Allow in
     System Settings > Privacy & Security); Unlatch's setup window walks through it:

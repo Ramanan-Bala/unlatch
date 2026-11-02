@@ -83,6 +83,14 @@ Machine: Apple M2, 8 GiB, macOS 27.0.1, macFUSE 5.4.0 (kext backend), Windows 11
 | fsx soak, 1,000 seeds × 2,000 ops (Step 06) | no mismatch | pass (Step 06 run; regressions re-run every gate) | 2026-11-01 | step 06+ |
 | 24-hour soak: fuzz, fsx and a copy loop on a real disk | no failures | **open, S3**: needs a real disposable disk and a day of machine time | – | – |
 
+## Distribution (Homebrew cask, 1.0.0-beta.1)
+
+| Scenario | Expected | Actual | Date | Build |
+|---|---|---|---|---|
+| Fresh install on the dev Mac after removing Unlatch and macFUSE: `brew tap`, `brew trust --tap`, `brew install --cask` | macFUSE installed as a dependency, app in Applications, `unlatch` linked | as expected (macFUSE 5.5.0) | 2026-11-02 | 1.0.0-beta.1 |
+| `unlatch` from Terminal before the app was opened | works | **killed** (Gatekeeper: quarantined, ad-hoc signed; no dialog for command-line programs). Documented in the README, troubleshooting and the cask's caveats | 2026-11-02 | 1.0.0-beta.1 |
+| Same after opening the app once with Open Anyway | works | the approval marks the bundled programs too (quarantine `0181` → `01c1`); `unlatch doctor` passes every check | 2026-11-02 | 1.0.0-beta.1 |
+
 ## Open items
 
 No open data-loss or corruption issue. Open, waiting on hardware or the owner: USB pull mid-copy (S2), sleep and wake (S2), 50 GB file and 1M-file tree on a real disk (S3), 24-hour soak (S3), Windows-made Unicode names (S3, with the golden images).

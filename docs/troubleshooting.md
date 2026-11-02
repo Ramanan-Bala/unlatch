@@ -15,6 +15,10 @@ Start with `unlatch doctor`: it checks macOS, macFUSE and its system extension, 
 
 Unlatch is not signed with an Apple Developer ID. Right-click Unlatch in Applications > Open, then Open; or System Settings > Privacy & Security > Open Anyway. See [install.md](install.md).
 
+## `unlatch` in Terminal says "killed"
+
+macOS stops the programs inside a downloaded, unsigned app until the app itself has been opened once. Open Unlatch from Applications with right-click > Open (or Open Anyway in Privacy & Security), then run `unlatch` again. Needed once per version.
+
 ## Unmount or eject says the disk is busy
 
 A program still has a file open on it. Close it, or find it with `lsof +D /Volumes/<name>`. Right after a large copy, macOS itself may hold the disk for a moment; Unlatch retries for a few seconds. `unlatch unmount --force <disk>` unmounts anyway, which can lose the open program's unsaved changes.
