@@ -3,5 +3,5 @@
 
 const char *ue_version(void)
 {
-    return "1.0.0-beta.8";
+    return "1.0.0-beta.9";
 }
