@@ -48,6 +48,20 @@ struct MenuView: View {
                 .toggleStyle(.switch)
                 .padding(.horizontal, 12)
                 .help("Mount NTFS disks with Unlatch as soon as they are connected.")
+            // Always reachable, not only while setup is unfinished: the same checks double as a
+            // health view (macFUSE, its extension, the helper, the self-test).
+            Button { open("onboarding") } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: checks.allPassed ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .foregroundStyle(checks.allPassed ? .green : .orange)
+                    Text("Setup & Health…")
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .help(checks.allPassed ? "Everything Unlatch needs is in place." : "Something needs attention.")
+            .accessibilityLabel(checks.allPassed ? "Setup and health: all checks pass" : "Setup and health: needs attention")
             HStack {
                 Button("Settings…") { NSApp.activate(); openSettings() }
                 Spacer()

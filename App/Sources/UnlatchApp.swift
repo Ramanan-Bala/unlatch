@@ -24,7 +24,7 @@ struct UnlatchApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Set up Unlatch", id: "onboarding") {
+        Window("Unlatch Setup & Health", id: "onboarding") {
             OnboardingView(model: model, checks: checks)
         }
         .windowResizability(.contentSize)

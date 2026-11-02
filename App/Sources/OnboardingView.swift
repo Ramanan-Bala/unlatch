@@ -10,7 +10,7 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Set up Unlatch").font(.title2.bold())
+            Text(checks.onboarded ? "Setup & Health" : "Set up Unlatch").font(.title2.bold())
             Text("Unlatch lets this Mac write to NTFS disks from Windows. A few things need to be in place.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

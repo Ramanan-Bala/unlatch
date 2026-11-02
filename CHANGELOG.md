@@ -4,6 +4,9 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+- **Setup & Health…** in the menu-bar dropdown, always available, with a green or orange status icon; it opens the setup window, which reruns every check.
+
 ## [1.0.0-beta.2] - 2026-11-02
 
 ### Changed

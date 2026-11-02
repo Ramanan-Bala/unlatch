@@ -67,7 +67,7 @@ The first time, Unlatch's setup window opens and checks each step; most of them 
 
 5. **Self-test.** The setup window mounts a tiny built-in NTFS volume and reads it back. When it shows a green check, you are done. Optional: **Open Unlatch at login**, and **Copy install command** to put `unlatch` on your PATH (Homebrew does that already).
 
-Check it all again any time:
+Check it all again any time from the menu bar: **Setup & Health…** opens the same window (its icon turns orange when something needs attention). From a terminal:
 
 ```sh
 unlatch doctor

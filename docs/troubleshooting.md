@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with `unlatch doctor`: it checks macOS, macFUSE and its system extension, `unlatch-fuse`, the helper, and the status directory, and says what to fix.
+Start with the menu bar's **Setup & Health…** window, or `unlatch doctor` in a terminal: it checks macOS, macFUSE and its system extension, `unlatch-fuse`, the helper, and the status directory, and says what to fix.
 
 ## The disk does not mount, or Finder shows it read-only
 
