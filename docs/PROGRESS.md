@@ -763,7 +763,20 @@ Tests/Fuse/interrupt.sh kill && Tests/Fuse/interrupt.sh --backend fskit kill
 
 Surprise: FSKit's `df` shows Used 0 (carry-over). Not run: a Windows chkdsk of a volume written this way (no `WINDOWS_SSH` here); the deletes go through the same `ntfs_delete` as before.
 
+### Follow-up: decomposed names made by Windows (D-83) — done 2026-11-02
+
+- `names/éte-nfd.txt` in `windows-content.img` was listed by readdir but its lookup (in NFC) failed, so `ls` dropped it. `name_forms()` in `Fuse/ops.c`: lookup, unlink, rmdir and rename's source try NFC, the name as sent, then NFD.
+- rw-suite step "decomposed names from Windows" (the harness writes NFD names into the fresh image: listed, read by both forms, renamed, removed). `check-readonly.sh` now handles links (it `cat`ed them since Step 16) and passes on `windows-content.img`.
+
+```sh
+zstd -d Tests/Images/windows-content.img.zst -o build/wc.img
+build/DerivedData/Build/Products/Debug/unlatch-fuse -r build/wc.img build/m1 && Tests/Fuse/check-readonly.sh build/wc.img build/m1; umount build/m1   # 516 files, 0 failures
+Tests/Fuse/rw-suite.sh --runs 1 && Tests/Fuse/rw-suite.sh --runs 1 --backend fskit && Tests/Fuse/rw-suite.sh --runs 1 --disk
+```
+
 ## Carry-overs
+
+- **Mixed-form names (D-83):** a name with one composed and one decomposed accent is reachable through readdir only, not when typed in NFC. Fix with normalization-insensitive matching in the engine's lookup if it matters.
 
 - **Failed FSKit mount leaves its mount point (2026-11-02, Seagate HDD):** `unlatch mount` through FSKit straight after `unlatch unmount` failed ("did not take the mount") and left an empty `/Volumes/seagate`; the next mount landed on `/Volumes/seagate disk6s1`, and the user cannot remove the leftover (`/Volumes` is root's). Remove the mount point on failure, and retry with a pause (see the FSKit transient failure below).
 - **Kext warm read not cached (2026-11-02, Seagate HDD):** `Bench/run.sh` through the kernel extension read the 1 GiB file again at 109 MB/s, the drive's speed, where the stick and SSD runs read it from the page cache. Find out why (memory pressure after a 123 GB copy, or the mount's options).
@@ -772,7 +785,6 @@ Surprise: FSKit's `df` shows Used 0 (carry-over). Not run: a Windows chkdsk of a
 
 - **Step 04+:** the ntfs-3g build sets no `--enable-debug`. Decide whether Debug engine builds want ntfs-3g debug logging. For now the log handler is null (D-16).
 - **Step 07:** Windows-made Fast Startup, dirty and fragmented-MFT images are still wanted (`Tests/Images/README.md`).
-- **NFD name on the Windows-made image:** `names/éte-nfd.txt` in `windows-content.img` is missing from mount listings (kext and FSKit alike), so `check-readonly.sh` fails there.
 - **FSKit transient failure (D-78):** after macFUSE's background service restarts, mounts fail for about a minute ("not found"/"not enabled"). Consider a retry with backoff in `MountService.mount` for auto-mounts.
 - **macFUSE 5.6.0:** when released, rerun the FSKit suites; `reply_bytes()` can stay.
 - **Step 14:** the app installs the helper (or tells the user to run `sudo unlatch install-helper`) and runs the auto-mount loop with `DiskWatcher(claim:)`.

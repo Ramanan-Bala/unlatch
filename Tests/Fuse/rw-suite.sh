@@ -61,6 +61,10 @@ for run in $(seq 1 "$runs"); do
     echo "rw-suite: run $run of $runs ($backend backend)"
     rm -f "$work/run.img"
     img=$(cd "$work" && "$root/Scripts/make-image.sh" run 2g RWSUITE | tail -1)
+    # D-83: names stored decomposed, as Windows may store them (the harness stores names as given).
+    win_nfd=$(printf 'e\314\201te\314\201-nfd')
+    printf nfd | "$engine" put "$img" - "/$win_nfd.txt" >/dev/null || die "put $win_nfd.txt"
+    printf nfd | "$engine" put "$img" - "/$win_nfd-2.txt" >/dev/null || die "put $win_nfd-2.txt"
     vol="$img"
     if [ "$disk" = 1 ]; then dev=$("$root/Scripts/attach-image.sh" "$img"); vol="/dev/$dev"; fi
     mount_rw
@@ -68,6 +72,15 @@ for run in $(seq 1 "$runs"); do
 
     # D-81: a second mount of the mounted volume, read-write or read-only, by the same path or
     # (with --disk) the image behind the device, is refused.
+    say "decomposed names from Windows"
+    ls "$mnt" | grep -qx "$win_nfd.txt" || die "$win_nfd.txt not listed"
+    [ "$(cat "$mnt/$win_nfd.txt")" = nfd ] || die "read $win_nfd.txt"
+    [ "$(cat "$mnt/été-nfd.txt")" = nfd ] || die "read $win_nfd.txt by its NFC name"
+    mv "$mnt/$win_nfd.txt" "$mnt/renamed-nfd.txt" && [ "$(cat "$mnt/renamed-nfd.txt")" = nfd ] || die "rename $win_nfd.txt"
+    rm "$mnt/renamed-nfd.txt" "$mnt/$win_nfd-2.txt" || die "rm $win_nfd-2.txt"
+    [ -z "$(ls "$mnt" | grep nfd)" ] || die "nfd names left: $(ls "$mnt" | grep nfd)"
+    ok
+
     say "second mount of the volume refused"
     mkdir -p "$work/mnt2"
     for args in "$vol" "-r $vol" "$img"; do

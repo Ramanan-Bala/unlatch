@@ -5,7 +5,7 @@
 #   Tests/Fuse/check-readonly.sh <image> <mountpoint>      (mounted with unlatch-fuse -r)
 #
 # Every directory: names, types and sizes match `unlatch-engine ls`. Every file: SHA-256
-# through the mount matches `unlatch-engine cat`. Then df totals match `unlatch-engine info`,
+# through the mount matches `unlatch-engine cat`; every link reads back a target. Then df totals match `unlatch-engine info`,
 # and writes are refused.
 set -euo pipefail
 
@@ -22,7 +22,9 @@ mount_ls() {
     local d="$mnt$1" f
     for f in "$d"/* "$d"/.[!.]* "$d"/..?*; do
         [ -e "$f" ] || [ -L "$f" ] || continue
-        if [ -d "$f" ]; then
+        if [ -L "$f" ]; then
+            printf 'l 0 %s\n' "${f##*/}"   # the harness lists links with size 0 (Step 16)
+        elif [ -d "$f" ]; then
             printf 'd %s %s\n' "$(stat -f %z "$f")" "${f##*/}"
         else
             printf -- '- %s %s\n' "$(stat -f %z "$f")" "${f##*/}"
@@ -42,6 +44,8 @@ walk() {
         name="${line#* }"; name="${name#* }"
         if [ "$type" = d ]; then
             walk "$rel/$name"
+        elif [ "$type" = l ]; then
+            [ -n "$(readlink "$mnt$rel/$name")" ] || bad "link $rel/$name has no target"
         else
             files=$((files + 1))
             a=$("$engine" cat "$img" "$rel/$name" | shasum -a 256 | cut -d' ' -f1)

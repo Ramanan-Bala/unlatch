@@ -141,7 +141,7 @@ static fuse_ino_t to_fuse(const uf_fs_t *fs, ue_ino_t ino)
 
 // NTFS stores what Windows writes (NFC) and the engine compares without normalizing (D-22),
 // so every incoming name is converted to NFC here.
-static int nfc_name(const char *in, char out[UF_NAME_MAX])
+static int normalized(const char *in, CFStringNormalizationForm form, char out[UF_NAME_MAX])
 {
     CFStringRef s = CFStringCreateWithCString(NULL, in, kCFStringEncodingUTF8);
     CFMutableStringRef m;
@@ -153,10 +153,34 @@ static int nfc_name(const char *in, char out[UF_NAME_MAX])
     CFRelease(s);
     if (!m)
         return ENOMEM;
-    CFStringNormalize(m, kCFStringNormalizationFormC);
+    CFStringNormalize(m, form);
     ok = CFStringGetCString(m, out, UF_NAME_MAX, kCFStringEncodingUTF8);
     CFRelease(m);
     return ok ? 0 : ENAMETOOLONG;
+}
+
+static int nfc_name(const char *in, char out[UF_NAME_MAX])
+{
+    return normalized(in, kCFStringNormalizationFormC, out);
+}
+
+// Spellings to try for a name that must already exist. Names made on the Mac are stored NFC,
+// but Windows stores whatever it was given: a decomposed name made there was listed, and then
+// its lookup (in NFC) failed, so ls and Finder dropped it. NFC first, then the name exactly as
+// the kernel sent it (from readdir), then NFD (D-83). Returns how many there are, or -errno.
+typedef char uf_forms_t[3][UF_NAME_MAX];
+
+static int name_forms(const char *in, uf_forms_t f)
+{
+    int n = 1, err;
+
+    if ((err = nfc_name(in, f[0])))
+        return -err;
+    if (strlen(in) < UF_NAME_MAX && strcmp(in, f[0]))
+        strcpy(f[n++], in);
+    if (!normalized(in, kCFStringNormalizationFormD, f[n]) && strcmp(f[n], f[0]) && (n == 1 || strcmp(f[n], f[1])))
+        n++;
+    return n;
 }
 
 static void fill_attr(const uf_fs_t *fs, const ue_attr_t *a, struct fuse_darwin_attr *st)
@@ -293,11 +317,13 @@ void uf_close_engine(uf_fs_t *fs)
 static void uf_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
     uf_fs_t *fs = fs_of(req);
-    char nfc[UF_NAME_MAX];
+    uf_forms_t forms;
     ue_attr_t a;
-    int err;
+    int n = name_forms(name, forms), err = n < 0 ? -n : ENOENT;
 
-    if ((err = nfc_name(name, nfc)) || (err = ue_lookup(fs->engine, to_engine(fs, parent), nfc, &a))) {
+    for (int i = 0; i < n && err == ENOENT; i++)
+        err = ue_lookup(fs->engine, to_engine(fs, parent), forms[i], &a);
+    if (err) {
         fuse_reply_err(req, err);
         return;
     }
@@ -680,18 +706,19 @@ static void uf_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
     }
 }
 
-// Removing a name the kernel still holds is fine: the engine keeps the file as a hidden
-// ghost until the last forget releases it (D-25).
+// Removing a name the kernel still holds is fine: an open file is kept as a hidden ghost
+// until its last close (D-25, D-82).
 static void remove_common(fuse_req_t req, fuse_ino_t parent, const char *name, bool is_dir)
 {
     uf_fs_t *fs = fs_of(req);
-    char nfc[UF_NAME_MAX];
-    int err;
+    uf_forms_t forms;
+    int n = name_forms(name, forms), err = n < 0 ? -n : ENOENT;
 
     if (fs->read_only)
         err = EROFS;
-    else if (!(err = nfc_name(name, nfc)))
-        err = ue_remove(fs->engine, to_engine(fs, parent), nfc, is_dir);
+    else
+        for (int i = 0; i < n && err == ENOENT; i++)
+            err = ue_remove(fs->engine, to_engine(fs, parent), forms[i], is_dir);
     fuse_reply_err(req, err);
 }
 
@@ -709,8 +736,9 @@ static void uf_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_
                       const char *newname, unsigned int flags)
 {
     uf_fs_t *fs = fs_of(req);
-    char from[UF_NAME_MAX], to[UF_NAME_MAX];
-    int err;
+    uf_forms_t from;
+    char to[UF_NAME_MAX];
+    int n = name_forms(name, from), err;
 
     if (fs->read_only)
         err = EROFS;
@@ -718,9 +746,14 @@ static void uf_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_
         err = ENOTSUP;
     else if (flags & ~(unsigned)RENAME_EXCL)
         err = EINVAL;
-    else if (!(err = nfc_name(name, from)) && !(err = nfc_name(newname, to)))
-        err = ue_rename(fs->engine, to_engine(fs, parent), from, to_engine(fs, newparent), to,
-                        (flags & RENAME_EXCL) ? UE_RENAME_EXCL : 0);
+    else if (n < 0)
+        err = -n;
+    else if (!(err = nfc_name(newname, to))) {
+        err = ENOENT;
+        for (int i = 0; i < n && err == ENOENT; i++)   // the source may be stored decomposed
+            err = ue_rename(fs->engine, to_engine(fs, parent), from[i], to_engine(fs, newparent), to,
+                            (flags & RENAME_EXCL) ? UE_RENAME_EXCL : 0);
+    }
     fuse_reply_err(req, err);
 }
 
