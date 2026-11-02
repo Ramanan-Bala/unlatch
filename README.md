@@ -144,6 +144,26 @@ On a fast SSD (a 4 GiB image on the internal SSD, attached as a disk; median of 
 | Small files (1–16 KiB) | 368 files/s | 2,891 files/s | 2,231 files/s | 1,131 files/s |
 | Metadata (create, rename, delete) | 510 ops/s | 4,358 ops/s | 26,845 ops/s | 833 ops/s |
 
+### A real copy: 123 GB of GoPro footage to a USB hard drive
+
+A Finder copy of a GoPro footage folder (364 files, 123 GB, mostly multi-GB clips) from the Mac's internal SSD to a Seagate Expansion 1 TB portable hard drive (2.5", 5400 rpm, USB 3.0), formatted NTFS and mounted by Unlatch through the kernel extension:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Bench/seagate-dark.svg">
+    <img src="Bench/seagate.svg" alt="Line chart of write speed during a 19 minute, 123 GB Finder copy to a Seagate USB 3.0 hard drive through Unlatch. Speed holds between about 92 and 112 MB/s, averaging 106 MB/s, against the drive's rated maximum of 130 MB/s" width="800">
+  </picture>
+</p>
+
+| | |
+|---|---|
+| Copied | 123.1 GB in 19 min 21 s |
+| Average write speed | **106 MB/s** |
+| Steady range (30 s average) | 92–112 MB/s |
+| Drive's rated maximum | up to 130 MB/s |
+
+The copy ran at 82% of the drive's rated maximum from start to finish, with no slowdown as it went. That rating is the maker's best case for sequential transfers on the drive's outer tracks; this drive was a third full, so the copy landed further in, where a spinning disk is slower. The drive itself, not Unlatch, set the pace. Sampling began 6.5 minutes into the copy; the whole-copy average uses the folder's creation time on the drive as the start.
+
 ### What FSKit costs
 
 FSKit needs no kernel extension, but every file operation then passes through Apple's `fskitd` and macFUSE's extension process before it reaches Unlatch. Compared with the kernel extension, on the same disk and day:

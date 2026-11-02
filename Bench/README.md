@@ -60,6 +60,10 @@ SanDisk Cruzer Blade 16 GB (USB 2.0), GPT with one 15.8 GB NTFS partition (`mknt
 
 Reads run at the stick's full speed and writes lose about a tenth with either backend, most likely to NTFS's own writes (MFT records, bitmap, log) on a device this slow; exFAT, with less metadata, loses 7%. Here FSKit costs 8% on small files and 2.9× on metadata: the stick hides most of FSKit's per-operation overhead. Small files and metadata beat exFAT with either backend, helped by the engine's write-back page cache (D-62).
 
+## Real drive: a real copy to a USB hard drive
+
+Seagate Expansion 1 TB portable hard drive (2.5", 5400 rpm, USB 3.0 at 5 Gb/s), NTFS, a third full, Apple M2, macOS 27.0.1, Unlatch 1.0.0-beta.5 installed app (kernel extension backend). A Finder copy of a GoPro footage folder (364 files, 123.1 GB, 19 files over 1 GiB) from the internal SSD. Not a `run.sh` benchmark: `df -k` of the mounted volume every 5 s, from 6.5 minutes into the copy until it finished; the whole-copy time runs from the copied folder's creation time on the drive (`stat -f %B`) to the last sample that grew. The drive holds real data, so there is no raw `dd` baseline; the comparison is the maker's "up to 130 MB/s". Result: [`unlatch-seagate-gopro`](results/2026-11-02-unlatch-seagate-gopro.json), 123.1 GB in 1,161 s, 106.1 MB/s (sampled stretch: 104.3 MB/s, 30 s averages 92–112 MB/s). `Bench/seagate-chart.py --from-log <log>` writes the result file from the samples, and `Bench/seagate-chart.py` draws `seagate.svg` and `seagate-dark.svg` (the chart in the top-level README) from it.
+
 ## Running
 
 ```sh
