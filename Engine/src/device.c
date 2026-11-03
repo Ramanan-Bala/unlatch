@@ -36,7 +36,7 @@ static int dev_open(struct ntfs_device *dev, int flags)
     return 0;
 }
 
-// The write-back order (D-96): the device ranges of the bitmaps, $MFT and $MFTMirr, from the
+// The write-back order (D-97): the device ranges of the bitmaps, $MFT and $MFTMirr, from the
 // runlists in memory. Only mapped runs count; a run never mapped was never written. No I/O:
 // this runs inside write-backs, which may come in the middle of a libntfs-3g call.
 static void add_runs(ue_bcache_t *bc, const ntfs_volume *vol, const ntfs_attr *na, int kind)

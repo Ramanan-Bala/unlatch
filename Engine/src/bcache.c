@@ -14,7 +14,7 @@
 //
 // NTFS through libntfs-3g has no journal, so a write-back cut off by a pull leaves whatever
 // part of it reached the disk. Write-back is ordered so that what is pointed to lands, and
-// is flushed, before what points at it (D-96):
+// is flushed, before what points at it (D-97):
 //   1. file data and the bitmaps, then $MFT's first page with $MFTMirr right after it
 //   2. new index blocks (pages that were not index blocks on the disk)
 //   3. records created since the last write-back, highest first (a new folder's record after
@@ -68,7 +68,7 @@ struct ue_bcache {
     uint8_t *ahead;                   // BC_READAHEAD pages; separate, since filling can evict and write back
     bool cold;                        // file data: new pages go to the LRU tail, hits stay put
     int32_t *sorted;                  // n entries, for write-back
-    uint64_t *key;                    // n entries: write-back order of each entry (D-96)
+    uint64_t *key;                    // n entries: write-back order of each entry (D-97)
     size_t *runs;                     // n + 1 entries: starts of one phase's transfers in sorted
     bc_order_fn order;                // fills the ranges at each write-back; NULL: device order
     void *order_ctx;
@@ -250,7 +250,7 @@ static bool is_index(const uint8_t *page)
     return memcmp(page, "INDX", 4) == 0;
 }
 
-// Write-back phases (D-96). A flush comes before BC_PH_REST and before BC_PH_RECORDS.
+// Write-back phases (D-97). A flush comes before BC_PH_REST and before BC_PH_RECORDS.
 enum { BC_PH_FIRST, BC_PH_MFT_HEAD, BC_PH_NEW_INDEX, BC_PH_NEW, BC_PH_REST, BC_PH_RECORDS };
 
 // Sort key: phase in the top byte, then the position within it (pages twice apart, so a
@@ -327,7 +327,7 @@ static int write_run(ue_bcache_t *bc, size_t a, size_t b)
     return 0;
 }
 
-// Writes every dirty page, phase by phase (D-96); within a phase in device order, adjacent
+// Writes every dirty page, phase by phase (D-97); within a phase in device order, adjacent
 // pages joined into one transfer. New records go highest first: a new folder's record, with
 // the entries of the files created in it, lands after theirs.
 int bc_writeback(ue_bcache_t *bc)

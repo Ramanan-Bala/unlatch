@@ -1812,7 +1812,7 @@ static void test_check_cut_copy(void)
     free(d.mem);
 }
 
-// Ordered write-back (D-96): a create-heavy workload (nested folders, small and large files,
+// Ordered write-back (D-97): a create-heavy workload (nested folders, small and large files,
 // a write-back every few creates as the 1 s timer does, then a folder emptied) cut off after
 // every other device write. Whatever the cut, no folder entry may point at a record that is
 // free or reused, no index may be unreadable and no record torn: what is pointed to lands

@@ -482,7 +482,7 @@ int ue_create(ue_engine_t *e, ue_ino_t dir, const char *name, uint32_t type, uin
         err = errno ? errno : EIO;
         goto out;
     }
-    ue_device_hint_new_record(e->dev_ctx, ni->mft_no);   // lands before the entry (D-96)
+    ue_device_hint_new_record(e->dev_ctx, ni->mft_no);   // lands before the entry (D-97)
     if (type == UE_T_REG) {
         ni->flags |= FILE_ATTR_ARCHIVE;
         if (!(mode & S_IWUSR))
@@ -675,7 +675,7 @@ int ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *targe
         err = errno ? errno : EIO;
         goto out;
     }
-    ue_device_hint_new_record(e->dev_ctx, ni->mft_no);   // D-96
+    ue_device_hint_new_record(e->dev_ctx, ni->mft_no);   // D-97
     ntfs_inode_update_mbsname(dni, name, ni->mft_no);
     ntfs_inode_update_times(dni, NTFS_UPDATE_MCTIME);
     NInoSetDirty(ni);

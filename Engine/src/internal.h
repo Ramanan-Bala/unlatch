@@ -20,8 +20,8 @@ int bc_new(const ue_io_t *io, size_t bytes, ue_bcache_t **out);
 void bc_free(ue_bcache_t *bc);
 int bc_read(ue_bcache_t *bc, void *buf, size_t len, uint64_t off);
 int bc_write(ue_bcache_t *bc, const void *buf, size_t len, uint64_t off);
-int bc_writeback(ue_bcache_t *bc);    // all dirty pages, ordered (D-96)
-// Write-back order (D-96): at each write-back the cache calls fn, which names the device
+int bc_writeback(ue_bcache_t *bc);    // all dirty pages, ordered (D-97)
+// Write-back order (D-97): at each write-back the cache calls fn, which names the device
 // ranges holding bitmaps, $MFT and $MFTMirr (bc_add_range) without doing any I/O.
 enum { BC_RANGE_NONE, BC_RANGE_BITMAP, BC_RANGE_MFT, BC_RANGE_MIRROR };
 typedef void (*bc_order_fn)(void *ctx, ue_bcache_t *bc);
@@ -43,7 +43,7 @@ typedef struct ue_dev {
     uint64_t pos;                     // seek position for read/write
     bool failed;                      // a write failed or the device went away: all I/O -> EIO
     ue_bcache_t *cache;               // NULL without UE_OPEN_CACHE
-    ntfs_volume *vol;                 // for the write-back order (D-96); NULL: device order
+    ntfs_volume *vol;                 // for the write-back order (D-97); NULL: device order
     bool unmarked;                    // read-write and the dirty mark is off: writes are a bug (D-95)
     uint64_t unmarked_writes;         // writes that came while unmarked (tests expect none)
 } ue_dev_t;
@@ -54,7 +54,7 @@ struct ntfs_device *ue_device_new(const ue_io_t *io, bool cached, ue_dev_t **ctx
 void ue_device_free_ctx(ue_dev_t *ctx);
 // Writes the cache back; a failure marks the device failed. 0 or errno.
 int ue_device_writeback(ue_dev_t *ctx);
-// Write-back order (D-96): from vol's runlists while set; NULL before libntfs-3g tears the
+// Write-back order (D-97): from vol's runlists while set; NULL before libntfs-3g tears the
 // volume down. The hint marks a record created since the last write-back.
 void ue_device_set_volume(ue_dev_t *ctx, ntfs_volume *vol);
 void ue_device_hint_new_record(ue_dev_t *ctx, uint64_t rec);
