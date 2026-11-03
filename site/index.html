@@ -216,7 +216,7 @@ unlatch setup</code></pre>
           <tr><td><strong>Windows is hibernated on this volume</strong> (<code>hibernated</code>)</td><td>Windows went into hibernation with this disk attached; its open files live in <code>hiberfil.sys</code>.</td><td>Start Windows, then choose <strong>Shut Down</strong> (not Hibernate or Sleep).</td></tr>
           <tr><td><strong>Windows Fast Startup (or an abrupt unplug) left cached metadata</strong> (<code>hibernated</code>)</td><td>Windows' "Shut Down" with Fast Startup on is really a hibernation of the system; the disk is left in use. An unplug without ejecting can look the same.</td><td>In Windows, hold <strong>Shift</strong> while choosing Shut Down, or turn Fast Startup off: Control Panel &gt; Power Options &gt; Choose what the power buttons do &gt; uncheck "Turn on fast startup".</td></tr>
           <tr><td><strong>$LogFile has unfinished transactions</strong> (<code>unclean_log</code>)</td><td>Windows did not finish writing before the disk went away.</td><td>Attach the disk to Windows, let it open, then Shut Down (or eject it there).</td></tr>
-          <tr><td><strong>Volume is marked dirty</strong> (<code>dirty</code>)</td><td>Windows found a problem and wants <code>chkdsk</code> to run.</td><td>On Windows: <code>chkdsk X: /f</code> (X is the disk's letter), then eject it.</td></tr>
+          <tr><td><strong>Volume is marked dirty</strong> (<code>dirty</code>)</td><td>The disk was unplugged, or the Mac or Windows stopped, while it was being written to, or Windows found a problem.</td><td>Unlatch checks it when it is plugged in and asks you; see <a href="#unplugged">If a disk is unplugged while writing</a>. Otherwise, on Windows: <code>chkdsk X: /f</code>.</td></tr>
           <tr><td><strong>Write-protected</strong>, or <strong>cannot be opened for writing</strong></td><td>The disk, card or image itself refuses writes (a lock switch, a read-only image, a failing drive).</td><td>Check the lock switch; copy a read-only image to a writable one.</td></tr>
           <tr><td><strong>Handed over read-only</strong></td><td>You (or a script) asked for read-only, for example <code>unlatch mount -r</code>.</td><td>Unmount and mount again without <code>-r</code>.</td></tr>
           <tr><td><strong>NTFS metadata is damaged</strong> (<code>corrupt</code>)</td><td>Unlatch could not make sense of the disk's own records. It does not mount it at all.</td><td>On Windows: <code>chkdsk X: /f</code>. Copy what you can elsewhere first.</td></tr>
@@ -225,6 +225,22 @@ unlatch setup</code></pre>
       </table>
     </div>
     <p>Unlatch never forces a write (ntfs-3g's <code>recover</code> or <code>remove_hiberfile</code> options are not used): only Windows can safely finish what Windows started. After fixing it, eject the disk on Windows and plug it into the Mac again, and Unlatch mounts it read-write. Or, if it is still connected: <code>unlatch unmount &lt;disk&gt;</code> then <code>unlatch mount &lt;disk&gt;</code>.</p>
+  </div>
+</section>
+
+<section id="unplugged">
+  <div class="wrap">
+    <h2>If a disk is unplugged while writing</h2>
+    <p>Always eject first. But cables get pulled and Macs crash, so here is what happens then.</p>
+    <p><strong>Why it matters.</strong> NTFS keeps two things for every file: its <strong>record</strong> (like an index card in a catalogue: "report.pdf, 2 MB, stored in blocks 500&ndash;1000") and a line in its <strong>folder's list</strong> ("report.pdf &rarr; card #280"). Copying a file writes both. Windows keeps a journal so it can finish or undo half-done work after a crash; ntfs-3g, which Unlatch is built on, has none. If the disk goes away between the two writes, the disk is left half-updated.</p>
+    <p><strong>What Unlatch does about it:</strong></p>
+    <ol>
+      <li><strong>It marks the disk "in use" only while writing</strong>, and clears the mark about 2 seconds after the last change. A disk pulled out while idle is fine and mounts normally next time.</li>
+      <li><strong>It writes the card before the folder line that points at it.</strong> Pulled at the wrong moment, a disk used to end up with a folder listing a file whose card was never written (a door that opens onto nothing). Now the worst case is the opposite: a card no folder lists yet. In tests that cut the writing off at every possible point, broken folder entries went from 60 to 0. The cost is about 16% slower when writing many small files.</li>
+      <li><strong>When the disk comes back, Unlatch checks it.</strong> If it finds nothing wrong it clears the mark and mounts read-write. Otherwise the disk mounts read-only and Unlatch asks you: <strong>Check Disk and Enable Read-Write</strong> repairs what it safely can (space maps, folder entries that lead to no file) and enables writing if nothing is left; <strong>Enable Read-Write Without Checking</strong> clears the mark without repairing anything; <strong>Keep Read-Only</strong> lets you copy your files off first.</li>
+    </ol>
+    <p><strong>What you can lose:</strong> the file or files being copied at that moment. Everything that was already on the disk stays readable.</p>
+    <p><strong>When you still need Windows (or a reformat):</strong> Check Disk does not yet remove file records that no folder lists, and in about one cut-off in ten NTFS's backup copy of its first records is left out of step, which stops the disk from opening at all until <code>chkdsk</code> runs. In both cases Unlatch says so; copy what you need, then run <code>chkdsk X: /f</code> on any Windows PC (or in a Windows virtual machine), or reformat the disk.</p>
   </div>
 </section>
 
@@ -371,6 +387,7 @@ sudo unlatch uninstall-helper</code></pre>
       <summary>The disk does not mount, or Finder shows it read-only</summary>
       <ul>
         <li><strong>Read-only with a reason:</strong> see <a href="#read-only">Why is my disk read-only?</a></li>
+        <li><strong>Unplugged without ejecting:</strong> see <a href="#unplugged">If a disk is unplugged while writing</a>.</li>
         <li><strong>"macFUSE is not installed" / exit code 4:</strong> install macFUSE 5.5 or later (<code>unlatch setup</code>, or <code>brew install --cask macfuse</code>).</li>
         <li><strong>"macFUSE's file system extension did not take the mount":</strong> try again in a minute: right after macFUSE's background service restarts, it reports its extension missing for a minute or so. If it keeps failing, check that it is on: System Settings &gt; General &gt; Login Items &amp; Extensions &gt; File System Extensions (info button) &gt; <strong>macFUSE</strong>.</li>
         <li><strong>Copying many small files is slow:</strong> without macFUSE's kernel extension, mounts go through FSKit, up to 8 times slower at small-file work (<a href="#fskit-costs">What FSKit costs</a>). Allowing the kernel extension (<a href="#faster-small-files">Faster small files</a>) makes Unlatch use it.</li>

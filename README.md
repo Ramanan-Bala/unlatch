@@ -105,10 +105,29 @@ Reduced Security only lets you approve extensions yourself; FileVault and other 
 - **Windows Fast Startup** keeps the disk "in use" when Windows only appears to shut down. Unlatch then mounts read-only. Turn Fast Startup off in Windows (Control Panel > Power Options > "Choose what the power buttons do"), or hold Shift while choosing Shut Down.
 - **Windows name rules apply.** Names cannot contain `\ / : * ? " < > |`, end with a dot or space, or be a reserved name such as `CON` or `aux.txt`; the Mac reports "invalid argument" for those.
 - **Encrypted (EFS) files** cannot be read or written; BitLocker volumes are not supported.
-- **No journal replay.** Like ntfs-3g, Unlatch does not replay the NTFS journal. Always eject before unplugging; if a disk was pulled out mid-write, run `chkdsk` on Windows before relying on it.
+- **No journal.** Like ntfs-3g, Unlatch does not keep or replay the NTFS journal, so a disk pulled out while it is being written can be left with damage that only Windows' `chkdsk` (or a reformat) repairs. See [If a disk is unplugged while writing](#if-a-disk-is-unplugged-while-writing).
 - **Not indexed by Spotlight**, and not usable for Time Machine.
 - Permissions: files belong to the user who mounted the disk; NTFS access lists are not mapped.
 - Speed depends on the disk; see [Speed](#speed) below.
+
+## If a disk is unplugged while writing
+
+Always eject first. But cables get pulled and Macs crash, so here is what happens then.
+
+**Why it matters.** NTFS keeps two things for every file: its **record** (like an index card in a catalogue: "report.pdf, 2 MB, stored in blocks 500–1000") and a line in its **folder's list** ("report.pdf → card #280"). Copying a file writes both. Windows keeps a journal so it can finish or undo half-done work after a crash; ntfs-3g, which Unlatch is built on, has none. If the disk goes away between the two writes, the disk is left half-updated.
+
+**What Unlatch does about it:**
+
+1. **It marks the disk "in use" only while writing**, and clears the mark about 2 seconds after the last change. A disk pulled out while idle is fine and mounts normally next time.
+2. **It writes the card before the folder line that points at it.** Pulled at the wrong moment, a disk used to end up with a folder listing a file whose card was never written (a door that opens onto nothing). Now the worst case is the opposite: a card no folder lists yet. In tests that cut the writing off at every possible point, broken folder entries went from 60 to 0. The cost is about 16% slower when writing many small files.
+3. **When the disk comes back, Unlatch checks it.** If it finds nothing wrong it clears the mark and mounts read-write. Otherwise the disk mounts read-only and Unlatch asks you:
+   - **Check Disk and Enable Read-Write** repairs what it safely can (space maps, folder entries that lead to no file) and enables writing if nothing is left.
+   - **Enable Read-Write Without Checking** clears the mark without repairing anything.
+   - **Keep Read-Only** lets you copy your files off first.
+
+**What you can lose:** the file or files being copied at that moment. Everything that was already on the disk stays readable.
+
+**When you still need Windows (or a reformat):** Check Disk does not yet remove file records that no folder lists, and in about one cut-off in ten NTFS's backup copy of its first records is left out of step, which stops the disk from opening at all until `chkdsk` runs. In both cases Unlatch says so; copy what you need, then run `chkdsk X: /f` on any Windows PC (or in a Windows virtual machine), or reformat the disk. Details: [docs/read-only.md](docs/read-only.md).
 
 When something goes wrong: [docs/troubleshooting.md](docs/troubleshooting.md). Security issues: [SECURITY.md](SECURITY.md).
 
@@ -221,7 +240,7 @@ The design and every decision behind it are in [docs/Unlatch-Implementation-Plan
 ## After 1.0
 
 - A native FSKit module, once the project can sign one (needs a paid Apple Developer membership), replacing macFUSE.
-- A repair assistant for disks that need `chkdsk`, and a format command (mkntfs).
+- Check Disk repairs for the remaining cut-off damage (unlisted records, `$MFTMirr`), and a format command (mkntfs).
 - Engine replacement behind `unlatch_engine.h` if a better NTFS implementation becomes available.
 - Localization.
 
