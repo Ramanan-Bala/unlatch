@@ -4,6 +4,11 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.12] - 2026-11-03
+
+### Fixed
+- Check Disk no longer reports damage ("record 16 has a name but no directory lists it") on a healthy, nearly full disk, where NTFS keeps part of its own file table in a spare record.
+
 ### Changed
 - **A disk pulled out while idle no longer needs checking.** Unlatch now marks a disk as "in use" only while it is writing to it, and clears the mark about two seconds after the last change, once everything is on the disk. Pulling a disk out mid-copy still marks it.
 - **A disk that needs checking is checked automatically.** When it is plugged in, Unlatch checks it first; if nothing is wrong, it clears the mark and mounts the disk read-write without asking. You are asked only when the check finds something.
