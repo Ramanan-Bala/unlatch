@@ -960,6 +960,25 @@ No regression image yet for the `$MFT` extent case: it needs a volume filled unt
 - sleep: PASS, but pmset showed no sleep during the step; the Mac probably did not sleep. Not counted.
 - kill, pull: skipped (need `--cut`).
 
+### Follow-up: Check Disk removes folder entries that lead to no file (D-96) — done 2026-11-03
+
+The damage a stick pulled mid-copy leaves most often (the owner's SanDisk: `/unlatch-test/copy/2 -> record 280`) was reported and left for chkdsk. Now `--repair` removes it.
+
+- `Engine/src/check.c`: `check_entry` keeps every entry whose record is free (within the MFT), has another sequence number, or (new kind `entry_wrong_parent`) has no `$FILE_NAME` in that folder; those problems are repairable. Pass 1 records each record's first parent folder (a second, different one, or a damaged record, means "read the record"). `chk_repair` sets the bitmap bits first, then `remove_entry` looks each entry up by its exact name (`ntfs_index_lookup`) and removes it (`ntfs_index_rm`, as `ntfs_index_remove` does) only while it still points at the same reference; DOS halves of a pair go too. Entries past the end of the MFT and at extension records stay non-repairable. The check now lists folders case-sensitively (as `read_batch` does, D-19), so reported paths keep their case and the repair has the exact name.
+- `ue_check_result_t.entries_removed`; `unlatch-engine check` prints it, JSON `entriesRemoved`; `CheckReport.entriesRemoved` (optional), new kind in `describe`/`kinds`, advice for `.repairable`/`.repaired` says what is repaired and no longer mentions chkdsk for this case; `unlatch check` prints entries removed. The app's Check Disk and the mount-time "Check Disk and Enable Read-Write" use the verdict, so they offer the repair now with no code change.
+- `mkfixture`: `free-record PATH`, `dos-name PATH NAME`, `link-entry PATH OTHER`. `chk-dangling.img`: free records in `/d` and in `/big`'s index blocks (300 entries), a DOS+Win32 pair, `/big/f00100`'s record reused by `/e` (wrong sequence), and `/e/ghost.bin` pointing at `/d/b.bin`'s record.
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh   # test_check_repair (dangling), "ok   check --repair removes entries ...", leaks
+Scripts/test-golden.sh                      # 609 checks; unlatch-engine check finds 0 on all 8 golden images
+swift test --package-path Shared && swift test --package-path CLI
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+```
+
+Verified: the repair removes 5 entries (6 index entries with the DOS name), exit 1, `ntfsfix -n` clean, a re-check finds nothing, the dirty mark is cleared, `/d` lists b.bin c.bin small.txt, `/big` 298 entries, `/e` empty, `/d/b.bin` reads back. `chk-seq` (wrong sequence plus orphan) and `chk-mix` still do not repair: the orphan blocks it.
+
+Not verified: the app's alerts (not clicked through), `UNLATCH_INTEGRATION=1` Swift tests, a real disk, the SanDisk snapshot, and a Windows chkdsk of a repaired image (no `WINDOWS_SSH`). D-96 was taken here; another session started at the same time may also pick it, so check DECISIONS.md when merging.
+
 ## Carry-overs
 
 - **Automatic check runs three passes (D-95, 2026-11-03):** the app checks read-only, then, when nothing was found, `check --repair`, which checks read-only again and once more read-write before clearing the mark. On a large disk that triples the wait. A check flag that clears the mark when the first pass finds nothing would make it one pass plus the read-write one.

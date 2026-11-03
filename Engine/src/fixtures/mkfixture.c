@@ -27,6 +27,14 @@
 //     bump-seq PATH                  add one to the record's sequence number, not the entry's
 //     tear-record PATH               break one update sequence number of PATH's record (a torn write)
 //     zero-index DIR                 zero DIR's first index block, as a cut-off write leaves it
+//     free-record PATH               free PATH's MFT record (in-use flag, sequence number, $MFT's
+//                                    bitmap bit) but keep its folder entries, as a pull leaves a
+//                                    new file whose record never reached the disk; its clusters
+//                                    stay marked (lost space only)
+//     dos-name PATH NAME             give PATH the DOS name NAME, so its folder lists a Win32 and
+//                                    a DOS entry
+//     link-entry PATH OTHER          add a folder entry PATH for OTHER's record, without a
+//                                    $FILE_NAME in the record (a reused record)
 //   mkfixture gen SIZE SEED [OFF] write SIZE bytes of the stream, from offset OFF, to stdout
 #include "config.h"
 
@@ -41,6 +49,7 @@
 #include <ntfs-3g/attrib.h>
 #include <ntfs-3g/bitmap.h>
 #include <ntfs-3g/dir.h>
+#include <ntfs-3g/index.h>
 #include <ntfs-3g/inode.h>
 #include <ntfs-3g/logfile.h>
 #include <ntfs-3g/reparse.h>
@@ -441,6 +450,62 @@ static int cmd_damage(ntfs_volume *vol, const char *cmd, const char *path, const
             rc = 1;
         return rc ? die("zero index", path) : 0;
     }
+    if (!strcmp(cmd, "free-record")) {
+        if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
+            return die("open", path);
+        rec = ni->mft_no;
+        ni->mrec->flags &= ~MFT_RECORD_IN_USE;
+        ni->mrec->sequence_number = cpu_to_le16(le16_to_cpu(ni->mrec->sequence_number) + 1);
+        ntfs_inode_mark_dirty(ni);
+        if (ntfs_inode_close(ni))
+            return die("close", path);
+        return ntfs_bitmap_clear_run(vol->mftbmp_na, (s64)rec, 1) ? die("clear bit", path) : 0;
+    }
+    if (!strcmp(cmd, "dos-name")) {
+        ntfschar *leaf;
+        int leaf_len;
+        // The file first: its path walk must not open a second copy of the open folder.
+        if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
+            return die("open", path);
+        ntfs_inode *dir = open_parent(vol, path, &leaf, &leaf_len);
+        if (!dir) {
+            ntfs_inode_close(ni);
+            return die("open parent", path);
+        }
+        free(leaf);
+        // Closes both inodes.
+        return ntfs_set_ntfs_dos_name(ni, dir, other, strlen(other), 0) ? die("dos name", path) : 0;
+    }
+    if (!strcmp(cmd, "link-entry")) {
+        ntfschar *leaf;
+        int leaf_len;
+        if ((rc = record_of(vol, other, &rec)))
+            return rc;
+        if (!(oni = ntfs_inode_open(vol, rec)))
+            return die("open", other);
+        MFT_REF mref = MK_MREF(rec, le16_to_cpu(oni->mrec->sequence_number));
+        ntfs_inode_close(oni);
+        ntfs_inode *dir = open_parent(vol, path, &leaf, &leaf_len);
+        if (!dir)
+            return die("open parent", path);
+        size_t len = sizeof(FILE_NAME_ATTR) + (size_t)leaf_len * sizeof(ntfschar);
+        FILE_NAME_ATTR *fn = calloc(1, len);
+        if (!fn) {
+            free(leaf);
+            ntfs_inode_close(dir);
+            return die("alloc", path);
+        }
+        fn->parent_directory = MK_LE_MREF(dir->mft_no, le16_to_cpu(dir->mrec->sequence_number));
+        fn->file_name_length = (u8)leaf_len;
+        fn->file_name_type = FILE_NAME_POSIX;
+        memcpy(fn->file_name, leaf, (size_t)leaf_len * sizeof(ntfschar));
+        rc = ntfs_index_add_filename(dir, fn, mref) ? die("add entry", path) : 0;
+        free(fn);
+        free(leaf);
+        if (ntfs_inode_close(dir) && !rc)
+            rc = die("close", path);
+        return rc;
+    }
     fprintf(stderr, "mkfixture: bad damage command %s\n", cmd);
     return 1;
 }
@@ -475,10 +540,12 @@ static int run(ntfs_volume *vol, char *line)
     if (!strcmp(cmd, "zero-record"))
         return cmd_zero_record(vol, path);
     char target[4096];
-    if (!strcmp(cmd, "share-clusters") && sscanf(line, "%*s %*s %4095s", target) == 1)
+    if ((!strcmp(cmd, "share-clusters") || !strcmp(cmd, "dos-name") || !strcmp(cmd, "link-entry")) &&
+        sscanf(line, "%*s %*s %4095s", target) == 1)
         return cmd_damage(vol, cmd, path, target);
     if (!strcmp(cmd, "clear-record-bit") || !strcmp(cmd, "clear-cluster-bits") || !strcmp(cmd, "run-past") ||
-        !strcmp(cmd, "bump-seq") || !strcmp(cmd, "tear-record") || !strcmp(cmd, "zero-index"))
+        !strcmp(cmd, "bump-seq") || !strcmp(cmd, "tear-record") || !strcmp(cmd, "zero-index") ||
+        !strcmp(cmd, "free-record"))
         return cmd_damage(vol, cmd, path, NULL);
     if (!strcmp(cmd, "reparse") && sscanf(line, "%*s %*s %31s %4095s", word, target) == 2)
         return cmd_reparse(vol, path, word, target);

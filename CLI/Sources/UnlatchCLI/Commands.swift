@@ -240,8 +240,9 @@ struct Check: AsyncParsableCommand {
         abstract: "Check a volume for damage (Check Disk), and repair what is safe to repair.",
         discussion: """
         The volume is unmounted first and mounted again afterwards. The check reads only. --repair sets the \
-        bitmap bits of records and clusters in use (nothing is overwritten) when that is all that is wrong, and \
-        clears the volume's dirty mark when nothing is left. Anything else needs Windows' chkdsk.
+        bitmap bits of records and clusters in use (nothing is overwritten) and removes folder entries that point \
+        at no file (as a disk unplugged mid-copy leaves them) when that is all that is wrong, and clears the \
+        volume's dirty mark when nothing is left. Anything else needs Windows' chkdsk.
         """)
     @Argument(help: "The volume.") var disk: String
     @Flag(help: "Repair what is safe to repair, and clear the dirty mark when nothing is left.") var repair = false
@@ -275,7 +276,11 @@ struct Check: AsyncParsableCommand {
             }
             if r.problems.count > shown { print("    ... and \(r.problems.count - shown) more (--json lists them all)") }
         }
-        if r.repairRan { print("Repaired \(r.repaired) bitmap bit\(r.repaired == 1 ? "" : "s").") }
+        if r.repairRan {
+            let removed = r.entriesRemoved ?? 0
+            print("Repaired \(r.repaired) bitmap bit\(r.repaired == 1 ? "" : "s"); removed \(removed) folder "
+                  + "entr\(removed == 1 ? "y" : "ies").")
+        }
         print(r.advice)
         if r.verdict == .repairable && !repair { print("To repair: unlatch check --repair \(d.bsdName)") }
         if r.lostClusters > 0 || r.lostRecords > 0 {

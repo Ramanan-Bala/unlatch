@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Check Disk (D-93): a read-only check of the MFT, the two bitmaps and the directory indexes,
-// and the one repair that cannot overwrite anything: setting bitmap bits of what is in use.
+// and the repairs that cannot overwrite anything: setting bitmap bits of what is in use, and
+// removing folder entries that lead to no file (D-96).
 //
 // The MFT is read raw, record by record, so a damaged record is reported instead of being
 // opened. Pass 1 records which records are in use, marks every cluster their runlists use and
@@ -8,6 +9,10 @@
 // first owner of each shared run. Then every directory is listed with ntfs_readdir, which
 // reads every index block its $I30 bitmap marks in use, and every entry is compared with
 // pass 1. Last, named files no directory listed are orphans.
+//
+// A folder entry leads to no file when its record is not in use, has another sequence number,
+// or has no $FILE_NAME in that folder: what a write cut off between a folder's index and the
+// new file's record leaves. Its removal touches only the folder's index, as chkdsk's does.
 #include "internal.h"
 
 #include <errno.h>
@@ -20,6 +25,7 @@
 #include <ntfs-3g/bitmap.h>
 #include <ntfs-3g/bootsect.h>
 #include <ntfs-3g/dir.h>
+#include <ntfs-3g/index.h>
 #include <ntfs-3g/inode.h>
 #include <ntfs-3g/layout.h>
 #include <ntfs-3g/logging.h>
@@ -36,6 +42,15 @@ typedef struct {
     uint64_t rec, lcn, count, other;
 } shared_t;
 
+// A folder entry that leads to no file, kept for the repair (D-96): the entry is looked up
+// again by its exact name and removed only if it still points at mref.
+typedef struct {
+    uint64_t dir;
+    MFT_REF mref;
+    u8 name_type, name_len;
+    ntfschar name[NTFS_MAX_NAME_LEN];
+} dangling_t;
+
 typedef struct {
     ue_engine_t *e;
     ntfs_volume *vol;
@@ -48,7 +63,12 @@ typedef struct {
     u8 *mftbmp, *lcnbmp;              // the bitmaps on the disk
     uint64_t mftbmp_bits, lcnbmp_bits;
     u8 *inuse, *base, *isdir, *named, *refd, *bad, *used;   // one bit per record (used: per cluster)
+    u8 *multi;                        // names in more than one folder, or unknown: read the record
     u16 *seq;
+    uint64_t *parent;                 // the folder of a record's first $FILE_NAME; UINT64_MAX: none
+    dangling_t *dangling;
+    size_t ndangling, cap_dangling;
+    bool nomem;                       // keep_dangling ran out of memory (ntfs_readdir stops quietly)
     shared_t *shared;
     size_t nshared;
 } chk_t;
@@ -69,6 +89,7 @@ const char *ue_check_kind_name(ue_check_kind_t kind)
     case UE_CHK_ENTRY_WRONG_SEQ: return "entry_wrong_seq";
     case UE_CHK_ORPHAN: return "orphan";
     case UE_CHK_MFT_MIRROR: return "mft_mirror";
+    case UE_CHK_ENTRY_WRONG_PARENT: return "entry_wrong_parent";
     case UE_CHK_KINDS: break;
     }
     return "unknown";
@@ -237,7 +258,10 @@ static void chk_free(chk_t *c)
     free(c->refd);
     free(c->bad);
     free(c->used);
+    free(c->multi);
     free(c->seq);
+    free(c->parent);
+    free(c->dangling);
     free(c->shared);
     memset(c, 0, sizeof(*c));
 }
@@ -272,13 +296,16 @@ static int chk_init(chk_t *c, ue_engine_t *e, ue_check_fn fn, void *ctx, ue_chec
     c->refd = calloc(rbytes, 1);
     c->bad = calloc(rbytes, 1);
     c->used = calloc((size_t)((c->ncl + 7) / 8) + 1, 1);
+    c->multi = calloc(rbytes, 1);
     c->seq = calloc((size_t)c->nrec + 1, sizeof(*c->seq));
+    c->parent = malloc(((size_t)c->nrec + 1) * sizeof(*c->parent));
     c->shared = calloc(MAX_SHARED, sizeof(*c->shared));
     if (!c->rbuf || !c->pbuf || !c->inuse || !c->base || !c->isdir || !c->named || !c->refd || !c->bad || !c->used ||
-        !c->seq || !c->shared) {
+        !c->multi || !c->seq || !c->parent || !c->shared) {
         chk_free(c);
         return ENOMEM;
     }
+    memset(c->parent, 0xff, ((size_t)c->nrec + 1) * sizeof(*c->parent));
     if ((err = read_bitmap(vol->mftbmp_na, c->nrec, &c->mftbmp, &c->mftbmp_bits)) ||
         (err = read_bitmap(vol->lcnbmp_na, c->ncl, &c->lcnbmp, &c->lcnbmp_bits))) {
         chk_free(c);
@@ -305,8 +332,15 @@ static void scan_runs(chk_t *c, uint64_t rec, MFT_RECORD *m)
     bool um_fixable = true;
 
     for (ATTR_RECORD *a = next_attr(c, m, NULL); a; a = next_attr(c, m, a)) {
-        if (a->type == AT_FILE_NAME && owner < c->nrec && file_name(a))
+        FILE_NAME_ATTR *fn = a->type == AT_FILE_NAME && owner < c->nrec ? file_name(a) : NULL;
+        if (fn) {
+            uint64_t dir = MREF_LE(fn->parent_directory);
             mark(c->named, owner);
+            if (c->parent[owner] == UINT64_MAX)
+                c->parent[owner] = dir;
+            else if (c->parent[owner] != dir)
+                mark(c->multi, owner);
+        }
         if (!a->non_resident)
             continue;
         runlist_element *rl = ntfs_mapping_pairs_decompress(c->vol, a, NULL);
@@ -383,6 +417,10 @@ static void pass1(chk_t *c, uint64_t rec, MFT_RECORD *m, int rerr)
     if (ntfs_mft_record_check(c->vol, rec, m)) {
         report(c, UE_CHK_BAD_RECORD, false, rec, 0, 0, 0, NULL, "record %llu has damaged attributes",
                (unsigned long long)rec);
+        uint64_t owner = is_extent(m) ? MREF_LE(m->base_mft_record) : rec;
+        mark(c->multi, rec);          // its names are unknown: names_dir must not judge by them
+        if (owner < c->nrec)
+            mark(c->multi, owner);
         return;
     }
     if (has(c->base, rec) && (m->flags & MFT_RECORD_IS_DIRECTORY))
@@ -469,12 +507,56 @@ static const char *entry_path(dir_ctx_t *d, char *buf, size_t cap, const ntfscha
     return buf;
 }
 
+// True when record rec (in use, a base record) has a $FILE_NAME in folder dir, or when that
+// cannot be told from the record alone (a damaged record, or names in an extent record).
+static bool names_dir(chk_t *c, uint64_t rec, uint64_t dir)
+{
+    MFT_RECORD *m = (MFT_RECORD *)c->pbuf;
+
+    if (!has(c->multi, rec))
+        return c->parent[rec] == dir;
+    if (read_record(c, rec, c->pbuf) || ntfs_mft_record_check(c->vol, rec, m))
+        return true;
+    for (ATTR_RECORD *a = next_attr(c, m, NULL); a; a = next_attr(c, m, a)) {
+        FILE_NAME_ATTR *fn = file_name(a);
+        if (a->type == AT_ATTRIBUTE_LIST || (fn && MREF_LE(fn->parent_directory) == dir))
+            return true;
+    }
+    return false;
+}
+
+// Keeps an entry that leads to no file for the repair. A DOS name is kept too (and not
+// reported): it is the other half of a Win32 name, and both entries go.
+static int keep_dangling(chk_t *c, uint64_t dir, const ntfschar *name, int name_len, int name_type, MFT_REF mref)
+{
+    if (name_len <= 0 || name_len > NTFS_MAX_NAME_LEN)
+        return 0;
+    if (c->ndangling == c->cap_dangling) {
+        size_t cap = c->cap_dangling ? 2 * c->cap_dangling : 16;
+        dangling_t *n = realloc(c->dangling, cap * sizeof(*n));
+        if (!n) {
+            c->nomem = true;
+            return -1;                // stops ntfs_readdir
+        }
+        c->dangling = n;
+        c->cap_dangling = cap;
+    }
+    dangling_t *x = &c->dangling[c->ndangling++];
+    x->dir = dir;
+    x->mref = mref;
+    x->name_type = (u8)name_type;
+    x->name_len = (u8)name_len;
+    memcpy(x->name, name, (size_t)name_len * sizeof(ntfschar));
+    return 0;
+}
+
 static int check_entry(void *ctx, const ntfschar *name, const int name_len, const int name_type, const s64 pos,
                        const MFT_REF mref, const unsigned dt_type)
 {
     dir_ctx_t *d = ctx;
     chk_t *c = d->c;
     uint64_t rec = MREF(mref);
+    bool shown = name_type != FILE_NAME_DOS;
     char path[1024];
 
     (void)dt_type;
@@ -482,26 +564,39 @@ static int check_entry(void *ctx, const ntfschar *name, const int name_len, cons
         return 0;                     // ntfs_readdir's own "." and ".."
     c->res->entries++;
     if (rec < c->nrec && has(c->bad, rec)) {
-        if (name_type != FILE_NAME_DOS)
+        if (shown)
             bad_record(c, rec, entry_path(d, path, sizeof(path), name, name_len));
         return 0;
     }
+    // Past the end of the MFT ($MFT may have lost an extent) and extension records are left
+    // for chkdsk; a record not in use is free, or was freed and never written again.
     if (rec >= c->nrec || !has(c->inuse, rec) || !has(c->base, rec)) {
-        if (name_type != FILE_NAME_DOS)
-            report(c, UE_CHK_ENTRY_FREE_RECORD, false, d->dir, rec, 0, 0,
+        bool free_rec = rec < c->nrec && !has(c->inuse, rec);
+        if (shown)
+            report(c, UE_CHK_ENTRY_FREE_RECORD, free_rec, d->dir, rec, 0, 0,
                    entry_path(d, path, sizeof(path), name, name_len), "the entry points at record %llu, %s",
                    (unsigned long long)rec,
                    rec >= c->nrec ? "past the end of the MFT"
                    : has(c->inuse, rec) ? "an extension record" : "which is not in use");
-        return 0;
+        return free_rec ? keep_dangling(c, d->dir, name, name_len, name_type, mref) : 0;
     }
+    // The record was reused: by another file (listed in its own folder, or an orphan, which
+    // keeps the repair from running), or by this one (then also an orphan).
     if (MSEQNO(mref) && MSEQNO(mref) != c->seq[rec]) {
-        if (name_type != FILE_NAME_DOS)
-            report(c, UE_CHK_ENTRY_WRONG_SEQ, false, d->dir, rec, 0, 0,
+        if (shown)
+            report(c, UE_CHK_ENTRY_WRONG_SEQ, true, d->dir, rec, 0, 0,
                    entry_path(d, path, sizeof(path), name, name_len),
                    "the entry points at record %llu with sequence %u; the record has %u", (unsigned long long)rec,
                    (unsigned)MSEQNO(mref), (unsigned)c->seq[rec]);
-        return 0;
+        return keep_dangling(c, d->dir, name, name_len, name_type, mref);
+    }
+    if (!names_dir(c, rec, d->dir)) {
+        if (shown)
+            report(c, UE_CHK_ENTRY_WRONG_PARENT, true, d->dir, rec, 0, 0,
+                   entry_path(d, path, sizeof(path), name, name_len),
+                   "the entry points at record %llu, %s", (unsigned long long)rec,
+                   has(c->named, rec) ? "a file in another folder" : "which has no name");
+        return keep_dangling(c, d->dir, name, name_len, name_type, mref);
     }
     mark(c->refd, rec);
     return 0;
@@ -522,10 +617,18 @@ static int check_dirs(chk_t *c)
             // Muted: ntfs_readdir logs an error for each system entry outside the metafiles
             // ($Extend's $Quota, $ObjId, ...) whose type it cannot tell, and a read failure is
             // reported here anyway.
+            // Case-sensitive, so names come as they are on the disk (D-19): the repair looks
+            // entries up by their exact names.
             u32 muted = ntfs_log_clear_levels(NTFS_LOG_LEVEL_ERROR | NTFS_LOG_LEVEL_PERROR);
             s64 pos = 0;
+            NVolSetCaseSensitive(c->vol);
             int rerr = ntfs_readdir(ni, &pos, &d, check_entry) ? (errno ? errno : EIO) : 0;
+            NVolClearCaseSensitive(c->vol);
             ntfs_log_set_levels(muted & (NTFS_LOG_LEVEL_ERROR | NTFS_LOG_LEVEL_PERROR));
+            if (c->nomem) {
+                ue_iput(ni);
+                return ENOMEM;
+            }
             if (rerr)
                 report(c, UE_CHK_INDEX_UNREADABLE, false, rec, 0, 0, 0, NULL,
                        "the directory's index cannot be read (%s); files listed in it may be missing",
@@ -587,19 +690,80 @@ static int set_missing(ntfs_attr *na, const u8 *want, const u8 *have, uint64_t h
     return 0;
 }
 
-static int chk_repair(chk_t *c, uint64_t *done)
+// Removes one entry from its folder's index, as ntfs_index_remove does, but only while the
+// entry found by its exact name still points at the record it pointed at. The record itself
+// is not touched (D-96).
+static int remove_entry(chk_t *c, const dangling_t *x)
+{
+    size_t klen = sizeof(FILE_NAME_ATTR) + (size_t)x->name_len * sizeof(ntfschar);
+    FILE_NAME_ATTR *key = calloc(1, klen);
+    ntfs_index_context *icx = NULL;
+    ntfs_inode *dir = NULL;
+    int err = 0;
+
+    if (!key)
+        return ENOMEM;
+    key->file_name_length = x->name_len;
+    key->file_name_type = x->name_type;
+    memcpy(key->file_name, x->name, (size_t)x->name_len * sizeof(ntfschar));
+    if (!(dir = ue_iopen_rec(c->e, x->dir)) || !(icx = ntfs_index_ctx_get(dir, NTFS_INDEX_I30, 4))) {
+        err = errno ? errno : EIO;
+        goto out;
+    }
+    for (;;) {
+        if (ntfs_index_lookup(key, (int)klen, icx)) {
+            err = errno ? errno : EIO;
+            break;
+        }
+        if (le64_to_cpu(icx->entry->indexed_file) != x->mref) {
+            err = ESTALE;
+            break;
+        }
+        int rc = ntfs_index_rm(icx);
+        if (rc == STATUS_ERROR) {
+            err = errno ? errno : EIO;
+            break;
+        }
+        ntfs_inode_mark_dirty(icx->actx->ntfs_ino);
+        if (rc == STATUS_OK)
+            break;
+        ntfs_index_ctx_reinit(icx);
+    }
+out:
+    if (icx)
+        ntfs_index_ctx_put(icx);
+    if (dir && ue_iput(dir) && !err)
+        err = errno ? errno : EIO;
+    free(key);
+    return err;
+}
+
+static int chk_repair(chk_t *c, uint64_t *done, uint64_t *removed)
 {
     uint64_t clusters = 0;
     int err;
 
     if ((err = ue_mark_busy(c->e)))   // D-95
         return err;
+    // The bitmaps first: removing an entry can allocate an index block.
     if ((err = set_missing(c->vol->mftbmp_na, c->inuse, c->mftbmp, c->mftbmp_bits, c->nrec, done)) ||
         (err = set_missing(c->vol->lcnbmp_na, c->used, c->lcnbmp, c->lcnbmp_bits, c->ncl, &clusters)))
         return err;
     *done += clusters;
     if (c->vol->free_clusters >= (s64)clusters)
         c->vol->free_clusters -= (s64)clusters;
+    for (size_t i = 0; i < c->ndangling && !c->e->dev_ctx->failed; i++) {
+        const dangling_t *x = &c->dangling[i];
+        if ((err = remove_entry(c, x))) {
+            // Not there, or changed since: left alone, and the check that follows reports it
+            // if it is still wrong. Anything else stops the repair.
+            if (err == ENOENT || err == ESTALE)
+                continue;
+            return err;
+        }
+        if (x->name_type != FILE_NAME_DOS)
+            (*removed)++;
+    }
     return c->e->dev_ctx->failed ? EIO : 0;
 }
 
@@ -617,7 +781,7 @@ static int check_volume(ue_engine_t *e, ue_check_fn fn, void *ctx, ue_check_resu
     res->remaining = res->problems;
     if (!err && repair && res->problems && res->problems == res->repairable) {
         res->repair_ran = true;
-        err = chk_repair(&c, &res->repaired);
+        err = chk_repair(&c, &res->repaired, &res->entries_removed);
         chk_free(&c);
         if (!err && !(err = chk_init(&c, e, NULL, NULL, &again))) {
             err = chk_run(&c);
@@ -726,6 +890,7 @@ int ue_check(const ue_io_t *io, uint32_t flags, ue_check_fn fn, void *ctx, ue_ch
     cerr = ue_close(e);
     out->repair_ran = rw.repair_ran;
     out->repaired = rw.repaired;
+    out->entries_removed = rw.entries_removed;
     out->remaining = err ? out->problems : rw.remaining;
     out->dirty_cleared = dirty && !err && !cerr && rw.remaining == 0;
     return err ? err : cerr;

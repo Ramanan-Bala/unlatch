@@ -1602,7 +1602,7 @@ static void test_check_kinds(void)
         { "chk-cluster-bits", UE_CHK_CLUSTERS_UNMARKED, 0, "/d/c.bin", true },
         { "chk-shared", UE_CHK_CLUSTERS_SHARED, 0, "/d/b.bin", false },
         { "chk-run-past", UE_CHK_BAD_RUNLIST, 0, "/d/a.bin", false },
-        { "chk-seq", UE_CHK_ENTRY_WRONG_SEQ, UE_CHK_ORPHAN, "/d/a.bin", false },
+        { "chk-seq", UE_CHK_ENTRY_WRONG_SEQ, UE_CHK_ORPHAN, "/d/a.bin", true },
         { "chk-torn", UE_CHK_BAD_RECORD, 0, "/d/a.bin", false },
         { "chk-index", UE_CHK_INDEX_UNREADABLE, UE_CHK_ORPHAN, "/big", false },
     };
@@ -1674,6 +1674,34 @@ static void test_check_repair(void)
           (unsigned long long)r.repaired);
     CHECK(file_sum(path) == before, "the mix was written to");
     CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_DIRTY, "mix: %s", ue_vol_state_name(p.state));
+    unlink(path);
+
+    // Folder entries that lead to no file (D-96): free records in /d and in /big's index
+    // blocks, a DOS+Win32 pair (one problem, two entries), /big/f00100's record reused by /e
+    // (another sequence number), and an entry for a record whose name is in another folder.
+    // All are removed; the records are not touched.
+    snprintf(path, sizeof(path), "%s/x-chk-dangling.img", dir);
+    CHECK(copyfile(img("chk-dangling"), path, NULL, COPYFILE_CLONE | COPYFILE_DATA) == 0, "copy");
+    CHECK(check_path(path, 0, &r, &seen) == 0, "check of the dangling entries");
+    CHECK(r.problems == 5 && r.repairable == 5 && r.by_kind[UE_CHK_ENTRY_FREE_RECORD] == 3 &&
+          r.by_kind[UE_CHK_ENTRY_WRONG_SEQ] == 1 && r.by_kind[UE_CHK_ENTRY_WRONG_PARENT] == 1,
+          "dangling: %llu problems, %llu repairable, %llu free, %llu seq, %llu parent", (unsigned long long)r.problems,
+          (unsigned long long)r.repairable, (unsigned long long)r.by_kind[UE_CHK_ENTRY_FREE_RECORD],
+          (unsigned long long)r.by_kind[UE_CHK_ENTRY_WRONG_SEQ],
+          (unsigned long long)r.by_kind[UE_CHK_ENTRY_WRONG_PARENT]);
+    CHECK(!strcmp(seen.first[UE_CHK_ENTRY_WRONG_SEQ].path, "/big/f00100"), "path %s",
+          seen.first[UE_CHK_ENTRY_WRONG_SEQ].path);
+    CHECK(!strcmp(seen.first[UE_CHK_ENTRY_WRONG_PARENT].path, "/e/ghost.bin"), "path %s",
+          seen.first[UE_CHK_ENTRY_WRONG_PARENT].path);
+    CHECK(!strcmp(seen.first[UE_CHK_ENTRY_FREE_RECORD].path, "/d/a.bin"), "path %s",
+          seen.first[UE_CHK_ENTRY_FREE_RECORD].path);
+    err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.repair_ran && r.entries_removed == 5 && r.remaining == 0 && r.dirty_cleared,
+          "dangling repair: %s, ran %d, removed %llu, remaining %llu", strerror(err), r.repair_ran,
+          (unsigned long long)r.entries_removed, (unsigned long long)r.remaining);
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0 && r.entries > 300, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CLEAN, "after repair: %s", ue_vol_state_name(p.state));
     unlink(path);
 
     // Nothing found on a dirty volume: only the mark is cleared. Read-only io: EROFS.

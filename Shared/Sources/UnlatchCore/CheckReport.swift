@@ -5,7 +5,7 @@ import Foundation
 public struct CheckReport: Codable, Equatable, Sendable {
     public struct Problem: Codable, Equatable, Sendable {
         /// record_unmarked, clusters_unmarked, clusters_shared, bad_runlist, bad_record,
-        /// index_unreadable, entry_free_record, entry_wrong_seq, orphan, mft_mirror.
+        /// index_unreadable, entry_free_record, entry_wrong_seq, entry_wrong_parent, orphan, mft_mirror.
         public let kind: String
         public let repairable: Bool
         public let record: UInt64
@@ -23,6 +23,8 @@ public struct CheckReport: Codable, Equatable, Sendable {
     public let clusters, clustersInUse: UInt64
     public let lostRecords, lostClusters: UInt64
     public let found, repairable, repaired, remaining: UInt64
+    /// Folder entries the repair removed (D-96); absent from reports older than that.
+    public let entriesRemoved: UInt64?
     public let repairRan, dirtyCleared: Bool
     public let exitCode: Int32
     public let error: String?
@@ -31,7 +33,7 @@ public struct CheckReport: Codable, Equatable, Sendable {
     public enum Verdict: Equatable, Sendable {
         case clean              // nothing found (the mark was cleared, if a repair ran)
         case repaired           // everything found was repaired
-        case repairable         // everything found can be repaired safely (bitmap bits)
+        case repairable         // everything found can be repaired safely (bitmap bits, dangling folder entries)
         case needsWindows       // something only Windows' chkdsk (or a reformat) can fix
     }
 
@@ -42,8 +44,9 @@ public struct CheckReport: Codable, Equatable, Sendable {
 
     /// Counts by kind, in a fixed order, for summaries.
     public var kinds: [(kind: String, count: Int)] {
-        let order = ["mft_mirror", "bad_record", "index_unreadable", "entry_free_record", "entry_wrong_seq", "orphan",
-                     "clusters_shared", "bad_runlist", "record_unmarked", "clusters_unmarked"]
+        let order = ["mft_mirror", "bad_record", "index_unreadable", "entry_free_record", "entry_wrong_seq",
+                     "entry_wrong_parent", "orphan", "clusters_shared", "bad_runlist", "record_unmarked",
+                     "clusters_unmarked"]
         let counts = Dictionary(grouping: problems, by: \.kind).mapValues(\.count)
         return (order + counts.keys.filter { !order.contains($0) }.sorted()).compactMap { k in counts[k].map { (k, $0) } }
     }
@@ -58,7 +61,8 @@ public struct CheckReport: Codable, Equatable, Sendable {
         case "bad_runlist": return "\(n) file\(s) whose list of clusters is damaged"
         case "bad_record": return "\(n) file record\(s) that cannot be read"
         case "index_unreadable": return "\(n) folder\(s) that cannot be read"
-        case "entry_free_record", "entry_wrong_seq": return "\(n) folder entr\(n == 1 ? "y" : "ies") pointing at a missing file"
+        case "entry_free_record", "entry_wrong_seq", "entry_wrong_parent":
+            return "\(n) folder entr\(n == 1 ? "y" : "ies") pointing at a missing file"
         case "orphan": return "\(n) file\(s) no folder lists"
         case "mft_mirror": return "the backup copy of the file table does not match it"
         default: return "\(n) problem\(s) of kind \(kind)"
@@ -72,9 +76,24 @@ public struct CheckReport: Codable, Equatable, Sendable {
             return dirtyCleared ? "Nothing is wrong. The disk is no longer marked as needing a check."
                                 : "Nothing is wrong."
         case .repaired:
-            return "Repaired: space in use is marked as used again\(dirtyCleared ? ", and the disk is no longer marked as needing a check" : ""). Nothing was overwritten."
+            var done: [String] = []
+            if repaired > 0 { done.append("space in use is marked as used again") }
+            if let n = entriesRemoved, n > 0 {
+                done.append("\(n) folder entr\(n == 1 ? "y" : "ies") pointing at a missing file \(n == 1 ? "was" : "were") removed")
+            }
+            if dirtyCleared { done.append("the disk is no longer marked as needing a check") }
+            return "Repaired" + (done.isEmpty ? "" : ": " + done.joined(separator: "; ")) + ". No file was changed or overwritten."
         case .repairable:
-            return "Unlatch can repair this safely: it marks space that files use as used, so nothing gets overwritten. Some free space may stay lost until Windows checks the disk."
+            var how: [String] = []
+            if problems.isEmpty || problems.contains(where: { $0.kind == "record_unmarked" || $0.kind == "clusters_unmarked" }) {
+                how.append("marks space that files use as used, so nothing gets overwritten")
+            }
+            if problems.contains(where: { $0.kind.hasPrefix("entry_") }) {
+                how.append("removes folder entries that point at a file that was never written (it was lost when the "
+                           + "disk was cut off; only its name is left, and it leads nowhere)")
+            }
+            return "Unlatch can repair this safely: it " + how.joined(separator: ", and ") + ". No file is changed. "
+                + "Some free space may stay lost until Windows checks the disk."
         case .needsWindows:
             return "Unlatch cannot repair this safely. Copy anything important off the disk (read-only), then either run chkdsk on it in Windows (chkdsk X: /f) or reformat it."
         }

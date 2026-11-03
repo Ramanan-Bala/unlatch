@@ -4,6 +4,9 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+- **Check Disk repairs what a disk pulled out mid-copy most often leaves:** a folder entry that points at a file that was never written ("the entry points at record N, which is not in use"). Unlatch removes such names, as Windows' chkdsk does, instead of sending you to Windows; the file itself was already lost, and no other file is touched. **Check Disk and Enable Read-Write** and `unlatch check --repair` now fix it.
+
 ## [1.0.0-beta.12] - 2026-11-03
 
 ### Fixed

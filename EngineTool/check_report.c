@@ -79,6 +79,7 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
                 res.lost_clusters);
         fprintf(out, "  \"found\": %" PRIu64 ", \"repairable\": %" PRIu64 ", \"repaired\": %" PRIu64
                 ", \"remaining\": %" PRIu64 ",\n", res.problems, res.repairable, res.repaired, res.remaining);
+        fprintf(out, "  \"entriesRemoved\": %" PRIu64 ",\n", res.entries_removed);
         fprintf(out, "  \"repairRan\": %s, \"dirtyCleared\": %s,\n", res.repair_ran ? "true" : "false",
                 res.dirty_cleared ? "true" : "false");
         fprintf(out, "  \"exitCode\": %d", code);
@@ -101,7 +102,8 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
             res.lost_records, res.lost_clusters);
     fprintf(out, "found:        %" PRIu64 " (%" PRIu64 " repairable)\n", res.problems, res.repairable);
     if (repair)
-        fprintf(out, "repaired:     %" PRIu64 " bitmap bits%s\n", res.repaired,
+        fprintf(out, "repaired:     %" PRIu64 " bitmap bits, %" PRIu64 " folder entries removed%s\n", res.repaired,
+                res.entries_removed,
                 res.repair_ran || !res.problems ? "" : " (not run: some problems cannot be repaired here)");
     fprintf(out, "remaining:    %" PRIu64 "\n", res.remaining);
     if (res.dirty_cleared)

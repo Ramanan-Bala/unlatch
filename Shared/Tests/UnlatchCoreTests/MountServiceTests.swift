@@ -230,6 +230,26 @@ func deadDaemonMountIsReaped() async throws {
     #expect(try report(found: 2, repairable: 2, remaining: 2, ran: false).verdict == .repairable)
     #expect(try report(found: 2, repairable: 2, remaining: 0, ran: true).verdict == .repaired)
     #expect(try report(found: 3, repairable: 2, remaining: 3, ran: false).verdict == .needsWindows)
+    #expect(try report(found: 0, repairable: 0, remaining: 0, ran: false).entriesRemoved == nil)
+
+    // A dangling folder entry (D-96), as a disk pulled mid-copy leaves it: repairable, and the
+    // advice no longer sends anyone to chkdsk.
+    func dangling(remaining: UInt64, removed: UInt64, ran: Bool) throws -> CheckReport {
+        let j = """
+            {"schema": 1, "problems": [{"kind": "entry_free_record", "repairable": true, "record": 64, "other": 280, \
+            "path": "/unlatch-test/copy/2", "detail": "the entry points at record 280, which is not in use"}], \
+            "state": "dirty", "records": 1, "recordsInUse": 1, "directories": 1, "entries": 1, "clusters": 1, \
+            "clustersInUse": 1, "lostRecords": 0, "lostClusters": 0, "found": 1, "repairable": 1, "repaired": 0, \
+            "remaining": \(remaining), "entriesRemoved": \(removed), "repairRan": \(ran), "dirtyCleared": \(ran), \
+            "exitCode": 0}
+            """
+        return try JSONDecoder().decode(CheckReport.self, from: Data(j.utf8))
+    }
+    let found = try dangling(remaining: 1, removed: 0, ran: false)
+    #expect(found.verdict == .repairable && found.advice.contains("folder entries") && !found.advice.contains("chkdsk"))
+    #expect(!found.advice.contains("marks space"))
+    let fixed = try dangling(remaining: 0, removed: 1, ran: true)
+    #expect(fixed.verdict == .repaired && fixed.advice.contains("1 folder entry") && !fixed.advice.contains("space in use"))
 }
 
 @Test(.enabled(if: integration), .timeLimit(.minutes(2)))

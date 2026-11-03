@@ -177,10 +177,11 @@ void ue_get_cache_stats(const ue_engine_t *e, ue_cache_stats_t *out);
 // Each problem goes to fn (may be NULL) as it is found. The problem's path names the file (or
 // the directory and entry) when one can be found, "" otherwise.
 //
-// UE_CHECK_REPAIR (needs io->writable) does the one safe repair: it sets the bitmap bits of
-// records and clusters in use, so at worst space is lost and nothing is overwritten. It runs
-// only when every problem found is of that kind; anything else is reported and nothing is
-// written. Then the volume is checked again, and its dirty mark (D-86) is cleared only when
+// UE_CHECK_REPAIR (needs io->writable) does the safe repairs: it sets the bitmap bits of
+// records and clusters in use, so at worst space is lost and nothing is overwritten, and it
+// removes folder entries that lead to no file (their record is free, has another sequence
+// number, or has no name in that folder; the record is not touched, D-96). It runs only when
+// every problem found is of those kinds; anything else is reported and nothing is written. Then the volume is checked again, and its dirty mark (D-86) is cleared only when
 // that check finds nothing. A volume with nothing found that is marked dirty is only unmarked.
 // Hibernated and unclean-journal volumes hold Windows' unfinished changes: REPAIR returns
 // EPERM for them. Returns 0 when the check ran (problems or not), or an errno: EINVAL for a
@@ -194,11 +195,14 @@ typedef enum {
     UE_CHK_BAD_RUNLIST,               // a runlist that cannot be read or runs past the volume
     UE_CHK_BAD_RECORD,                // a record in use that cannot be read (torn or damaged)
     UE_CHK_INDEX_UNREADABLE,          // a directory whose index cannot be read
-    UE_CHK_ENTRY_FREE_RECORD,         // a directory entry points at a record not in use
-    UE_CHK_ENTRY_WRONG_SEQ,           // a directory entry's sequence number does not match
+    UE_CHK_ENTRY_FREE_RECORD,         // a directory entry points at a record not in use (repairable
+                                      // unless past the end of the MFT or at an extension record)
+    UE_CHK_ENTRY_WRONG_SEQ,           // a directory entry's sequence number does not match (repairable)
     UE_CHK_ORPHAN,                    // a named file that no directory lists
     UE_CHK_MFT_MIRROR,                // $MFTMirr does not match $MFT: libntfs-3g cannot open
                                       // the volume at all, so this is the only problem reported
+    UE_CHK_ENTRY_WRONG_PARENT,        // a directory entry points at a record with no name in that
+                                      // directory (repairable)
     UE_CHK_KINDS
 } ue_check_kind_t;
 typedef struct {
@@ -219,6 +223,7 @@ typedef struct {
     uint64_t problems, repairable;    // what the check found (by_kind counts each kind)
     uint64_t by_kind[UE_CHK_KINDS];
     uint64_t repaired;                // bitmap bits set by the repair
+    uint64_t entries_removed;         // folder entries the repair removed (a DOS+Win32 pair counts once)
     uint64_t remaining;               // problems the last check found (after any repair)
     bool repair_ran;
     bool dirty_cleared;               // the volume was marked dirty and is not any more

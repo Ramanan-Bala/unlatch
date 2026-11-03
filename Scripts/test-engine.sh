@@ -115,8 +115,10 @@ chk-torn tear-record /d/a.bin
 chk-index zero-index /big
 chk-repairable clear-record-bit /d/a.bin\nclear-cluster-bits /d/c.bin\nclear-record-bit /big/f00010
 chk-mix clear-record-bit /d/a.bin\nbump-seq /d/b.bin
+chk-dangling free-record /d/a.bin\nfree-record /big/f00100\nfree-record /big/f00299\nfile /d/Long-File-Name.txt 10 5\ndos-name /d/Long-File-Name.txt LONG-F~1.TXT\nfree-record /d/Long-File-Name.txt\nmkdir /e\nlink-entry /e/ghost.bin /d/b.bin
 DAMAGE
 "$out/set_dirty" chk-repairable.img
+"$out/set_dirty" chk-dangling.img
 "$out/set_dirty" chk-mix.img
 rm chk-base.img
 if [ "${UNLATCH_SKIP_BIG:-0}" != 1 ]; then
@@ -145,6 +147,25 @@ set -e
 [ $rc = 4 ] || { echo "FAIL check chk-index.img exited $rc, want 4" >&2; exit 1; }
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["schema"]==1 and d["remaining"]>0 and d["problems"][0]["kind"]=="index_unreadable", d' check.json
 echo "ok   harness check (text, JSON, exit codes)"
+# Folder entries that lead to no file (D-96): removed, and nothing else changes.
+cp -c chk-dangling.img x-dangling.img
+set +e
+"$products/unlatch-engine" check --repair x-dangling.img > dangling.txt; rc=$?
+set -e
+[ $rc = 1 ] || { cat dangling.txt >&2; echo "FAIL check --repair chk-dangling.img exited $rc, want 1" >&2; exit 1; }
+grep -q '^repaired: .* 5 folder entries removed' dangling.txt || { cat dangling.txt >&2; echo "FAIL removed" >&2; exit 1; }
+"$bin/ntfsfix" -n x-dangling.img > fix.txt 2>&1 || { cat fix.txt >&2; echo "FAIL ntfsfix -n x-dangling.img" >&2; exit 1; }
+"$products/unlatch-engine" check x-dangling.img > dangling.txt || { cat dangling.txt >&2; echo "FAIL re-check" >&2; exit 1; }
+"$products/unlatch-engine" probe x-dangling.img | grep -q '^state: *clean$'
+[ "$("$products/unlatch-engine" ls x-dangling.img /d | awk '{print $NF}' | sort | tr '\n' ' ')" = "b.bin c.bin small.txt " ] \
+    || { "$products/unlatch-engine" ls x-dangling.img /d >&2; echo "FAIL /d after repair" >&2; exit 1; }
+if "$bin/ntfsls" -x -a -s -p /d x-dangling.img | grep -q 'LONG-F~1'; then echo "FAIL DOS name left" >&2; exit 1; fi
+[ "$("$products/unlatch-engine" ls x-dangling.img /big | wc -l | tr -d ' ')" = 298 ] || { echo "FAIL /big after repair" >&2; exit 1; }
+[ -z "$("$products/unlatch-engine" ls x-dangling.img /e)" ] || { echo "FAIL /e after repair" >&2; exit 1; }
+"$products/unlatch-engine" cat x-dangling.img /d/b.bin | cmp - <("$out/mkfixture" gen 20000 2)
+"$products/unlatch-engine" cat x-dangling.img /big/f00299 2>/dev/null && { echo "FAIL f00299 still there" >&2; exit 1; }
+rm x-dangling.img
+echo "ok   check --repair removes entries that lead to no file"
 eng="$products/unlatch-engine"
 "$eng" ls read.img / | grep -q ' ReadMe.TXT$'
 "$eng" stat read.img /readme.txt | grep -q '^size: *5000$'
@@ -205,11 +226,13 @@ fi
 
 echo "== leaks (check and repair)"
 cp -c chk-repairable.img leak-check.img
-for args in "check chk-index.img" "check chk-shared.img" "check --repair leak-check.img"; do
+cp -c chk-dangling.img leak-dangling.img
+for args in "check chk-index.img" "check chk-shared.img" "check --repair leak-check.img" \
+    "check --repair leak-dangling.img"; do
     leaks --atExit -- "$products/unlatch-engine" $args > leaks-check.txt 2>&1 \
         || { cat leaks-check.txt >&2; echo "FAIL leaks: $args" >&2; exit 1; }
 done
-rm leak-check.img
+rm leak-check.img leak-dangling.img
 echo "ok   no leaks"
 
 echo "== written images: probe CLEAN, ntfsinfo, ntfsfix -n, no internal names left"
