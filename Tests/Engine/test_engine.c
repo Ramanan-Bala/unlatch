@@ -2219,6 +2219,459 @@ static void test_cut_order(void)
     free(d.mem);
 }
 
+// Wider cut-off sweeps (D-100): the cut harness of test_cut_order over workloads that change
+// more than small folders. Each runs on a fresh copy of the small image, opened as the daemon
+// opens a volume, with ue_writeback where the 1 s timer would come.
+typedef void (*cut_work_fn)(ue_engine_t *e, ue_ino_t root);
+typedef long (*cut_run_fn)(cutdev_t *d, cut_work_fn work);
+
+static long cut_run(cutdev_t *d, cut_work_fn work)
+{
+    ue_io_t io = { .ctx = d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d->size, .block_size = 512,
+                   .writable = true };
+    ue_engine_t *e;
+    ue_attr_t root;
+
+    d->writes = 0;
+    if (ue_open(&io, UE_OPEN_CACHE | UE_OPEN_GHOST_OPEN_ONLY, &e, NULL))
+        return -1;
+    if (ue_getattr(e, UE_ROOT_INO, &root) == 0)
+        work(e, root.ino);
+    ue_close(e);
+    return d->writes;
+}
+
+// A long name that sorts by i first: "<tag>-0042-" and filler, len characters in all.
+static const char *long_name(char *buf, const char *tag, int i, int len)
+{
+    int n = snprintf(buf, (size_t)len + 1, "%s-%04d-", tag, i);
+    for (; n < len; n++)
+        buf[n] = (char)('a' + (i * 7 + n) % 26);
+    buf[len] = 0;
+    return buf;
+}
+
+// 1. One folder grown to 700 entries with 120-character names (the root becomes an index
+// block, blocks split, the tree gains a level), inserted out of order, then every third
+// removed so blocks empty and merge.
+static void work_big_folder(ue_engine_t *e, ue_ino_t root)
+{
+    ue_attr_t dir, a;
+    char name[160];
+
+    if (ue_create(e, root, "big", UE_T_DIR, 0755, &dir))
+        return;
+    for (int k = 0; k < 700; k++) {
+        int i = k * 389 % 700;
+        if (ue_create(e, dir.ino, long_name(name, "big", i, 120), UE_T_REG, 0644, &a))
+            return;
+        ue_release(e, a.ino);
+        if (k % 10 == 9)
+            ue_writeback(e, 0);
+    }
+    ue_writeback(e, 0);
+    for (int i = 0, k = 0; i < 700; i += 3, k++) {
+        if (ue_remove(e, dir.ino, long_name(name, "big", i, 120), false))
+            return;
+        if (k % 10 == 9)
+            ue_writeback(e, 0);
+    }
+}
+
+// 2. Renames: within a folder, across folders, into a folder that grows from its root into
+// split index blocks, over existing files, and a folder moved with its files.
+static void work_renames(ue_engine_t *e, ue_ino_t root)
+{
+    ue_attr_t ra, rb, sub, a;
+    char from[160], to[160];
+    int ops = 0;
+
+    if (ue_create(e, root, "ra", UE_T_DIR, 0755, &ra) || ue_create(e, root, "rb", UE_T_DIR, 0755, &rb) ||
+        ue_create(e, ra.ino, "sub", UE_T_DIR, 0755, &sub))
+        return;
+    for (int i = 0; i < 120; i++) {
+        if (ue_create(e, ra.ino, long_name(from, "ra", i, 100), UE_T_REG, 0644, &a) ||
+            write_gen(e, a.ino, 0, 300, (uint64_t)i))
+            return;
+        ue_release(e, a.ino);
+        if (i < 20) {
+            if (ue_create(e, rb.ino, long_name(to, "over", i, 60), UE_T_REG, 0644, &a))
+                return;
+            ue_release(e, a.ino);
+        }
+    }
+    for (int i = 0; i < 10; i++) {
+        if (ue_create(e, sub.ino, long_name(from, "s", i, 40), UE_T_REG, 0644, &a))
+            return;
+        ue_release(e, a.ino);
+    }
+    ue_writeback(e, 0);
+    for (int i = 0; i < 120; i++) {
+        int err;
+        if (i < 30)                   // within ra, to a name that sorts elsewhere
+            err = ue_rename(e, ra.ino, long_name(from, "ra", i, 100), ra.ino, long_name(to, "zz", i, 140), 0);
+        else if (i < 100)             // into rb with long names: its root overflows, blocks split
+            err = ue_rename(e, ra.ino, long_name(from, "ra", i, 100), rb.ino, long_name(to, "mv", i, 200), 0);
+        else                          // over an existing file in rb
+            err = ue_rename(e, ra.ino, long_name(from, "ra", i, 100), rb.ino, long_name(to, "over", i - 100, 60), 0);
+        if (err)
+            return;
+        if (++ops % 6 == 0)
+            ue_writeback(e, 0);
+    }
+    for (int i = 0; i < 10; i += 2)   // over files that replaced others
+        if (ue_rename(e, ra.ino, long_name(from, "zz", i, 140), rb.ino, long_name(to, "over", i, 60), 0))
+            return;
+    ue_writeback(e, 0);
+    ue_rename(e, ra.ino, "sub", rb.ino, "sub-moved-with-a-longer-name", 0);
+}
+
+// 3. Attribute lists: a file with many named streams (xattrs, D-48), resident and not, until
+// its record needs $ATTRIBUTE_LIST and extension records; a file with many hard links; two
+// files appended in turn a cluster at a time, so their runlists fragment past one record.
+static void work_attr_lists(ue_engine_t *e, ue_ino_t root)
+{
+    ue_attr_t xa, hl, l1, l2, f[2], a;
+    char name[160];
+    uint8_t val[9000];
+
+    if (ue_create(e, root, "xa", UE_T_REG, 0644, &xa) || ue_create(e, root, "links-1", UE_T_DIR, 0755, &l1) ||
+        ue_create(e, root, "links-2", UE_T_DIR, 0755, &l2) || ue_create(e, root, "hl", UE_T_REG, 0644, &hl))
+        return;
+    for (int i = 0; i < 48; i++) {
+        size_t len = i % 8 == 7 ? sizeof(val) : 120;
+        gen_fill((uint64_t)i, 0, val, len);
+        if (ue_xattr_set(e, xa.ino, long_name(name, "com.example.attr", i, 60), 0, val, len, 0))
+            return;
+        if (i % 4 == 3)
+            ue_writeback(e, 0);
+    }
+    for (int i = 0; i < 24; i++) {
+        if (ue_link(e, hl.ino, i % 2 ? l2.ino : l1.ino, long_name(name, "link", i, 180), &a))
+            return;
+        ue_release(e, a.ino);
+        if (i % 4 == 3)
+            ue_writeback(e, 0);
+    }
+    if (ue_create(e, root, "frag-0", UE_T_REG, 0644, &f[0]) || ue_create(e, root, "frag-1", UE_T_REG, 0644, &f[1]))
+        return;
+    for (int k = 0; k < 300; k++) {
+        for (int j = 0; j < 2; j++)
+            if (write_gen(e, f[j].ino, (uint64_t)k * 4096, 4096, (uint64_t)j))
+                return;
+        if (k % 20 == 19)
+            ue_writeback(e, 0);
+    }
+    ue_writeback(e, 0);
+    for (int i = 0; i < 48; i += 3)   // then some removed again
+        if (ue_xattr_remove(e, xa.ino, long_name(name, "com.example.attr", i, 60)))
+            return;
+    ue_writeback(e, 0);
+    for (int i = 0; i < 24; i += 3)
+        if (ue_remove(e, i % 2 ? l2.ino : l1.ino, long_name(name, "link", i, 180), false))
+            return;
+    ue_writeback(e, 0);
+    ue_attr_t in = { .size = 0 };
+    ue_setattr(e, f[1].ino, UE_SET_SIZE, &in, &a);
+}
+
+// 4. Growing files: six files appended in turn by uneven pieces across write-backs (resident
+// to non-resident, runs added and joined), one cut back and grown again.
+static void work_growing(ue_engine_t *e, ue_ino_t root)
+{
+    ue_attr_t dir, f[6], a;
+    uint64_t size[6] = { 0 };
+    char name[64];
+
+    if (ue_create(e, root, "grow", UE_T_DIR, 0755, &dir))
+        return;
+    for (int j = 0; j < 6; j++) {
+        snprintf(name, sizeof(name), "growing-file-%d.log", j);
+        if (ue_create(e, dir.ino, name, UE_T_REG, 0644, &f[j]))
+            return;
+    }
+    for (int round = 0; round < 40; round++) {
+        for (int j = 0; j < 6; j++) {
+            uint64_t n = 300 + (uint64_t)((round * 6 + j) * 2711 % 9000);
+            if (write_gen(e, f[j].ino, size[j], n, (uint64_t)j))
+                return;
+            size[j] += n;
+        }
+        if (round == 20) {
+            ue_attr_t in = { .size = size[2] / 3 };
+            if (ue_setattr(e, f[2].ino, UE_SET_SIZE, &in, &a))
+                return;
+            size[2] = in.size;
+        }
+        if (round == 30) {
+            ue_attr_t in = { .size = size[4] + 200000 };
+            if (ue_setattr(e, f[4].ino, UE_SET_SIZE, &in, &a))
+                return;
+            size[4] = in.size;
+        }
+        ue_writeback(e, 0);
+    }
+}
+
+// What ue_check does not look at, from what readdir lists (it reads every index block in use,
+// reachable or not) and what lookup finds (it descends the tree):
+//   unreachable    a name lookup does not find: a new index block that the folder's record
+//                  (runlist, $I30 bitmap) marks in use before its parent node points at it
+//   duplicate      a name listed twice in a folder: after a split the parent landed and the
+//                  old block was not cut down yet; lookup finds it once
+//   extra_entry    a file listed under more names than it has links: one entry of a rename
+//                  or a removed link landed and the other did not, after the record
+// Write ordering cannot close these windows (the record must land before the node blocks that
+// use its runlist, and an entry's add and remove are in different blocks); Check Disk does not
+// find them yet (D-100 carry-over). They are counted, not failed.
+typedef struct { long unreachable, duplicate, extra_entry; char what[512]; } walk_res_t;
+typedef struct { char name[256]; ue_ino_t ino, dir; uint32_t type, nlink; } walk_ent_t;
+typedef struct { walk_ent_t *v; size_t n, cap; ue_ino_t dir; } walk_list_t;
+
+static bool walk_collect(void *ctx, const char *name, const ue_attr_t *attr, uint64_t next_cookie)
+{
+    walk_list_t *l = ctx;
+    (void)next_cookie;
+    if (l->n == l->cap) {
+        size_t cap = l->cap ? 2 * l->cap : 64;
+        walk_ent_t *v = realloc(l->v, cap * sizeof(*v));
+        if (!v)
+            return false;
+        l->v = v;
+        l->cap = cap;
+    }
+    walk_ent_t *w = &l->v[l->n++];
+    snprintf(w->name, sizeof(w->name), "%s", name);
+    w->ino = attr->ino;
+    w->dir = l->dir;
+    w->type = attr->type;
+    w->nlink = attr->nlink;
+    return true;
+}
+
+static int cmp_walk_ino(const void *a, const void *b)
+{
+    const walk_ent_t *x = a, *y = b;
+    if (x->ino != y->ino)
+        return x->ino < y->ino ? -1 : 1;
+    if (x->dir != y->dir)
+        return x->dir < y->dir ? -1 : 1;
+    return strcmp(x->name, y->name);
+}
+
+// Returns 0, or -1 if the volume could not be walked (res->what says why).
+static int walk_volume(cutdev_t *d, walk_res_t *res)
+{
+    ue_io_t io = { .ctx = d, .pread = cut_pread, .size_bytes = d->size, .block_size = 512 };
+    ue_engine_t *e;
+    walk_list_t all = { 0 };
+    ue_ino_t stack[256];
+    int sp = 0, err = 0;
+
+    memset(res, 0, sizeof(*res));
+    if (ue_open(&io, UE_OPEN_RDONLY, &e, NULL)) {
+        snprintf(res->what, sizeof(res->what), "read-only open failed");
+        return -1;
+    }
+    stack[sp++] = UE_ROOT_INO;
+    while (sp > 0 && !err) {
+        ue_ino_t dirino = stack[--sp];
+        walk_list_t l = { .dir = dirino };
+        uint64_t v;
+        if (ue_readdir(e, dirino, 0, walk_collect, &l, &v)) {
+            snprintf(res->what, sizeof(res->what), "readdir of %llu failed", (unsigned long long)dirino);
+            err = -1;
+        }
+        for (size_t k = 0; k < l.n && !err; k++) {
+            ue_attr_t a;
+            if (ue_lookup(e, dirino, l.v[k].name, &a) == 0)
+                ue_release(e, a.ino);
+            else if (res->unreachable++ == 0)
+                snprintf(res->what, sizeof(res->what), "%s in %llu is listed but not found", l.v[k].name,
+                         (unsigned long long)dirino);
+            if (l.v[k].type == UE_T_DIR && sp < (int)(sizeof(stack) / sizeof(stack[0])))
+                stack[sp++] = l.v[k].ino;
+            all.dir = dirino;
+            walk_collect(&all, l.v[k].name, &(ue_attr_t){ .ino = l.v[k].ino, .type = l.v[k].type,
+                                                           .nlink = l.v[k].nlink }, 0);
+        }
+        free(l.v);
+    }
+    qsort(all.v, all.n, sizeof(*all.v), cmp_walk_ino);
+    for (size_t k = 0, m; !err && k < all.n; k = m) {
+        size_t names = 1;
+        for (m = k + 1; m < all.n && all.v[m].ino == all.v[k].ino; m++) {
+            if (all.v[m].dir == all.v[m - 1].dir && strcmp(all.v[m].name, all.v[m - 1].name) == 0)
+                res->duplicate++;
+            else
+                names++;
+        }
+        if (all.v[k].type != UE_T_DIR && names > all.v[k].nlink && res->extra_entry++ == 0 && !res->unreachable)
+            snprintf(res->what, sizeof(res->what), "%s: %zu names, %u links", all.v[k].name, names, all.v[k].nlink);
+    }
+    free(all.v);
+    ue_close(e);
+    return err;
+}
+
+// $MFT's first records copied over $MFTMirr, as chkdsk (or D-98's repair) leaves a volume
+// cut between the two, so that the rest can be checked. Kept apart from test_cut_order's copy.
+static void sweep_sync_mirror(cutdev_t *d)
+{
+    const uint8_t *bs = d->mem;
+    uint64_t cluster = (uint64_t)(bs[11] | bs[12] << 8) * bs[13];
+    int8_t cpr = (int8_t)bs[0x40];
+    uint64_t rec = cpr > 0 ? (uint64_t)cpr * cluster : 1ull << -cpr;
+    uint64_t mft = 0, mirr = 0;
+    for (int k = 7; k >= 0; k--) {
+        mft = mft << 8 | bs[0x30 + k];
+        mirr = mirr << 8 | bs[0x38 + k];
+    }
+    memcpy(d->mem + mirr * cluster, d->mem + mft * cluster, 4 * rec);
+}
+
+// Kinds that leave the volume as Check Disk repairs it (or as D-98/D-99 will): space, names
+// that lead nowhere, files no folder lists, $MFTMirr apart. Anything else is a finding.
+static bool cut_kind_ok(int k)
+{
+    return k == UE_CHK_RECORD_UNMARKED || k == UE_CHK_CLUSTERS_UNMARKED || k == UE_CHK_ENTRY_FREE_RECORD ||
+           k == UE_CHK_ENTRY_WRONG_SEQ || k == UE_CHK_ENTRY_WRONG_PARENT || k == UE_CHK_ORPHAN ||
+           k == UE_CHK_MFT_MIRROR;
+}
+
+// Cuts the workload off at sampled device writes (every write with UNLATCH_CUT_FULL=1) and
+// checks each result. Prints, per kind, how many cuts found it; fails on any finding.
+static void cut_sweep_run(const char *tag, cut_run_fn run, cut_work_fn work)
+{
+    cutdev_t d = { 0 };
+    int fd = open(img("small"), O_RDONLY);
+    CHECK(fd >= 0, "open small");
+    d.size = (uint64_t)lseek(fd, 0, SEEK_END);
+    uint8_t *orig = malloc(d.size);
+    d.mem = malloc(d.size);
+    CHECK(orig && d.mem && pread(fd, orig, d.size, 0) == (ssize_t)d.size, "read small");
+    close(fd);
+
+    memcpy(d.mem, orig, d.size);
+    d.limit = -1;
+    long total = run(&d, work);
+    CHECK(total > 20, "%s: the workload made %ld writes", tag, total);
+    ue_io_t io = { .ctx = &d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d.size, .block_size = 512,
+                   .writable = true };
+    ue_check_result_t r;
+    char what[512] = "";
+    walk_res_t w;
+    CHECK(ue_check(&io, 0, NULL, NULL, &r) == 0 && r.problems == 0 && walk_volume(&d, &w) == 0 &&
+              w.unreachable + w.duplicate + w.extra_entry == 0,
+          "%s uncut: %llu problems %s", tag, (unsigned long long)r.problems, w.what);
+
+    const char *full = getenv("UNLATCH_CUT_FULL");
+    long step = full && *full == '1' ? 1 : total / 150 + 1;
+    int cuts = 0, findings = 0, mirror = 0, walked = 0, open_bad = 0;
+    int w_unreach = 0, w_dup = 0, w_extra = 0;
+    int with[UE_CHK_KINDS] = { 0 };
+    long first_bad = -1;
+    for (long k = 0;; k++, cuts++) {
+        long n = 1 + k * step + (step > 1 ? k * 7919 % step : 0);
+        if (n >= total)
+            break;
+        memcpy(d.mem, orig, d.size);
+        d.limit = n;
+        run(&d, work);
+        d.limit = -1;
+        bool bad = false;
+        int err = ue_check(&io, 0, NULL, NULL, &r);
+        if (err == 0 && r.state == UE_VOL_CORRUPT && r.by_kind[UE_CHK_MFT_MIRROR]) {
+            mirror++;
+            with[UE_CHK_MFT_MIRROR]++;
+            sweep_sync_mirror(&d);    // the rest is checked as chkdsk would leave it
+            err = ue_check(&io, 0, NULL, NULL, &r);
+        }
+        if (err) {
+            open_bad++;
+            bad = true;
+            snprintf(what, sizeof(what), "check: %s", strerror(err));
+        } else {
+            for (int q = 1; q < UE_CHK_KINDS; q++) {
+                if (r.by_kind[q])
+                    with[q]++;
+                if (r.by_kind[q] && !cut_kind_ok(q)) {
+                    bad = true;
+                    snprintf(what, sizeof(what), "%s", ue_check_kind_name((ue_check_kind_t)q));
+                }
+            }
+            if (!bad && !r.by_kind[UE_CHK_ENTRY_FREE_RECORD] && !r.by_kind[UE_CHK_ENTRY_WRONG_SEQ] &&
+                !r.by_kind[UE_CHK_ENTRY_WRONG_PARENT]) {
+                walked++;
+                if (walk_volume(&d, &w)) {
+                    open_bad++;
+                    bad = true;
+                    snprintf(what, sizeof(what), "%s", w.what);
+                }
+                w_dup += w.duplicate != 0;
+                w_unreach += w.unreachable != 0;
+                w_extra += w.extra_entry != 0;
+                if (getenv("UNLATCH_CUT_VERBOSE") && (w.unreachable || w.duplicate || w.extra_entry))
+                    printf("     %s: cut %ld: walk: %s (%ld duplicates)\n", tag, n, w.what, w.duplicate);
+            }
+        }
+        if (bad && getenv("UNLATCH_CUT_VERBOSE"))
+            printf("     %s: cut %ld: %s\n", tag, n, what);
+        const char *exec = getenv("UNLATCH_CUT_EXEC");   // a command run on every cut's image
+        if (exec) {
+            char path[2048], cmd[4096];
+            snprintf(path, sizeof(path), "%s/x-sweep-%s-cut.img", dir, tag);
+            int out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (out >= 0 && write(out, d.mem, d.size) == (ssize_t)d.size) {
+                snprintf(cmd, sizeof(cmd), "%s '%s' %ld", exec, path, n);
+                if (system(cmd) != 0)
+                    printf("     %s: cut %ld: %s failed\n", tag, n, exec);
+            }
+            if (out >= 0)
+                close(out);
+            unlink(path);
+        }
+        const char *keep = getenv("UNLATCH_CUT_SAVE");   // a cut to keep as well, by number
+        if ((bad && findings++ == 0) || (keep && atol(keep) == n)) {   // kept for a look: unlatch-engine check
+            char path[2048];
+            first_bad = n;
+            snprintf(path, sizeof(path), "%s/x-sweep-%s-%ld.img", dir, tag, n);
+            int out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (out >= 0 && write(out, d.mem, d.size) != (ssize_t)d.size)
+                fprintf(stderr, "  cannot save %s\n", path);
+            if (out >= 0)
+                close(out);
+            printf("     %s: first finding at cut %ld: %s\n", tag, n, what);
+        }
+    }
+    printf("     %s: %d cuts of %ld writes%s: %d findings, %d $MFTMirr; cuts with:", tag, cuts, total,
+           step > 1 ? " (sampled)" : "", findings, mirror);
+    for (int q = 1; q < UE_CHK_KINDS; q++)
+        if (with[q])
+            printf(" %s %d,", ue_check_kind_name((ue_check_kind_t)q), with[q]);
+    printf(" walked %d: unreachable %d, duplicates %d, extra entries %d; not opened %d\n", walked, w_unreach, w_dup,
+           w_extra, open_bad);
+    CHECK(findings == 0, "%s: %d of %d cuts left a finding (first at %ld)", tag, findings, cuts, first_bad);
+    free(orig);
+    free(d.mem);
+}
+
+static void cut_sweep(const char *tag, cut_work_fn work) { cut_sweep_run(tag, cut_run, work); }
+
+// test_cut_order's workload under this harness (cutsweep only), for UNLATCH_CUT_EXEC and the walk.
+static long run_tree(cutdev_t *d, cut_work_fn work)
+{
+    (void)work;
+    d->deletes = true;
+    return cut_tree(d);
+}
+
+static void test_cut_tree(void) { cut_sweep_run("tree", run_tree, NULL); }
+static void test_cut_big_folder(void) { cut_sweep("big-folder", work_big_folder); }
+static void test_cut_renames(void) { cut_sweep("renames", work_renames); }
+static void test_cut_attr_lists(void) { cut_sweep("attr-lists", work_attr_lists); }
+static void test_cut_growing(void) { cut_sweep("growing", work_growing); }
+
 // D-95: the mark is on the disk only while the volume is being changed. Opening writes
 // nothing; the first change sets it; ue_settle clears it once the volume has been idle,
 // leaving a complete image; the next change sets it again.
@@ -2308,8 +2761,26 @@ int main(int argc, char **argv)
             fprintf(stderr, "leakloop: %s\n", strerror(err));
         return err ? 1 : 0;
     }
+    if (argc >= 3 && strcmp(argv[1], "cutsweep") == 0) {   // the D-100 sweeps alone, or those named
+        static const struct { const char *name; void (*fn)(void); } sweeps[] = {
+            { "order", test_cut_order }, { "tree", test_cut_tree }, { "big-folder", test_cut_big_folder },
+            { "renames", test_cut_renames },
+            { "attr-lists", test_cut_attr_lists }, { "growing", test_cut_growing } };
+        snprintf(dir, sizeof(dir), "%s", argv[2]);
+        for (size_t k = 0; k < sizeof(sweeps) / sizeof(sweeps[0]); k++) {
+            bool want = argc == 3 && strcmp(sweeps[k].name, "tree") != 0;
+            for (int a = 3; a < argc; a++)
+                want |= strcmp(argv[a], sweeps[k].name) == 0;
+            if (want) {
+                int before = failures;
+                sweeps[k].fn();
+                printf("%s %s\n", failures == before ? "ok  " : "FAIL", sweeps[k].name);
+            }
+        }
+        return failures ? 1 : 0;
+    }
     if (argc != 2) {
-        fprintf(stderr, "usage: test_engine <image-dir> | leakloop <img>\n");
+        fprintf(stderr, "usage: test_engine <image-dir> | leakloop <img> | cutsweep <image-dir> [name...]\n");
         return 64;
     }
     snprintf(dir, sizeof(dir), "%s", argv[1]);
@@ -2352,6 +2823,10 @@ int main(int argc, char **argv)
     RUN(test_check_lost_security);
     RUN(test_check_cut_copy);
     RUN(test_cut_order);
+    RUN(test_cut_big_folder);
+    RUN(test_cut_renames);
+    RUN(test_cut_attr_lists);
+    RUN(test_cut_growing);
     RUN(test_cache_model);
     RUN(test_cache_engine);
     RUN(test_dirty_mark);

@@ -45,6 +45,7 @@ Each step updates this list.
 | Install the privileged helper (real disks only) | `sudo CLI/.build/debug/unlatch install-helper` |
 | Engine tests (unit, harness, leaks, written-image checks, include boundary; ~2 min, ~18 GB of sparse images, ~8 GB really written) | `Scripts/test-engine.sh` |
 | Engine tests without the 4 GiB `cat` and `put`/`get` checks (~40 s) | `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` |
+| Cut-off sweeps alone (D-97, D-100; after test-engine.sh): sampled, or every cut | `build/test-engine/test_engine cutsweep build/test-engine [order big-folder renames attr-lists growing]`; `UNLATCH_CUT_FULL=1`, `UNLATCH_CUT_VERBOSE=1`, `UNLATCH_CUT_SAVE=n` |
 | Probe an image | `build/DerivedData/Build/Products/Debug/unlatch-engine probe t1.img` (after `xcodebuild -scheme unlatch-engine -derivedDataPath build/DerivedData build`) |
 | Open an image and print it | `unlatch-engine info [--rw] t1.img` |
 | Browse an image | `unlatch-engine ls [--stats] <img> [path]`, `stat <img> <path>` (with a link's target), `cat <img> <path>`, `xattr <img> <path> [name]`, `tree <img> [path]` |
