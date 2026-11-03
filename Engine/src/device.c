@@ -60,12 +60,24 @@ static void order_ranges(void *ctx, ue_bcache_t *bc)
     add_runs(bc, vol, vol->mft_na, BC_RANGE_MFT);
     add_runs(bc, vol, vol->mftmirr_na, BC_RANGE_MIRROR);
     bc_set_mirror_after(bc, (uint64_t)vol->mft_lcn << vol->cluster_size_bits);
+    // $Secure's record, from the mapped runs (it is in $MFT's first extent).
+    uint64_t pos = (uint64_t)FILE_Secure << vol->mft_record_size_bits, secure = UINT64_MAX;
+    VCN vcn = (VCN)(pos >> vol->cluster_size_bits);
+    if (vol->mft_na && NAttrNonResident(vol->mft_na) && vol->mft_na->rl)
+        for (const runlist_element *rl = vol->mft_na->rl; rl->length; rl++)
+            if (rl->lcn >= 0 && vcn >= rl->vcn && vcn < rl->vcn + rl->length) {
+                secure = ((uint64_t)(rl->lcn + (vcn - rl->vcn)) << vol->cluster_size_bits) +
+                         (pos & (vol->cluster_size - 1));
+                break;
+            }
+    bc_set_secure(bc, secure);
 }
 
 void ue_device_set_volume(ue_dev_t *c, ntfs_volume *vol)
 {
     c->vol = vol;
     bc_set_order(c->cache, vol ? order_ranges : NULL, c);
+    bc_set_record_size(c->cache, vol ? vol->mft_record_size : 0);
 }
 
 void ue_device_hint_new_record(ue_dev_t *c, uint64_t rec)

@@ -1008,7 +1008,78 @@ xcodebuild -scheme Unlatch build
 
 `Scripts/test-real-disk.sh SANDISK --cut --only pull` on the freshly formatted SanDisk, app running: PASSED. Pulled mid-copy; the daemon exited at once; on replug the volume was marked, the app checked it ("0 found, 0 left"), cleared the mark and mounted it read-write; the file written before the pull was intact. A check afterwards: no problems, 2,493 clusters marked used but unowned (space only, the cut copy's allocations; `check --repair` frees them). On beta.12 the same pull left a folder entry pointing at an unwritten record.
 
+### Follow-up: wider cut-off sweep, write order refined (D-100) — done 2026-11-03
+
+`test_cut_order` only grows small folders. Four new sweeps in `Tests/Engine/test_engine.c` share a harness (`cut_sweep`, `cut_run`): a workload runs on the `small` image through the page cache, with `ue_writeback` where the 1 s timer would come, and is cut off after device write n for sampled n (`total/150` apart; every write with `UNLATCH_CUT_FULL=1`). Each result is checked with `ue_check` (after copying `$MFTMirr` over when only that was apart, as in `test_cut_order`), then walked read-only: every name readdir lists is looked up again, and names per file are counted against its links. `test_engine cutsweep <dir> [order big-folder renames attr-lists growing]` runs the sweeps alone; `UNLATCH_CUT_VERBOSE=1` prints each cut's finding, `UNLATCH_CUT_SAVE=n` keeps cut n's image, and `UNLATCH_CUT_EXEC=<cmd>` runs `<cmd> <image> <n>` on every cut's image (for chkdsk or a script). `cutsweep <dir> tree` runs `test_cut_order`'s workload through this harness.
+
+- **big-folder:** one folder, 700 files with 120-character names created out of order (the root becomes a block, blocks split, the tree gains a level), then every third removed.
+- **renames:** 120 files renamed within a folder, into a second folder that grows from its root into split blocks (200-character names), over existing files, then a folder moved.
+- **attr-lists:** 48 named streams (xattrs, six of them 9 KB) on one file, 24 hard links with 180-character names in two folders, two files appended a cluster at a time in turn (300 fragments each), then a third of the streams and links removed and one file truncated.
+- **growing:** six files appended in turn by uneven pieces across 40 write-backs; one cut back, one extended by `setattr`.
+
+Found with D-97's order (every cut, full sweep):
+
+| | cuts | unreadable index (finding) | lookup misses | duplicates | names > links | `$MFTMirr` | orphans |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| big-folder | 1,180 | 2 | 71 | 117 | 0 | 72 | 691 |
+| renames | 82 | 2 | 11 | 5 | 2 | 8 | 21 |
+| attr-lists | 262 | 1 | 1 | 0 | 16 | 22 | 2 |
+| growing | 271 | 0 | 0 | 0 | 0 | 3 | 1 |
+
+(cuts with each; "lookup misses" etc. are from the walk, which runs on cuts with no entry problems.) Causes of the unreadable indexes, in `bc_writeback`'s phases:
+
+1. A new folder's record (phase 3) pointed at its non-resident `$ATTRIBUTE_LIST`, whose cluster was "everything else" (phase 4). libntfs-3g gives a new folder an attribute list when its index root moves to an extension record. Cut between: the folder cannot be opened (renames, attr-lists).
+2. A node block (phase 4) pointed at a new block's VCN while the folder's record, which grows `$INDEX_ALLOCATION` and sets the `$I30` bitmap, was still in phase 5 (big-folder; the D-98/D-99 session found the same in `test_check_cut_copy`).
+3. The same as 1 for a new folder's own `$SECURITY_DESCRIPTOR`, which libntfs-3g makes non-resident: the record landed, the descriptor's cluster still held zeros. This is what Windows chkdsk reported on 7 of the D-101 session's cut images ("Replacing missing or invalid security descriptor"). `UNLATCH_CUT_EXEC` (below) with a script that reads each in-use record's non-resident descriptor and `$STANDARD_INFORMATION` security id (against `$SII`) found it on 22 of 510 cuts of `tree` (`test_cut_order`'s workload) and 2 of 1,180 of big-folder; 0 with D-100. New files in these workloads carry no security id (48-byte `$STANDARD_INFORMATION`), so `$SII` never changed; `$Secure`'s record and its `$SII`/`$SDH` leaves now go with the other metadata anyway, before new records.
+4. Extension records that libntfs-3g allocates itself were not hinted as new, so they went with the other records in phase 5, after the attribute lists and base records that point at them.
+
+Fix (D-100, `Engine/src/bcache.c`, record size from `device.c`): each `$MFT` page remembers, as it is first changed, which of its records were in use on the disk and their sequence numbers; at write-back each record is new (in use now, free or another sequence number on the disk), freed, or changed, and a page whose records differ is written in record-sized pieces. Order: data and bitmaps, `$MFT` head and `$MFTMirr`; new index blocks; new extension records; other metadata (attribute lists, non-resident `$I30` bitmaps, stream values); new base records, highest first; flush; changed records, highest first; flush; index nodes, then leaves; flush; freed records.
+
+| | cuts | unreadable index (finding) | lookup misses | duplicates | names > links | `$MFTMirr` | orphans |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| big-folder | 1,652 | **0** | 80 | 297 | 0 | 72 | 784 |
+| renames | 94 | **0** | 14 | 18 | 17 | 8 | 13 |
+| attr-lists | 331 | **0** | 1 | 8 | 5 | 22 | 8 |
+| growing | 272 | 0 | 0 | 0 | 0 | 3 | 4 |
+| `test_cut_order` | 296 | 0 | | | | 31 | 605 |
+
+Workloads write more transfers now (MFT pages in pieces): big-folder 1,181 → 1,653, `test_cut_order` 511 → 592. The sweeps fail on any `ue_check` kind other than missing bitmap bits, lost space, entries that lead to no file, orphans and `$MFTMirr`, on a check that cannot run, and on a volume the walk cannot open: none left. Sampled, all five sweeps take about 9 s in `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh`.
+
+What order cannot fix, counted but not failed (carry-over below):
+
+- **Lookup misses:** a new block that the folder's record marks in use (the `$I30` bitmap is in the same record as the runlist, which must land before the node that uses it) while the node that will point at it has not landed. readdir lists its names; lookup does not find them. Putting node blocks before records instead brought back finding 2.
+- **Duplicates:** a split writes the parent before the old block is cut down, so the old block's tail is listed twice until it lands (lookup finds the reachable copy). Writing the old block first would lose its tail from lookup instead. With nodes written in device order among the leaves, misses rise to 125 and duplicates fall to 216 (big-folder); nodes first is kept because a miss is the worse of the two (a name you see but cannot open).
+- **Names > links:** a rename's add and remove, or a link's removal, sit in different index blocks; the record now lands first, so a cut between leaves the old name listed. The rename sweep shows more of these than before (2 → 17) because before, the record came last and such cuts were `entry_wrong_parent`; hard links show fewer (16 → 5).
+
+Against the D-98/D-99 branch (a7c4118, not merged: this patch applied on it in a scratch checkout), whose Check Disk also follows index child pointers: tree, big-folder and growing find nothing, but 2 of 94 renames cuts and 1 of 331 attr-lists cuts report "the directory's index points at index block 1, which it does not hold". In each, block 1 is inside `$INDEX_ALLOCATION` and still holds its old entries; only its `$I30` bitmap bit is clear. The block emptied and was freed in that write-back, and the folder's record (bitmap) landed before the node that drops the pointer. Freeing needs the node first and allocating needs the record first, and both use the one record, so order cannot serve both. The sweeps will fail on these three cuts once that branch is merged, until Check Disk treats such a block as an unmarked bit (carry-over).
+
+Cost: `UNLATCH_BACKEND=kext Bench/baselines.sh --runs 3 unlatch-file`, D-97 (a81a1f7) and D-100 interleaved four times, Apple M2, image file on the internal SSD, **with a Windows VM of another session using about two cores throughout** (load average 4–8), so the times are not comparable with D-97's table and the spread is wide:
+
+| | round 1 | round 2 | round 3 | round 4 |
+|---|---|---|---|---|
+| small files, D-97 → D-100 | 16.54 → 13.32 s | 13.49 → 10.78 s | 11.44 → 9.15 s | 11.84 → 9.03 s |
+| metadata | 11.06 → 15.72 s | 8.59 → 7.06 s | 6.00 → 7.09 s | 6.09 → 6.26 s |
+| sequential write | 2.55 → 1.12 s | 1.39 → 0.48 s | 0.95 → 0.38 s | 0.38 → 0.61 s |
+
+Small files (30,000 files, then `rm -rf`) were faster with D-100 in all four pairs, by about 20%; not explained, and not to be trusted until it is measured on a quiet machine. Metadata was about 3–18% slower in the two quieter rounds. A write-back now flushes up to three times (before changed records, before index blocks, before freed records) instead of two, and writes `$MFT` pages in pieces when their records differ. Not measured on a real disk, where a flush may cost more.
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh     # the four sweeps: 0 findings
+build/test-engine/test_engine cutsweep build/test-engine           # the sweeps alone (after test-engine.sh)
+UNLATCH_CUT_FULL=1 build/test-engine/test_engine cutsweep build/test-engine   # every cut, ~2 min
+Scripts/test-engine.sh
+Scripts/fsx-soak.sh --seeds 300
+Scripts/test-golden.sh
+xcodebuild -scheme Unlatch build
+```
+
+Verified on the final code: `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` and `Scripts/test-engine.sh` PASSED, `Scripts/fsx-soak.sh --seeds 300` 300 of 300, `Scripts/test-golden.sh` 609 checks 0 failed, `xcodebuild -scheme Unlatch build` succeeded, the full sweeps as in the table. The benchmark ran before the `$Secure` part of the change (a few pages a write-back, when a folder is created).
+
+Not verified: `Tests/Fuse/interrupt.sh kill`, which needs the installed app quit, and it was running with the SanDisk mounted, so it was left alone; a real disk; Windows chkdsk on D-100's cut images (`UNLATCH_CUT_EXEC` can drive it); a volume with 4 KiB MFT records (one record per page: `note_slots` and the pieces handle it, no test image has it).
+
 ## Carry-overs
+
+- **Index damage Check Disk does not find yet (D-100, 2026-11-03):** after a cut, the sweeps' walk finds three things `ue_check` passes, which write ordering cannot prevent: (1) an index block in use that no node reaches (readdir lists its names, lookup does not); (2) a block's tail of entries above the key range its parent gives it (listed twice); (3) an entry whose name is not among its record's `$FILE_NAME`s in that folder (a rename's old name). Check Disk would need, per folder: walk the B+tree from the root and compare with the in-use blocks of the `$I30` bitmap; drop entries outside a block's key range when the reachable copy exists; re-insert entries of unreached blocks through `ntfs_index_add_filename` (or rebuild the folder's index from the `$FILE_NAME`s of records naming it) and clear the unreached blocks' bits; and extend D-96's wrong-parent test to compare the full name. `test_engine cutsweep` with `UNLATCH_CUT_SAVE=n` gives images for each (cut numbers with `UNLATCH_CUT_VERBOSE=1`). (4) With D-98/D-99's child-pointer check (a7c4118): a node pointing at a block that is inside `$INDEX_ALLOCATION` and holds a valid index block for that VCN, but whose `$I30` bitmap bit is clear (freed in the write-back the cut stopped), is reported as `index_unreadable`; it should be a repairable unmarked bit (set it), like `record_unmarked`. Renames cuts 59 and 60, attr-lists cut 184.
 
 - **interrupt.sh reports "passed" when its mount fails (2026-11-03):** `scenario` returns 1 after "FAIL: mount" and the summary still says passed. It happens when the installed app auto-mounts the attached image first.
 
@@ -1016,7 +1087,7 @@ xcodebuild -scheme Unlatch build
 
 - **$MFTMirr after a cut-off write-back (D-93, 2026-11-02; narrowed by D-97):** since D-97, `$MFTMirr` is written right after `$MFT`'s first page, so only a cut at that one transfer boundary leaves them apart (24 of 255 cuts in `test_cut_order`, down from 126 of 230). Records 0–3 change at most write-backs while `$MFT` grows (its initialized size). libntfs-3g still refuses such a volume, even read-only. The remaining option is to let read-only opens skip the comparison (a patch in `Engine/vendor/patches/`); that needs a decision.
 
-- **Orphans after a cut-off write-back (D-97):** since the ordered write-back, a cut leaves new records that no folder lists yet (orphans), not entries pointing at unwritten records. Check Disk reports orphans as problems it cannot repair, so such a disk still goes to chkdsk. Check Disk could offer to remove orphans it can tell are new (or relink them into a "found" folder). Deleting from a folder whose entries are in its index root can still free the record in the same phase as the entry removal (both MFT pages, in disk order).
+- **Orphans after a cut-off write-back (D-97):** since the ordered write-back, a cut leaves new records that no folder lists yet (orphans), not entries pointing at unwritten records. Check Disk reports orphans as problems it cannot repair, so such a disk still goes to chkdsk. Check Disk could offer to remove orphans it can tell are new (or relink them into a "found" folder). (Deleting from a folder whose entries are in its index root no longer frees the record in the same phase as the entry removal: D-100 writes freed records last.)
 
 - **Audit item 10, lock files (2026-11-02):** the D-81 locks are in a world-writable folder, so another local user can hold a volume's lock, and two disks with one serial (a clone) cannot both be mounted read-write. Not changed: keying by device name would let an image and its attached device both be mounted read-write (what D-81 prevents), and a root-owned folder needs the helper to create the lock files (a new helper command). Decide whether shared Macs matter enough for that.
 

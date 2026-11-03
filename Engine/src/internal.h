@@ -28,7 +28,12 @@ typedef void (*bc_order_fn)(void *ctx, ue_bcache_t *bc);
 void bc_set_order(ue_bcache_t *bc, bc_order_fn fn, void *ctx);
 void bc_add_range(ue_bcache_t *bc, uint64_t off, uint64_t len, int kind);
 void bc_set_mirror_after(ue_bcache_t *bc, uint64_t off);   // $MFT's first page, which $MFTMirr copies
-// The cached page at off holds a record created since it was last written back.
+// MFT record size: pages of $MFT are then written record by record, each in its phase (D-100).
+void bc_set_record_size(ue_bcache_t *bc, uint32_t size);
+// Device offset of $Secure's record (UINT64_MAX: unknown); written with the metadata that new
+// records point at (D-100).
+void bc_set_secure(ue_bcache_t *bc, uint64_t off);
+// The cached record at off was created since it was last written back.
 void bc_hint_new(ue_bcache_t *bc, uint64_t off);
 // File data (ue_read/ue_write) is cached cold: new pages are evicted first, so a stream of
 // small files does not push metadata out.
