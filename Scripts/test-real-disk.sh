@@ -229,6 +229,17 @@ step_kill() {
 after_cut() {     # step, what; the file is unlatch-test/before-<step>.*
     local state m rc n
     state=$(probe_state)
+    # After a pull the running app may have checked the disk already and cleared the mark (D-95):
+    # that counts when its log says so and the earlier file is intact.
+    if [ "$state" = clean ] && [ "$1" = pull ] && /usr/bin/log show --last 5m --info --style compact \
+        --predicate 'subsystem == "io.github.ramanan-bala.unlatch" AND process == "Unlatch"' 2>/dev/null \
+        | grep -q "$bsd: marked dirty, nothing found; clearing the mark"; then
+        m=$(mount_vol) || { result "$1" FAIL "mount after the app's check"; return; }
+        if (cd "$m/unlatch-test" && shasum -a 256 -c --status "$work/before-$1.sha") 2>/dev/null; then
+            result "$1" PASS "marked dirty; the app checked it, found nothing and cleared the mark (D-95); earlier file intact"
+        else result "$1" FAIL "the file written before the $2 differs or is gone"; fi
+        unmount_vol; return
+    fi
     [ "$state" = dirty ] || { result "$1" FAIL "probe after the $2: ${state:-nothing} (want dirty, D-86)"; return; }
     m=$(mount_vol); rc=$?
     [ $rc = 3 ] || { result "$1" FAIL "mount after the $2: exit $rc (want 3, read-only)"; [ $rc = 0 ] && unmount_vol; return; }
@@ -313,7 +324,9 @@ step_pull() {
     (cd "$m/unlatch-test" && shasum -a 256 before-pull.bin) > "$work/before-pull.sha"
     sync; sleep 2                        # written back (D-62: within a second)
     d=$(daemon_pid)
-    ( for i in $(seq 1 30); do cp -R "$src" "$m/unlatch-test/copy/$i" 2>/dev/null || exit 0; done ) &
+    # Copies until the pull cuts it off: 30 copies were done before a person read the prompt, and
+    # D-95 then clears the mark after 2 s idle, so the pull found a clean volume (2026-11-03).
+    ( for i in $(seq 1 1000); do cp -R "$src" "$m/unlatch-test/copy/$i" 2>/dev/null || exit 0; done ) > /dev/null 2>&1 &
     pid=$!
     if ! ask "Files are being copied to \"$label\". Pull it out NOW, without ejecting. Leave it out."; then
         kill $pid 2>/dev/null; wait $pid 2>/dev/null; unmount_vol; result pull SKIP "skipped"; return
