@@ -1004,6 +1004,10 @@ xcodebuild -scheme Unlatch build
 
 `Tests/Fuse/interrupt.sh kill`, run with the app quit (otherwise it auto-mounts the test image first and the script's own mount fails, yet the script still prints "passed": carry-over): SIGKILL mid-copy, probe dirty, `ntfsfix -n` ok, read-only remount with 2,728 files of the copy, Check Disk 0 found and mark cleared, writing afterwards ok, clean after unmount: passed.
 
+### Real-disk pull on beta.13 (D-97) — 2026-11-03
+
+`Scripts/test-real-disk.sh SANDISK --cut --only pull` on the freshly formatted SanDisk, app running: PASSED. Pulled mid-copy; the daemon exited at once; on replug the volume was marked, the app checked it ("0 found, 0 left"), cleared the mark and mounted it read-write; the file written before the pull was intact. A check afterwards: no problems, 2,493 clusters marked used but unowned (space only, the cut copy's allocations; `check --repair` frees them). On beta.12 the same pull left a folder entry pointing at an unwritten record.
+
 ## Carry-overs
 
 - **interrupt.sh reports "passed" when its mount fails (2026-11-03):** `scenario` returns 1 after "FAIL: mount" and the summary still says passed. It happens when the installed app auto-mounts the attached image first.
