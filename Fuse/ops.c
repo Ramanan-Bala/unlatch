@@ -302,11 +302,11 @@ void uf_close_engine(uf_fs_t *fs)
     ue_get_cache_stats(fs->engine, &cs);
     if (cs.page_size)
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_DEFAULT,
-               "cache: %llu hits, %llu misses, %llu evictions, %llu write-backs (%llu ms), "
+               "cache: %llu hits, %llu misses, %llu evictions, %llu write-backs (%llu ms, %llu order flushes), "
                "%llu direct reads, %llu direct writes, %llu MiB read, %llu MiB written",
                (unsigned long long)cs.hits, (unsigned long long)cs.misses, (unsigned long long)cs.evictions,
                (unsigned long long)cs.writebacks, (unsigned long long)(cs.writeback_us / 1000),
-               (unsigned long long)cs.direct_reads, (unsigned long long)cs.direct_writes,
+               (unsigned long long)cs.order_flushes, (unsigned long long)cs.direct_reads, (unsigned long long)cs.direct_writes,
                (unsigned long long)(cs.read_bytes >> 20), (unsigned long long)(cs.write_bytes >> 20));
     if (ue_has_failed(fs->engine))
         uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "%s failed during use; nothing more was written", fs->mountpoint);

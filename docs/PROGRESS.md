@@ -960,13 +960,39 @@ No regression image yet for the `$MFT` extent case: it needs a volume filled unt
 - sleep: PASS, but pmset showed no sleep during the step; the Mac probably did not sleep. Not counted.
 - kill, pull: skipped (need `--cut`).
 
+### Follow-up: ordered write-back (D-96) — done 2026-11-03
+
+The SanDisk pull on 2026-11-03 left "/unlatch-test/copy/2: the entry points at record 280, which is not in use": D-62 wrote dirty pages in disk order, so a folder's index block could land before the new file's record. `bc_writeback` (`Engine/src/bcache.c`) now writes in phases, with a device flush before phases 4 and 5: data and bitmaps, then `$MFT`'s first page with `$MFTMirr` right after it; new index blocks; records created since the last write-back (highest first); flush; other index blocks and the rest; flush; other MFT records. `device.c` names the bitmap and MFT ranges from the runlists in memory, and `ue_create` and the symlink path mark new records (`ue_device_hint_new_record`). Transfers are still sorted and merged within each phase. The D-95 rules are unchanged: the mark is still written and flushed before a change and cleared after the settle's flush. `unlatch-fuse` logs `order flushes` with the cache stats at unmount.
+
+New test `test_cut_order` (`Tests/Engine/test_engine.c`): 3 folders × 4 subfolders × 30 files (200 B, every tenth 20 kB), a write-back every 7 creates, then a folder emptied (30 removes, a write-back every 7), all cut off after every other device write. Each cut is checked with `ue_check`; a cut that left `$MFTMirr` apart is checked again with the mirror copied over, as chkdsk would leave it.
+
+| | cuts | entries or indexes broken | free-record entries | unreadable indexes | `$MFTMirr` apart | orphans | unmarked records / clusters |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| before (5219a76) | 230 | 60 | 15 | 54 | 126 | 623 | 45 / 91 |
+| after | 255 | **0** | 0 | 0 | 24 | 426 | 72 / 8 |
+
+The unmarked records after the change come from the deletes: bitmap bits are cleared in phase 1 and the record is freed in phase 5. Check Disk repairs that. With creates only, the count was 0 / 0.
+
+Cost: `UNLATCH_BACKEND=kext Bench/baselines.sh --runs 3 unlatch-file`, before and after interleaved twice, Apple M2, image file on the internal SSD. Small files (30,000 files of 1–16 KiB, then `rm -rf`): 7.64 / 7.29 s → 8.82 / 8.49 s, **about 16% slower** (≈4,000 → ≈3,450 files/s). Metadata: 6.45 / 6.48 s → 6.49 / 6.45 s, unchanged. Sequential write: noise (0.40–0.60 s). A `git clone --no-local` of this repo (568 entries, 3 clones each round): median 0.45 s → 0.46–0.58 s, within noise at this size. The extra cost is the two flushes per write-back. A USB stick's flush may cost more; not measured on a real disk.
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh     # test_cut_order: 0 broken
+Scripts/fsx-soak.sh --seeds 300               # 300 of 300
+Scripts/test-golden.sh                        # 609 checks, 0 failed
+xcodebuild -scheme Unlatch build
+```
+
+Not verified: `Tests/Fuse/interrupt.sh kill`. The installed app auto-mounts the attached test image before the script can, so the script's own mount fails, and the script then prints "passed" anyway (carry-over). It needs the app quit or auto-mount off while it runs.
+
 ## Carry-overs
+
+- **interrupt.sh reports "passed" when its mount fails (2026-11-03):** `scenario` returns 1 after "FAIL: mount" and the summary still says passed. It happens when the installed app auto-mounts the attached image first.
 
 - **Automatic check runs three passes (D-95, 2026-11-03):** the app checks read-only, then, when nothing was found, `check --repair`, which checks read-only again and once more read-write before clearing the mark. On a large disk that triples the wait. A check flag that clears the mark when the first pass finds nothing would make it one pass plus the read-write one.
 
-- **$MFTMirr after a cut-off write-back (D-93, 2026-11-02):** in `test_check_cut_copy`, 12 of 21 cuts mid-write-back leave `$MFTMirr` older than `$MFT`'s first records. libntfs-3g's mount compares the two and refuses the volume, so `ue_probe` says CORRUPT and Unlatch cannot mount it even read-only; Check Disk reports `mft_mirror` and sends the user to chkdsk. Options: write the mirror's pages in the same write-back right after `$MFT`'s (bcache, D-62), or let read-only opens skip the comparison (a patch in `Engine/vendor/patches/`). Either needs a decision; the read-only one also makes the files reachable for copying off.
+- **$MFTMirr after a cut-off write-back (D-93, 2026-11-02; narrowed by D-96):** since D-96, `$MFTMirr` is written right after `$MFT`'s first page, so only a cut at that one transfer boundary leaves them apart (24 of 255 cuts in `test_cut_order`, down from 126 of 230). Records 0–3 change at most write-backs while `$MFT` grows (its initialized size). libntfs-3g still refuses such a volume, even read-only. The remaining option is to let read-only opens skip the comparison (a patch in `Engine/vendor/patches/`); that needs a decision.
 
-- **Write-back order after a crash:** a SIGKILL mid-`cp -R` left directories whose MFT records point at index blocks that were never written. The page cache writes dirty pages back sorted by offset (D-62). Writing index and data blocks before the MFT records that point at them would shrink the damage. The dirty mark (D-86) already makes it safe (read-only until chkdsk).
+- **Orphans after a cut-off write-back (D-96):** since the ordered write-back, a cut leaves new records that no folder lists yet (orphans), not entries pointing at unwritten records. Check Disk reports orphans as problems it cannot repair, so such a disk still goes to chkdsk. Check Disk could offer to remove orphans it can tell are new (or relink them into a "found" folder). Deleting from a folder whose entries are in its index root can still free the record in the same phase as the entry removal (both MFT pages, in disk order).
 
 - **Audit item 10, lock files (2026-11-02):** the D-81 locks are in a world-writable folder, so another local user can hold a volume's lock, and two disks with one serial (a clone) cannot both be mounted read-write. Not changed: keying by device name would let an image and its attached device both be mounted read-write (what D-81 prevents), and a root-owned folder needs the helper to create the lock files (a new helper command). Decide whether shared Macs matter enough for that.
 
