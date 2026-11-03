@@ -1043,6 +1043,37 @@ Surprises:
 
 **README wording, once a re-run of the commands above is clean (all 100 after the fixes below, and the orphan and mirror cuts after D-98/D-99):** in "No journal", replace "can be left with damage that only Windows' `chkdsk` (or a reformat) repairs" with "can be left with damage; Unlatch's Check Disk repairs it on the Mac, checked against Windows' own `chkdsk` on hundreds of cut-off copies. Only the files being copied at that moment may be lost." Then replace "When you still need Windows" with: "**You no longer need Windows for this.** The only damage Check Disk does not repair is a file whose own record never reached the disk; that file is lost and must be copied again. Run `chkdsk` only if you want a second opinion." Make the same change in `site/index.html` (lines 201 and 243). Not edited.
 
+### Re-run: Windows chkdsk on the D-98/D-99/D-102 Check Disk (D-101) — done 2026-11-03
+
+**Every image Check Disk leaves with no problems is clean for Windows' chkdsk: 151 of 151, in read-only mode and with `/f`.** That includes all 139 of the 140 cut images it repairs. The only cut it leaves is `copy-245` (an index-growth cut, which D-100 is fixing). chkdsk finds damage there too.
+
+Check Disk was built from `refs/heads/claude/check-disk-d98-d99` at 92189b6 (D-98 `$MFTMirr`, D-99 orphan relink, D-102 lost bitmap bits and security descriptors), in a separate detached worktree; it was not merged here. It repaired fresh copies of the same 140 as-cut images (`build/chkdsk/cut/`) and the 18 `chk-*` fixtures made by that branch's `Scripts/test-engine.sh` (PASSED), one `--repair` each. Then `--scan` and `--detail` ran as before. Results are in `build/chkdsk2/`; `findings-d98-d99.tsv` is in the shared notes folder.
+
+| Group | Images | Check Disk: no problems after one `--repair` | chkdsk read-only clean | chkdsk `/f`: no corrections |
+|---|---|---|---|---|
+| Cuts where Check Disk found nothing | 92 | 92 | 92 | 92 |
+| Cuts with lost space, orphans, `$MFTMirr`, security descriptors or missing bits, repaired | 47 | 47 | 47 | 47 |
+| Cut left (`copy-245`: unreadable index, 22 orphans) | 1 | 0 | 0 | 0 (corrected) |
+| `chk-*` fixtures repaired (12) | 12 | 12 | 12 | 12 |
+| `chk-*` fixtures left (index, mirror-torn, mix, run-past, shared, torn) | 6 | 0 | 0 | 1 (`chk-mirror-torn`) |
+
+Images chkdsk still corrects. Check Disk reported each one as a problem it could not repair:
+- `copy-245` (cut at write 245 of 248; Unlatch: `index_unreadable:1, orphan:22`): "Correcting error in index $I30 for file 1AC", "Sorting index $I30", "Recovering orphaned file file-with-a-long-name-098.bin (20F) into directory file 1AC" and so on for the 22. No file is lost.
+- `chk-index` (`index_unreadable:1, orphan:300`): "Correcting error in index $I30 for file 45", "free space marked as allocated in the bitmap for index $I30", then the 300 files relinked into folder 45.
+- `chk-mix` (`clusters_shared:1, record_unmarked:1`), `chk-shared` (`clusters_shared:1`), `chk-run-past` (`bad_runlist:1`): "Deleting corrupt attribute record (0x80, "")", "Inserting data attribute into file N", "free space marked as allocated in the volume bitmap" (chk-mix also: "Correcting errors in the MFT BITMAP attribute").
+- `chk-torn` (`bad_record:1`): "Deleting corrupt file record segment 41", "Deleting index entry a.bin in index $I30 of file 40", and both bitmaps.
+- `chk-mirror-torn` (`mft_mirror:1`, `$MFT` record 1 torn): read-only "File record segment 1 is corrupt. Errors found"; `/f` fixes it silently ("found no problems").
+
+```sh
+W=<detached worktree at 92189b6>; (cd $W && UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh)   # PASSED, 18 chk-*.img
+for f in $W/build/test-engine/chk-*.img build/chkdsk/cut/*.img; do n=s-$(basename $f); cp -c $f build/chkdsk2/repaired/$n
+    $W/build/DerivedData/Build/Products/Debug/unlatch-engine check --repair build/chkdsk2/repaired/$n; done   # 151 of 158 exit 0
+WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 CHKDSK_OUT=$PWD/build/chkdsk2 Scripts/chkdsk-vm.sh --scan build/chkdsk2/repaired/*.img     # 7 not clean
+WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 CHKDSK_OUT=$PWD/build/chkdsk2 Scripts/chkdsk-vm.sh --detail build/chkdsk2/repaired/*.img   # 6 corrected
+```
+
+This is the evidence for the README wording proposed in the D-101 entry above, once D-98/D-99/D-102 are merged. Until D-100 lands, the wording needs one caveat: a cut while a folder's index is growing (`copy-245`) still needs chkdsk, which reconnects the files and loses none of them. Not merged, not pushed, README and site not edited.
+
 ## Carry-overs
 
 - **Check Disk vs chkdsk: lost space (D-101, for the Check Disk owner):** 60 of the 92 cut images in which Check Disk finds nothing fail chkdsk. Read-only chkdsk says "The master file table's (MFT) BITMAP attribute is incorrect" and/or "The Volume Bitmap is incorrect" (exit 3); `/f` says "CHKDSK discovered free space marked as allocated in the MFT bitmap / in the volume bitmap". Check Disk counts these bits as `lostRecords`/`lostClusters` but reports no problem and leaves them set. It also misses `$MFT` bitmap bits for records past `$MFT`'s end: `pass1` only walks existing records. In `order-13`, bits 73–79 are set, `$MFT` has 73 records, and Check Disk reports 0 lost. Fix: make lost records and clusters a repairable kind that `--repair` clears, including bits past `$MFT`'s end, and keep the dirty mark until they are gone. Images: `build/chkdsk/repaired/r-order-13.img` (MFT bitmap only), `r-order-17.img` (both bitmaps); every case is in `findings.tsv` in the shared notes folder.
