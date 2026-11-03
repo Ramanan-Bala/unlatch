@@ -938,7 +938,7 @@ unlatch-fuse --backend kext build/pull.img <dir>; write 8 MiB + 5 files; sleep 4
 
 Negative check: with `ue_mark_busy` taken out of `ue_create`, the tests fail with "writes while not marked dirty".
 
-Not checked: the app's automatic check by hand; a real stick pulled while idle (`Scripts/test-real-disk.sh`).
+Owner's test on a real disk with the dev app (2026-11-03): plugged in, nothing done, pulled out, plugged in again: mounted read-write at once. Pulled out mid-copy, plugged in again: checked automatically, then read-write. Not run: `Scripts/test-real-disk.sh`.
 
 ## Carry-overs
 
