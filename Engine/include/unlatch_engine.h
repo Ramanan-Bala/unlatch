@@ -112,6 +112,7 @@ void ue_set_log(ue_log_fn fn, void *ctx);
 typedef struct {
     uint64_t inode_opens;             // ntfs_inode_open calls made by the engine
     uint64_t held_inodes;             // items the host holds (lookup/create until ue_release)
+    uint64_t unmarked_writes;         // device writes while the dirty mark was off: a bug (D-95)
 } ue_stats_t;
 void ue_get_stats(const ue_engine_t *e, ue_stats_t *out);
 
@@ -159,6 +160,14 @@ typedef struct {
     uint32_t page_size;               // 0: no cache
 } ue_cache_stats_t;
 int  ue_writeback(ue_engine_t *e, uint32_t min_age_ms);
+// The dirty mark (D-86, D-95): a read-write engine puts VOLUME_IS_DIRTY on the disk before
+// its first change and keeps it while changes go on. ue_settle, once no change has come for
+// idle_ms, writes everything back, flushes, and clears the mark, so a disk unplugged while
+// idle is clean; the next change sets it again. EAGAIN when not idle long enough; 0 when it
+// cleared the mark or there was nothing to do (read-only, already clear, or a volume that
+// was dirty at open, which keeps its mark unless opened with UE_OPEN_CLEAR_DIRTY).
+int  ue_settle(ue_engine_t *e, uint32_t idle_ms);
+bool ue_is_marked_dirty(const ue_engine_t *e);  // VOLUME_IS_DIRTY is on the disk now
 void ue_get_cache_stats(const ue_engine_t *e, ue_cache_stats_t *out);
 
 // Check Disk (D-93). ue_check opens the volume itself, read-only, and checks that every MFT

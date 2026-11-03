@@ -923,7 +923,26 @@ unlatch mount --mark-checked diskB      # replaces the read-only mount, read-wri
 
 Not checked: the dialog in the app by hand (built only); the "problems remain" branch of Check Disk and Enable Read-Write in the app (the report path is D-93's, tested through the CLI).
 
+### Follow-up: mark only while changing, check before asking (D-95) — done 2026-11-03
+
+- Owner's request: a disk pulled out while idle should not need checking. Engine: `ue_mark_busy` sets the mark before every change, `ue_settle` clears it after an idle period (`unlatch-fuse` flusher, 2 s); `ue_is_marked_dirty`, `ue_stats_t.unmarked_writes` (a stray-write guard in `dev_pwrite`). App: a mount that comes up DIRTY is checked first; nothing found clears the mark and mounts read-write without asking; otherwise D-94's dialog with the findings.
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh      # PASSED; test_settle; every write test asserts 0 unmarked writes
+Scripts/fsx-soak.sh --seeds 300                 # 300 of 300 passed; the sync op now also settles and probes the image
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+# pull simulation, kext mount of an image file, SIGKILL of the daemon:
+unlatch-fuse --backend kext build/pull.img <dir>; write 8 MiB + 5 files; sleep 4; kill -9   # probes clean, 5 files there
+# same, killed right after writing: probes dirty (check finds nothing); idle, then a new write: dirty again
+```
+
+Negative check: with `ue_mark_busy` taken out of `ue_create`, the tests fail with "writes while not marked dirty".
+
+Not checked: the app's automatic check by hand; a real stick pulled while idle (`Scripts/test-real-disk.sh`).
+
 ## Carry-overs
+
+- **Automatic check runs three passes (D-95, 2026-11-03):** the app checks read-only, then, when nothing was found, `check --repair`, which checks read-only again and once more read-write before clearing the mark. On a large disk that triples the wait. A check flag that clears the mark when the first pass finds nothing would make it one pass plus the read-write one.
 
 - **$MFTMirr after a cut-off write-back (D-93, 2026-11-02):** in `test_check_cut_copy`, 12 of 21 cuts mid-write-back leave `$MFTMirr` older than `$MFT`'s first records. libntfs-3g's mount compares the two and refuses the volume, so `ue_probe` says CORRUPT and Unlatch cannot mount it even read-only; Check Disk reports `mft_mirror` and sends the user to chkdsk. Options: write the mirror's pages in the same write-back right after `$MFT`'s (bcache, D-62), or let read-only opens skip the comparison (a patch in `Engine/vendor/patches/`). Either needs a decision; the read-only one also makes the files reachable for copying off.
 

@@ -92,13 +92,64 @@ static int sync_volume(ntfs_volume *vol)
 // mount is read-only until it is checked. libntfs-3g does not do this, and a stick pulled
 // mid-copy probed CLEAN with "inconsistent metadata" logged (D-86). Each change is flushed on
 // its own, so the mark never reaches the disk out of order with the metadata it covers.
-static int write_dirty(ntfs_volume *vol, bool dirty)
+//
+// Since D-95 the mark is on only while the volume is being changed: ue_mark_busy sets it
+// before the first change, and ue_settle clears it once everything is on the disk and the
+// volume has been idle, so a disk pulled out while idle is not marked as needing a check.
+static int write_dirty(ue_engine_t *e, bool dirty)
 {
+    ntfs_volume *vol = e->vol;
     le16 flags = dirty ? vol->flags | VOLUME_IS_DIRTY : vol->flags & ~VOLUME_IS_DIRTY;
+    int err;
 
+    e->dev_ctx->unmarked = false;
     if (ntfs_volume_write_flags(vol, flags))
         return errno ? errno : EIO;
-    return vol->dev->d_ops->sync(vol->dev) ? (errno ? errno : EIO) : 0;
+    if ((err = vol->dev->d_ops->sync(vol->dev) ? (errno ? errno : EIO) : 0))
+        return err;
+    e->mark_on = dirty;
+    e->dev_ctx->unmarked = !dirty;
+    return 0;
+}
+
+static uint64_t now_ns(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
+int ue_mark_busy(ue_engine_t *e)
+{
+    if (e->readonly)
+        return EROFS;
+    if (e->dev_ctx->failed)
+        return EIO;
+    e->last_change_ns = now_ns();
+    return e->mark_on ? 0 : write_dirty(e, true);
+}
+
+int ue_settle(ue_engine_t *e, uint32_t idle_ms)
+{
+    int err;
+
+    if (!e)
+        return EINVAL;
+    if (e->dev_ctx->failed)
+        return EIO;
+    // A volume that was dirty at open keeps its mark (D-86) unless UE_OPEN_CLEAR_DIRTY.
+    if (e->readonly || !e->marked_dirty || !e->mark_on)
+        return 0;
+    if (now_ns() - e->last_change_ns < (uint64_t)idle_ms * 1000000u)
+        return EAGAIN;
+    // As at a clean close: everything libntfs-3g holds reaches the disk, then the mark is
+    // cleared. $Secure is closed to write its index blocks, and opened again.
+    if ((err = sync_volume(e->vol)))
+        return err;
+    if (ntfs_open_secure(e->vol))
+        return errno ? errno : EIO;
+    return write_dirty(e, false);
 }
 
 static int unmount_volume(ntfs_volume *vol, ue_dev_t *ctx)
@@ -265,12 +316,9 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
         unmount_volume(vol, ctx);
         return EROFS;
     }
-    // Before any other write. A volume that was dirty already keeps its mark at close.
+    // The mark is written before the first change (ue_mark_busy, D-95), not here. A volume
+    // that was dirty already keeps its mark.
     bool was_dirty = (vol->flags & VOLUME_IS_DIRTY) != 0;
-    if (!readonly && !was_dirty && (err = write_dirty(vol, true))) {
-        unmount_volume(vol, ctx);
-        return err;
-    }
 
     ntfs_create_lru_caches(vol);       // ntfs_mount() does this; ntfs_device_mount() does not
     if (ntfs_set_ignore_case(vol) ||
@@ -288,6 +336,9 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
     e->dev_ctx = ctx;
     e->readonly = readonly;
     e->marked_dirty = !readonly && (!was_dirty || (flags & UE_OPEN_CLEAR_DIRTY));
+    e->mark_on = was_dirty;
+    e->last_change_ns = now_ns();
+    ctx->unmarked = !readonly && !was_dirty;
     e->ghost_open_only = (flags & UE_OPEN_GHOST_OPEN_ONLY) != 0;
     if ((err = ue_held_init(&e->held))) {
         unmount_volume(vol, ctx);
@@ -327,8 +378,8 @@ int ue_close(ue_engine_t *e)
     err = e->readonly || e->dev_ctx->failed ? 0 : ue_delete_ghosts(e);
     // The dirty mark is cleared only once everything else is on the device, and only when
     // nothing failed: a crash between the two leaves the volume DIRTY, never falsely CLEAN.
-    if (!err && e->marked_dirty && !e->dev_ctx->failed && !(err = sync_volume(e->vol)))
-        err = write_dirty(e->vol, false);
+    if (!err && !e->readonly && !e->dev_ctx->failed && !(err = sync_volume(e->vol)) && e->marked_dirty && e->mark_on)
+        err = write_dirty(e, false);
     ue_held_free(&e->held);
     int uerr = unmount_volume(e->vol, e->dev_ctx);
     if (!err)
@@ -357,6 +408,11 @@ void ue_get_cache_stats(const ue_engine_t *e, ue_cache_stats_t *out)
 bool ue_is_readonly(const ue_engine_t *e)
 {
     return e ? e->readonly : true;
+}
+
+bool ue_is_marked_dirty(const ue_engine_t *e)
+{
+    return e && e->mark_on;
 }
 
 bool ue_has_failed(const ue_engine_t *e)

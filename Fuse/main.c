@@ -69,6 +69,9 @@ static void usage(void)
 // Dirty cached pages older than this are written back, so a crash or unplug loses at most
 // about this much metadata; the kernel's own buffer cache allows 30 s (D-62).
 #define WRITEBACK_MS 1000
+// After this long without a change, everything is written back and the dirty mark cleared,
+// so a disk pulled out while idle does not need checking; the next change sets it (D-95).
+#define SETTLE_MS 2000
 
 // The session loop is fuse_session_loop's, plus a lock: requests are processed one at a time
 // on this thread while holding fs->lock, and a timer thread takes the same lock to write back
@@ -94,7 +97,8 @@ static void *flusher(void *arg)
         ts.tv_nsec %= 1000000000L;
         pthread_cond_timedwait(&f->cond, f->lock, &ts);
         uf_fs_t *fs = f->fs;
-        if (!f->stop && fs->engine && !fs->read_only && ue_writeback(fs->engine, WRITEBACK_MS) == EIO &&
+        if (!f->stop && fs->engine && !fs->read_only &&
+            (ue_writeback(fs->engine, WRITEBACK_MS) == EIO || ue_settle(fs->engine, SETTLE_MS) == EIO) &&
             !fs->failed_logged) {
             uf_log(UF_LOG_MOUNT, OS_LOG_TYPE_ERROR, "writing cached metadata back failed; nothing more is written");
             fs->failed_logged = true;

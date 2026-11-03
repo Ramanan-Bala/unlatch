@@ -35,7 +35,7 @@ final class AppModel {
     /// Volumes whose automatic mount failed and that were handed to macOS: no longer claimed
     /// until they are unplugged, so they stay visible, read-only, through Apple's driver.
     private let released = BSDNames()
-    /// Volumes already asked about since they were plugged in (D-94).
+    /// Volumes already checked or asked about since they were plugged in (D-94, D-95).
     private var asked: Set<String> = []
 
     init() {
@@ -144,31 +144,69 @@ final class AppModel {
             }
         }
         await refresh()
-        // In a task of its own: the disk events behind this mount are not held up by the dialog.
-        if askDirty, let v = volumes.first(where: { $0.id == bsdName }) { Task { await enableReadWrite(v) } }
+        // In a task of its own: the disk events behind this mount are not held up by the check.
+        if askDirty, let v = volumes.first(where: { $0.id == bsdName }) { Task { await checkMarked(v) } }
     }
 
-    /// A disk marked as needing a check came up read-only (D-94): the user may check it and
-    /// enable read-write, enable read-write without checking, or keep it read-only. Both
-    /// choices clear the mark (the check only when nothing is left).
-    func enableReadWrite(_ v: Volume) async {
+    /// A disk marked as needing a check came up read-only (D-95): it is checked first. When
+    /// nothing is found the mark is cleared and it mounts read-write without a question;
+    /// otherwise, or when the check cannot run, the user is asked.
+    private func checkMarked(_ v: Volume) async {
         asked.insert(v.disk.bsdName)
         let name = v.disk.label.isEmpty ? v.disk.bsdName : v.disk.label
-        let alert = NSAlert()
-        alert.messageText = "\(name) needs checking"
-        alert.informativeText = """
-            It was not ejected cleanly, so some of its records may be half-written, and it was mounted read-only.
+        notify("Checking \(name)", "It was not ejected cleanly, so Unlatch is checking it before enabling read-write.")
+        guard let r = await runCheck(v.disk.bsdName, repair: false) else {
+            await enableReadWrite(v)
+            return
+        }
+        if r.found == 0 {
+            log.notice("\(v.disk.bsdName, privacy: .public): marked dirty, nothing found; clearing the mark")
+            await checkAndEnable(v, name: name)
+        } else {
+            await enableReadWrite(v, found: r)
+        }
+    }
 
-            Check Disk looks for damage, repairs what is safe to repair, and enables read-write when nothing is left. \
+    /// A disk marked as needing a check is read-only (D-94): the user may check it and enable
+    /// read-write, enable read-write without checking, or keep it read-only. Both choices clear
+    /// the mark (the check only when nothing is left). With `found`, the automatic check
+    /// (D-95) found problems: they are shown, and the first choice is offered only when
+    /// Unlatch can repair them.
+    func enableReadWrite(_ v: Volume, found: CheckReport? = nil) async {
+        asked.insert(v.disk.bsdName)
+        let name = v.disk.label.isEmpty ? v.disk.bsdName : v.disk.label
+        let warning = """
             Enabling read-write without checking repairs nothing: writing to a damaged disk can damage files on it, \
             and Windows will no longer offer to check it.
             """
+        let alert = NSAlert()
+        var canCheck = true
+        if let r = found {
+            canCheck = r.verdict == .repairable
+            alert.alertStyle = .critical
+            alert.messageText = canCheck ? "\(name) has problems Unlatch can repair" : "\(name) needs Windows to repair it"
+            alert.informativeText = "It was not ejected cleanly and is mounted read-only. The check found:\n\n"
+                + Self.summary(r) + "\n\n" + warning
+        } else {
+            alert.messageText = "\(name) needs checking"
+            alert.informativeText = """
+                It was not ejected cleanly, so some of its records may be half-written, and it was mounted read-only.
+
+                Check Disk looks for damage, repairs what is safe to repair, and enables read-write when nothing is left.
+                """ + " " + warning
+        }
         alert.addButton(withTitle: "Keep Read-Only")
-        alert.addButton(withTitle: "Check Disk and Enable Read-Write")
+        alert.addButton(withTitle: canCheck ? (found == nil ? "Check Disk and Enable Read-Write" : "Repair and Enable Read-Write")
+                                            : "Copy Report")
         let unchecked = alert.addButton(withTitle: "Enable Read-Write Without Checking")
         unchecked.hasDestructiveAction = true
         NSApp.activate()
         switch alert.runModal() {
+        case .alertSecondButtonReturn where !canCheck:
+            if let r = found {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Self.fullReport(r, name: name), forType: .string)
+            }
         case .alertSecondButtonReturn:
             log.notice("\(v.disk.bsdName, privacy: .public): checking to enable read-write, as asked")
             await checkAndEnable(v, name: name)

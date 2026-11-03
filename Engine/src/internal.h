@@ -34,6 +34,8 @@ typedef struct ue_dev {
     uint64_t pos;                     // seek position for read/write
     bool failed;                      // a write failed or the device went away: all I/O -> EIO
     ue_bcache_t *cache;               // NULL without UE_OPEN_CACHE
+    bool unmarked;                    // read-write and the dirty mark is off: writes are a bug (D-95)
+    uint64_t unmarked_writes;         // writes that came while unmarked (tests expect none)
 } ue_dev_t;
 
 // Allocates an ntfs_device backed by io, with a page cache if `cached`. On success *ctx_out
@@ -70,7 +72,9 @@ struct ue_engine {
     ue_dev_t *dev_ctx;
     bool readonly;
     bool ghost_open_only;             // UE_OPEN_GHOST_OPEN_ONLY (D-82)
-    bool marked_dirty;                // ue_open set VOLUME_IS_DIRTY; a clean close clears it (D-86)
+    bool marked_dirty;                // the engine owns VOLUME_IS_DIRTY: it may clear it (D-86, D-95)
+    bool mark_on;                     // VOLUME_IS_DIRTY is on the disk now
+    uint64_t last_change_ns;          // monotonic, the last ue_mark_busy
     ue_held_map_t held;
     uint64_t next_tmp_id;             // ghost and rename temp names
     ue_stats_t stats;
@@ -98,6 +102,9 @@ bool ue_hidden_entry(uint64_t dir_rec, uint64_t rec, const char *utf8_name);
 int ue_hold(ue_engine_t *e, const ntfs_inode *ni);              // host now holds this item
 int ue_delete_ghost(ue_engine_t *e, ue_held_t *h);              // write.c
 int ue_delete_ghosts(ue_engine_t *e);                            // ue_close
+// Before anything that may change the volume: puts the dirty mark on the disk if it is off
+// (D-95). 0 or errno; on an error nothing may be changed.
+int ue_mark_busy(ue_engine_t *e);
 int ue_sweep_root(ue_engine_t *e);                               // ue_open, read-write (D-65)
 
 #endif // UE_INTERNAL_H

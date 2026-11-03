@@ -139,6 +139,11 @@ static s64 dev_pwrite(struct ntfs_device *dev, const void *buf, s64 count, s64 o
     }
     if ((uint64_t)count > c->io.size_bytes - (uint64_t)offset)
         count = (s64)(c->io.size_bytes - (uint64_t)offset);
+    if (c->unmarked) {
+        // A change that did not go through ue_mark_busy: the mark is not on the disk.
+        if (c->unmarked_writes++ == 0)
+            ue_logf(UE_LOG_ERROR, "write at %lld while the volume is not marked dirty", (long long)offset);
+    }
     NDevSetDirty(dev);
     err = c->cache ? bc_write(c->cache, buf, (size_t)count, (uint64_t)offset)
                    : c->io.pwrite(c->io.ctx, buf, (size_t)count, (uint64_t)offset);

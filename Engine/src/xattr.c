@@ -153,8 +153,8 @@ int ue_xattr_set(ue_engine_t *e, ue_ino_t ino, const char *name, uint64_t pos, c
 
     if (!e || (size && !buf))
         return EINVAL;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if (pos + size > UE_XATTR_MAX)
         return E2BIG;
     if ((err = stream_name(name, &u, &ulen)))
@@ -209,8 +209,8 @@ int ue_xattr_remove(ue_engine_t *e, ue_ino_t ino, const char *name)
 
     if (!e)
         return EINVAL;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if ((err = stream_name(name, &u, &ulen)))
         return err;
     if ((err = ue_iget(e, ino, &ni))) {

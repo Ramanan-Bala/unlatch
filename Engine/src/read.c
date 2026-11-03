@@ -322,4 +322,5 @@ void ue_get_stats(const ue_engine_t *e, ue_stats_t *out)
         return;
     *out = e->stats;
     out->held_inodes = e->held.count;
+    out->unmarked_writes = e->dev_ctx->unmarked_writes;
 }

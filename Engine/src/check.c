@@ -584,6 +584,8 @@ static int chk_repair(chk_t *c, uint64_t *done)
     uint64_t clusters = 0;
     int err;
 
+    if ((err = ue_mark_busy(c->e)))   // D-95
+        return err;
     if ((err = set_missing(c->vol->mftbmp_na, c->inuse, c->mftbmp, c->mftbmp_bits, c->nrec, done)) ||
         (err = set_missing(c->vol->lcnbmp_na, c->used, c->lcnbmp, c->lcnbmp_bits, c->ncl, &clusters)))
         return err;

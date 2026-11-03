@@ -494,8 +494,39 @@ static int op_rename(fsx_t *x, node_t **touched)
     return 0;
 }
 
+// No write may reach the device while the dirty mark is off (D-95).
+static int check_unmarked(fsx_t *x)
+{
+    ue_stats_t st;
+
+    ue_get_stats(x->e, &st);
+    return st.unmarked_writes ? fail(x, "%llu writes while not marked dirty", (unsigned long long)st.unmarked_writes) : 0;
+}
+
+// After a settle the image on the device is clean and complete: a second reader probes it.
+static int settle(fsx_t *x)
+{
+    file_io_t f;
+    ue_probe_t p;
+    int err = ue_settle(x->e, 0);
+
+    if (err)
+        return fail(x, "settle: %s", strerror(err));
+    if (ue_is_marked_dirty(x->e))
+        return fail(x, "still marked dirty after settle");
+    if ((err = file_io_open(&f, x->img, false)))
+        return fail(x, "open for probe: %s", strerror(err));
+    err = ue_probe(&f.io, &p);
+    file_io_close(&f);
+    if (err || p.state != UE_VOL_CLEAN)
+        return fail(x, "after settle: %s", err ? strerror(err) : p.reason);
+    return check_unmarked(x);
+}
+
 static int remount(fsx_t *x)
 {
+    if (check_unmarked(x))
+        return 1;
     int err = ue_close(x->e);
 
     file_io_close(&x->f);
@@ -532,8 +563,8 @@ static int run(fsx_t *x)
                 ue_release(x->e, n->ino);
             rc = 0;
         } else if (r < 98) {
-            snprintf(x->desc, sizeof(x->desc), "sync");
-            rc = expect(x, ue_sync(x->e), 0);
+            snprintf(x->desc, sizeof(x->desc), "sync, settle");
+            rc = expect(x, ue_sync(x->e), 0) || settle(x);
         } else {
             snprintf(x->desc, sizeof(x->desc), "remount");
             rc = remount(x) || compare_all(x, x->root);
@@ -574,6 +605,8 @@ int fsx_main(const char *img, uint64_t seed, unsigned long ops, bool verbose)
         rc = compare_all(&x, x.root);
     }
     snprintf(x.desc, sizeof(x.desc), "close");
+    if (!rc)
+        rc = check_unmarked(&x);
     err = ue_close(x.e);
     file_io_close(&x.f);
     if (!rc && err)

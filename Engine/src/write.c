@@ -229,6 +229,8 @@ int ue_delete_ghost(ue_engine_t *e, ue_held_t *h)
 
     if (!h->ghost)
         return 0;
+    if ((err = ue_mark_busy(e)))
+        return err;
     if ((err = tmp_name(e, UE_GHOST_PREFIX, h->ghost_id, &g, &glen)))
         return err;
     err = unlink_name(e, h->ghost_dir, g, glen);
@@ -296,6 +298,8 @@ static int sweep_one(ue_engine_t *e, const char *name)
     int len, rlen, err;
     u64 mref;
 
+    if ((err = ue_mark_busy(e)))
+        return err;
     if ((err = ue_to_ucs(name, &u, &len)))
         return err;
     if ((err = open_dir(e, UE_ROOT_INO, &root)))
@@ -399,8 +403,8 @@ int ue_write(ue_engine_t *e, ue_ino_t ino, uint64_t off, const void *buf, size_t
     if (!e || (!buf && len) || !done)
         return EINVAL;
     *done = 0;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if (off > (uint64_t)INT64_MAX - len)
         return EFBIG;
     if ((err = ue_iget(e, ino, &ni)))
@@ -454,8 +458,8 @@ int ue_create(ue_engine_t *e, ue_ino_t dir, const char *name, uint32_t type, uin
 
     if (!e || !out)
         return EINVAL;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if (type != UE_T_REG && type != UE_T_DIR)
         return type == UE_T_LNK ? EOPNOTSUPP : EINVAL;   // symlinks: Step 16
     if ((err = check_new_name(e, name, &u, &len)))
@@ -618,8 +622,8 @@ int ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *targe
 
     if (!e || !out || !target || !*target)
         return EINVAL;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if (strlen(target) >= PATH_MAX)
         return ENAMETOOLONG;
     if ((err = check_new_name(e, name, &u, &len)))
@@ -696,8 +700,8 @@ int ue_link(ue_engine_t *e, ue_ino_t ino, ue_ino_t newdir, const char *newname, 
 
     if (!e || !out)
         return EINVAL;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if ((err = check_new_name(e, newname, &u, &len)))
         return err;
     if ((err = ue_iget(e, ino, &ni))) {
@@ -739,8 +743,8 @@ int ue_remove(ue_engine_t *e, ue_ino_t dir, const char *name, bool is_dir)
 
     if (!e)
         return EINVAL;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if ((err = ue_to_ucs(name, &u, &len)))
         return err;
     if (ue_hidden_entry(0, UINT64_MAX, name)) {
@@ -837,8 +841,8 @@ int ue_rename(ue_engine_t *e, ue_ino_t odir, const char *oname, ue_ino_t ndir, c
 
     if (!e)
         return EINVAL;
-    if (e->readonly)
-        return EROFS;
+    if ((err = ue_mark_busy(e)))       // D-95
+        return err;
     if ((err = ue_to_ucs(oname, &ou, &olen)))
         return err;
     if (ue_hidden_entry(0, UINT64_MAX, oname)) {
@@ -948,8 +952,8 @@ int ue_setattr(ue_engine_t *e, ue_ino_t ino, uint32_t mask, const ue_attr_t *in,
 
     if (!e || (!in && mask))
         return EINVAL;
-    if (e->readonly && mask)
-        return EROFS;
+    if (mask && (err = ue_mark_busy(e)))   // D-95
+        return err;
     if ((err = ue_iget(e, ino, &ni)))
         return err;
     if (mask && ni->mft_no < FILE_first_user && ni->mft_no != FILE_root) {

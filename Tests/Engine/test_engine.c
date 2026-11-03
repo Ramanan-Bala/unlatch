@@ -558,10 +558,24 @@ static int wopen(wvol_t *w, const char *base, const char *name)
     return 0;
 }
 
+// Every write test: nothing reached the device while the dirty mark was off (D-95).
+static int unmarked_writes(const wvol_t *w)
+{
+    ue_stats_t st;
+
+    ue_get_stats(w->e, &st);
+    if (st.unmarked_writes)
+        fprintf(stderr, "  %s: %llu writes while not marked dirty\n", w->path, (unsigned long long)st.unmarked_writes);
+    return st.unmarked_writes ? EIO : 0;
+}
+
 static int wreopen(wvol_t *w, bool rw)
 {
+    int uerr = unmarked_writes(w);
     int err = ue_close(w->e);
 
+    if (!err)
+        err = uerr;
     file_io_close(&w->f);
     if (err)
         return err;
@@ -574,10 +588,11 @@ static int wreopen(wvol_t *w, bool rw)
 static int wclose(wvol_t *w)
 {
     ue_probe_t p;
+    int uerr = unmarked_writes(w);
     int err = ue_close(w->e);
 
     file_io_close(&w->f);
-    if (err)
+    if (err || (err = uerr))
         return err;
     if ((err = probe_file(w->path, &p)))
         return err;
@@ -1796,6 +1811,71 @@ static void test_check_cut_copy(void)
     free(d.mem);
 }
 
+// D-95: the mark is on the disk only while the volume is being changed. Opening writes
+// nothing; the first change sets it; ue_settle clears it once the volume has been idle,
+// leaving a complete image; the next change sets it again.
+static void test_settle(void)
+{
+    wvol_t w;
+    ue_attr_t a;
+    ue_probe_t p;
+    uint32_t saved = wflags;
+
+    wflags = UE_OPEN_CACHE;
+    int err = wopen(&w, "clean", "settle");
+    wflags = saved;
+    CHECK(err == 0, "open: %s", strerror(err));
+    WCHECK(!ue_is_marked_dirty(w.e) && probe_file(w.path, &p) == 0 && p.state == UE_VOL_CLEAN,
+           "marked before any change: %s", ue_vol_state_name(p.state));
+    WCHECK(ue_settle(w.e, 0) == 0, "settle with nothing to do");
+    ue_ino_t root = root_of(w.e);
+    for (int round = 0; round < 3; round++) {
+        char name[32];
+        snprintf(name, sizeof(name), "s%d", round);
+        WCHECK(ue_create(w.e, root, name, UE_T_REG, 0644, &a) == 0, "create %s", name);
+        WCHECK(write_gen(w.e, a.ino, 0, 50000, (uint64_t)round) == 0, "write %s", name);
+        ue_release(w.e, a.ino);
+        WCHECK(ue_is_marked_dirty(w.e) && probe_file(w.path, &p) == 0 && p.state == UE_VOL_DIRTY,
+               "round %d: not marked while changing: %s", round, ue_vol_state_name(p.state));
+        WCHECK(ue_settle(w.e, 60000) == EAGAIN, "settled before idle");
+        WCHECK(ue_settle(w.e, 0) == 0, "settle");
+        WCHECK(!ue_is_marked_dirty(w.e) && probe_file(w.path, &p) == 0 && p.state == UE_VOL_CLEAN,
+               "round %d: still marked after settle: %s", round, ue_vol_state_name(p.state));
+        // As if unplugged now: the image alone has every file, and checks clean.
+        ue_check_result_t r;
+        check_seen_t seen;
+        WCHECK(check_path(w.path, 0, &r, &seen) == 0 && r.problems == 0, "round %d: %llu problems after settle", round,
+               (unsigned long long)r.problems);
+        file_io_t f2;
+        ue_engine_t *e2;
+        WCHECK(file_io_open(&f2, w.path, false) == 0 && ue_open(&f2.io, UE_OPEN_RDONLY, &e2, NULL) == 0, "second reader");
+        for (int i = 0; i <= round && !err; i++) {
+            snprintf(name, sizeof(name), "s%d", i);
+            err = ue_lookup(e2, root_of(e2), name, &a);
+            if (!err)
+                err = check_gen(e2, a.ino, 0, 50000, (uint64_t)i);
+        }
+        ue_close(e2);
+        file_io_close(&f2);
+        WCHECK(err == 0, "round %d: second reader: %s", round, strerror(err));
+    }
+    // A volume dirty at open keeps its mark: settle leaves it, unless UE_OPEN_CLEAR_DIRTY.
+    CHECK(wclose(&w) == 0, "close");
+    err = wopen(&w, "dirty", "settle-dirty");
+    CHECK(err == 0, "open dirty: %s", strerror(err));
+    WCHECK(ue_settle(w.e, 0) == 0 && ue_is_marked_dirty(w.e), "a dirty volume lost its mark");
+    ue_close(w.e);
+    file_io_close(&w.f);
+    unlink(w.path);
+    wflags = UE_OPEN_CLEAR_DIRTY;
+    err = wopen(&w, "dirty", "settle-clear");
+    wflags = saved;
+    CHECK(err == 0, "open with CLEAR_DIRTY: %s", strerror(err));
+    WCHECK(ue_settle(w.e, 0) == 0 && !ue_is_marked_dirty(w.e) && probe_file(w.path, &p) == 0 &&
+           p.state == UE_VOL_CLEAN, "CLEAR_DIRTY: not cleared by settle: %s", ue_vol_state_name(p.state));
+    CHECK(wclose(&w) == 0, "close");
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "readloop") == 0) {
@@ -1862,6 +1942,7 @@ int main(int argc, char **argv)
     RUN(test_cache_model);
     RUN(test_cache_engine);
     RUN(test_dirty_mark);
+    RUN(test_settle);
     for (int pass = 0; pass < 2; pass++) {
         // Second pass: the same write tests with the page cache on (D-62).
         wflags = pass ? UE_OPEN_CACHE : 0;

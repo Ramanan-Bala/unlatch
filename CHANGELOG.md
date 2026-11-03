@@ -5,6 +5,8 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 ## [Unreleased]
 
 ### Changed
+- **A disk pulled out while idle no longer needs checking.** Unlatch now marks a disk as "in use" only while it is writing to it, and clears the mark about two seconds after the last change, once everything is on the disk. Pulling a disk out mid-copy still marks it.
+- **A disk that needs checking is checked automatically.** When it is plugged in, Unlatch checks it first; if nothing is wrong, it clears the mark and mounts the disk read-write without asking. You are asked only when the check finds something.
 - **Unlatch asks what to do when a disk needs checking.** When a disk marked as needing a check is mounted, it comes up read-only and Unlatch asks: **Check Disk and Enable Read-Write** (checks it, repairs what is safe, and mounts it read-write when nothing is left; otherwise it stays read-only and Unlatch says what was found), or **Enable Read-Write Without Checking** (repairs nothing; the mark is cleared when you eject it). It asks once per plug-in; **Enable Read-Write…** in the disk's ⋯ menu asks again. This replaces **Mount Read-Write Anyway** and **Mark as Checked** in the menu, and `unlatch mount --dirty-rw` is gone: writing to a disk that stays marked is no longer offered. `unlatch mount --mark-checked` and `unlatch check --repair` remain.
 
 ## [1.0.0-beta.11] - 2026-11-02
