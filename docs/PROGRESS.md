@@ -979,10 +979,11 @@ Cost: `UNLATCH_BACKEND=kext Bench/baselines.sh --runs 3 unlatch-file`, before an
 UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh     # test_cut_order: 0 broken
 Scripts/fsx-soak.sh --seeds 300               # 300 of 300
 Scripts/test-golden.sh                        # 609 checks, 0 failed
+Tests/Fuse/interrupt.sh kill                  # with the app quit: passed, check disk 0 found
 xcodebuild -scheme Unlatch build
 ```
 
-Not verified: `Tests/Fuse/interrupt.sh kill`. The installed app auto-mounts the attached test image before the script can, so the script's own mount fails, and the script then prints "passed" anyway (carry-over). It needs the app quit or auto-mount off while it runs.
+`Tests/Fuse/interrupt.sh kill`, run with the app quit (otherwise it auto-mounts the test image first and the script's own mount fails, yet the script still prints "passed": carry-over): SIGKILL mid-copy, probe dirty, `ntfsfix -n` ok, read-only remount with 2,728 files of the copy, Check Disk 0 found and mark cleared, writing afterwards ok, clean after unmount: passed.
 
 ## Carry-overs
 
