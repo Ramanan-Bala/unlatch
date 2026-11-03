@@ -4,7 +4,10 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.13] - 2026-11-03
+
 ### Changed
+- **A disk pulled out mid-copy no longer ends up with folders listing files that were never written.** Unlatch now writes each new file's record before the folder entry that points at it, so a cut-off leaves at worst a file no folder lists yet. Writing many small files is about 16% slower. README: "If a disk is unplugged while writing".
 - **Check Disk repairs what a disk pulled out mid-copy most often leaves:** a folder entry that points at a file that was never written ("the entry points at record N, which is not in use"). Unlatch removes such names, as Windows' chkdsk does, instead of sending you to Windows; the file itself was already lost, and no other file is touched. **Check Disk and Enable Read-Write** and `unlatch check --repair` now fix it.
 
 ## [1.0.0-beta.12] - 2026-11-03

@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 #ifndef UNLATCH_VERSION
-#define UNLATCH_VERSION "1.0.0-beta.12"
+#define UNLATCH_VERSION "1.0.0-beta.13"
 #endif
 
 static const char *state_json(ue_vol_state_t s)
