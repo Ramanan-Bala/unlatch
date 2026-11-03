@@ -171,7 +171,8 @@ for run in $(seq 1 "$runs"); do
     printf 'locked' > "$mnt/locked.txt"; chflags uchg "$mnt/locked.txt"
     [ "$(stat -f %Sp "$mnt/locked.txt")" = "-r--r--r--" ] || die "uchg did not set read-only"
     chmod u+w "$mnt/locked.txt"; printf '!' >> "$mnt/locked.txt" || die "chmod u+w"
-    chmod a-w "$mnt/locked.txt"; rm "$mnt/locked.txt" || die "rm of a read-only file"; ok
+    chmod a-w "$mnt/locked.txt"; rm -f "$mnt/locked.txt" < /dev/null || die "rm of a read-only file"
+    [ ! -e "$mnt/locked.txt" ] || die "read-only file still there after rm"; ok
     say "xattrs, no ._ files"
     xattr -w com.example.note "a note" "$mnt/t.txt"
     xattr -w com.apple.metadata:_kMDItemUserTags tagdata "$mnt/t.txt"
