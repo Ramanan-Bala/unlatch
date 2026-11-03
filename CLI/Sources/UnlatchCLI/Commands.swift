@@ -140,6 +140,11 @@ struct MountCmd: AsyncParsableCommand {
         }
         let r: MountService.Result
         do { r = try await s.mount(d.bsdName, readOnly: readOnly, markChecked: markChecked) } catch {
+            if case MountError.daemonFailed(let why) = error, why.contains("corrupt") {
+                // Often only $MFTMirr behind $MFT after a cut-off write, which Check Disk repairs (D-98).
+                FileHandle.standardError.write(Data(
+                    "unlatch: to check it and repair what is safe: unlatch check --repair \(d.bsdName)\n".utf8))
+            }
             throw fail(error.localizedDescription, Exit.of(error))
         }
         let forced = r.readOnly && !readOnly
@@ -240,9 +245,13 @@ struct Check: AsyncParsableCommand {
         abstract: "Check a volume for damage (Check Disk), and repair what is safe to repair.",
         discussion: """
         The volume is unmounted first and mounted again afterwards. The check reads only. --repair sets the \
-        bitmap bits of records and clusters in use (nothing is overwritten) and removes folder entries that point \
-        at no file (as a disk unplugged mid-copy leaves them) when that is all that is wrong, and clears the \
-        volume's dirty mark when nothing is left. Anything else needs Windows' chkdsk.
+        bitmap bits of records and clusters in use (nothing is overwritten), removes folder entries that point \
+        at no file and puts files no folder lists back in their folder (or in /found.000), as a disk unplugged \
+        mid-copy leaves them, when that is all that is wrong, and clears the volume's dirty mark when nothing is \
+        left. A volume that cannot be opened because the file table's backup copy ($MFTMirr) differs is first \
+        brought up to date from the file table, then checked. Files whose security descriptor is damaged get the \
+        one Unlatch gives new files, and space marked used by nothing is freed once nothing else is left. \
+        Anything else needs Windows' chkdsk.
         """)
     @Argument(help: "The volume.") var disk: String
     @Flag(help: "Repair what is safe to repair, and clear the dirty mark when nothing is left.") var repair = false
@@ -277,14 +286,21 @@ struct Check: AsyncParsableCommand {
             if r.problems.count > shown { print("    ... and \(r.problems.count - shown) more (--json lists them all)") }
         }
         if r.repairRan {
-            let removed = r.entriesRemoved ?? 0
+            let removed = r.entriesRemoved ?? 0, relinked = r.orphansRelinked ?? 0, moved = r.orphansFound ?? 0
             print("Repaired \(r.repaired) bitmap bit\(r.repaired == 1 ? "" : "s"); removed \(removed) folder "
-                  + "entr\(removed == 1 ? "y" : "ies").")
+                  + "entr\(removed == 1 ? "y" : "ies"); put back \(relinked) file\(relinked == 1 ? "" : "s") no folder listed"
+                  + (moved > 0 ? " (\(moved) in /found.000)" : "") + (r.mirrorRepaired == true ? "; updated $MFTMirr" : "")
+                  + ((r.securityReplaced ?? 0) > 0 ? "; replaced \(r.securityReplaced ?? 0) security descriptor(s)" : "")
+                  + ".")
+            if (r.recordsFreed ?? 0) + (r.clustersFreed ?? 0) > 0 {
+                print("Freed \(r.recordsFreed ?? 0) records and \(r.clustersFreed ?? 0) clusters marked used by nothing.")
+            }
         }
         print(r.advice)
         if r.verdict == .repairable && !repair { print("To repair: unlatch check --repair \(d.bsdName)") }
-        if r.lostClusters > 0 || r.lostRecords > 0 {
-            print("(\(r.lostClusters) clusters and \(r.lostRecords) records are marked used but belong to nothing: space only.)")
+        if (r.lostClusters > 0 || r.lostRecords > 0) && !r.repairRan {
+            print("(\(r.lostClusters) clusters and \(r.lostRecords) records are marked used but belong to nothing: space only. "
+                  + "unlatch check --repair \(d.bsdName) frees them.)")
         }
         if left != .success { throw CLIExit(code: left) }
     }

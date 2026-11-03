@@ -250,6 +250,38 @@ func deadDaemonMountIsReaped() async throws {
     #expect(!found.advice.contains("marks space"))
     let fixed = try dangling(remaining: 0, removed: 1, ran: true)
     #expect(fixed.verdict == .repaired && fixed.advice.contains("1 folder entry") && !fixed.advice.contains("space in use"))
+
+    // An orphan and $MFTMirr out of step (D-98, D-99), as a cut-off write leaves them: repairable
+    // without Windows, and the repair says what it did.
+    func cutOff(remaining: UInt64, ran: Bool) throws -> CheckReport {
+        let j = """
+            {"schema": 1, "problems": [{"kind": "mft_mirror", "repairable": true, "record": 3, "path": "/$MFTMirr", \
+            "detail": "x"}, {"kind": "orphan", "repairable": true, "record": 300, "path": "/a/b.txt", "detail": "y"}], \
+            "state": "corrupt", "records": 1, "recordsInUse": 1, "directories": 1, "entries": 1, "clusters": 1, \
+            "clustersInUse": 1, "lostRecords": 0, "lostClusters": 0, "found": 2, "repairable": 2, "repaired": 0, \
+            "remaining": \(remaining), "entriesRemoved": 0, "orphansRelinked": \(ran ? 1 : 0), \
+            "orphansFound": \(ran ? 1 : 0), "mirrorRepaired": \(ran), "repairRan": \(ran), "dirtyCleared": \(ran), \
+            "exitCode": 0}
+            """
+        return try JSONDecoder().decode(CheckReport.self, from: Data(j.utf8))
+    }
+    let cut = try cutOff(remaining: 2, ran: false)
+    #expect(cut.verdict == .repairable && !cut.advice.contains("chkdsk"))
+    #expect(cut.advice.contains("no folder lists") && cut.advice.contains("backup copy of the file table"))
+    let mended = try cutOff(remaining: 0, ran: true)
+    #expect(mended.verdict == .repaired && mended.mirrorRepaired == true && mended.orphansFound == 1)
+    #expect(mended.advice.contains("brought up to date") && mended.advice.contains("found.000"))
+    #expect(try report(found: 0, repairable: 0, remaining: 0, ran: false).orphansRelinked == nil)
+
+    // Space marked used by nothing, freed by the repair (D-102): still clean, and says so.
+    let freedJSON = """
+        {"schema": 1, "problems": [], "state": "dirty", "records": 1, "recordsInUse": 1, "directories": 1, \
+        "entries": 1, "clusters": 1, "clustersInUse": 1, "lostRecords": 7, "lostClusters": 5, "found": 0, \
+        "repairable": 0, "repaired": 0, "remaining": 0, "recordsFreed": 7, "clustersFreed": 5, "securityReplaced": 0, \
+        "repairRan": true, "dirtyCleared": true, "exitCode": 1}
+        """
+    let freed = try JSONDecoder().decode(CheckReport.self, from: Data(freedJSON.utf8))
+    #expect(freed.verdict == .clean && freed.advice.contains("freed") && freed.recordsFreed == 7)
 }
 
 @Test(.enabled(if: integration), .timeLimit(.minutes(2)))

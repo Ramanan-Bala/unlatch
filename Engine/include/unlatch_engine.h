@@ -179,11 +179,16 @@ void ue_get_cache_stats(const ue_engine_t *e, ue_cache_stats_t *out);
 // the directory and entry) when one can be found, "" otherwise.
 //
 // UE_CHECK_REPAIR (needs io->writable) does the safe repairs: it sets the bitmap bits of
-// records and clusters in use, so at worst space is lost and nothing is overwritten, and it
+// records and clusters in use, so at worst space is lost and nothing is overwritten; it
 // removes folder entries that lead to no file (their record is free, has another sequence
-// number, or has no name in that folder; the record is not touched, D-96). It runs only when
-// every problem found is of those kinds; anything else is reported and nothing is written. Then the volume is checked again, and its dirty mark (D-86) is cleared only when
+// number, or has no name in that folder; the record is not touched, D-96); and it puts back
+// files no folder lists, in the folder their name gives or else in /found.NNN (D-99). It runs
+// only when every problem found is of those kinds; anything else is reported and nothing is
+// written. Then the volume is checked again, and its dirty mark (D-86) is cleared only when
 // that check finds nothing. A volume with nothing found that is marked dirty is only unmarked.
+// A volume libntfs-3g refuses because $MFTMirr differs from $MFT is first repaired by copying
+// $MFT's first records over $MFTMirr, when every one of them is whole (D-98), and then checked
+// and repaired as above in the same call.
 // Hibernated and unclean-journal volumes hold Windows' unfinished changes: REPAIR returns
 // EPERM for them. Returns 0 when the check ran (problems or not), or an errno: EINVAL for a
 // volume that is not NTFS, EIO for one too damaged to open (other than UE_CHK_MFT_MIRROR,
@@ -199,11 +204,16 @@ typedef enum {
     UE_CHK_ENTRY_FREE_RECORD,         // a directory entry points at a record not in use (repairable
                                       // unless past the end of the MFT or at an extension record)
     UE_CHK_ENTRY_WRONG_SEQ,           // a directory entry's sequence number does not match (repairable)
-    UE_CHK_ORPHAN,                    // a named file that no directory lists
-    UE_CHK_MFT_MIRROR,                // $MFTMirr does not match $MFT: libntfs-3g cannot open
-                                      // the volume at all, so this is the only problem reported
+    UE_CHK_ORPHAN,                    // a named file that no directory lists (repairable when its
+                                      // record is whole, D-99)
+    UE_CHK_MFT_MIRROR,                // $MFTMirr does not match $MFT: libntfs-3g cannot open the
+                                      // volume, so without a repair this is the only problem
+                                      // reported (repairable when $MFT's records are whole, D-98)
     UE_CHK_ENTRY_WRONG_PARENT,        // a directory entry points at a record with no name in that
                                       // directory (repairable)
+    UE_CHK_BAD_SECURITY,              // a file's $SECURITY_DESCRIPTOR is not valid (repairable: it gets
+                                      // the descriptor Unlatch gives new files), or a security_id
+                                      // $Secure does not hold (D-102)
     UE_CHK_KINDS
 } ue_check_kind_t;
 typedef struct {
@@ -225,9 +235,14 @@ typedef struct {
     uint64_t by_kind[UE_CHK_KINDS];
     uint64_t repaired;                // bitmap bits set by the repair
     uint64_t entries_removed;         // folder entries the repair removed (a DOS+Win32 pair counts once)
+    uint64_t orphans_relinked;        // orphans the repair put back in a folder (D-99)
+    uint64_t orphans_found;           // of those, the ones put in /found.NNN under a new name
+    uint64_t records_freed, clusters_freed;   // lost bits the repair cleared (D-102)
+    uint64_t security_replaced;       // files given a new security descriptor (D-102)
     uint64_t remaining;               // problems the last check found (after any repair)
     bool repair_ran;
     bool dirty_cleared;               // the volume was marked dirty and is not any more
+    bool mirror_repaired;             // $MFTMirr was rewritten from $MFT (D-98)
 } ue_check_result_t;
 int  ue_check(const ue_io_t *io, uint32_t flags, ue_check_fn fn, void *ctx, ue_check_result_t *out);
 /// Short lowercase name of a kind: "record_unmarked", "clusters_shared", ...

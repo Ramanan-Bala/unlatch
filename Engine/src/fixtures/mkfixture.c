@@ -35,6 +35,21 @@
 //                                    a DOS entry
 //     link-entry PATH OTHER          add a folder entry PATH for OTHER's record, without a
 //                                    $FILE_NAME in the record (a reused record)
+//   Damage for D-98 and D-99:
+//     orphan PATH                    remove PATH's folder entries (a DOS+Win32 pair too) and keep
+//                                    its record, as a cut before the index write leaves a new
+//                                    file. Its folder gone: then free-record (or bump-seq) the
+//                                    folder. Its name taken: then make another file at PATH.
+//     stale-mirror N                 change record N (0-3) in $MFTMirr only (its LSN), as a cut
+//                                    between $MFT and $MFTMirr leaves it: libntfs-3g refuses
+//     tear-mft N                     break one update sequence number of record N in $MFT
+//                                    itself (raw, at mft_lcn)
+//                                    The last two are written to the image after it is unmounted.
+//   Damage for D-102:
+//     mark-record N|end              set record N's bit in $MFT's bitmap (end: two past $MFT's last
+//                                    record), marking a free record used
+//     mark-clusters LCN COUNT        set COUNT free clusters' bits in $Bitmap (lost space)
+//     break-sd PATH                  make PATH's resident $SECURITY_DESCRIPTOR invalid (revision 0)
 //   mkfixture gen SIZE SEED [OFF] write SIZE bytes of the stream, from offset OFF, to stdout
 #include "config.h"
 
@@ -506,8 +521,105 @@ static int cmd_damage(ntfs_volume *vol, const char *cmd, const char *path, const
             rc = die("close", path);
         return rc;
     }
+    if (!strcmp(cmd, "break-sd")) {
+        if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
+            return die("open", path);
+        na = ntfs_attr_open(ni, AT_SECURITY_DESCRIPTOR, AT_UNNAMED, 0);
+        u8 rev = 0;
+        rc = !na || ntfs_attr_pwrite(na, 0, 1, &rev) != 1;
+        if (na)
+            ntfs_attr_close(na);
+        ntfs_inode_mark_dirty(ni);
+        if (ntfs_inode_close(ni))
+            rc = 1;
+        return rc ? die("break sd", path) : 0;
+    }
+    if (!strcmp(cmd, "mark-record")) {
+        s64 n = !strcmp(path, "end") ? (vol->mft_na->initialized_size >> vol->mft_record_size_bits) + 2
+                                     : (s64)strtoll(path, NULL, 10);
+        if (n < 0 || n >= vol->mftbmp_na->data_size * 8)
+            return errno = EINVAL, die("mark-record", path);
+        return ntfs_bitmap_set_run(vol->mftbmp_na, n, 1) ? die("set bit", path) : 0;
+    }
+    if (!strcmp(cmd, "orphan")) {
+        if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
+            return die("open", path);
+        ntfs_inode *dir = NULL;
+        ntfs_attr_search_ctx *ctx = ntfs_attr_get_search_ctx(ni, NULL);
+        FILE_NAME_ATTR *keys[8];
+        int nkeys = 0;
+        rc = !ctx;
+        // Copies first: removing entries can move the record's attributes.
+        while (!rc && nkeys < 8 && !ntfs_attr_lookup(AT_FILE_NAME, AT_UNNAMED, 0, CASE_SENSITIVE, 0, NULL, 0, ctx)) {
+            FILE_NAME_ATTR *fn = (FILE_NAME_ATTR *)((u8 *)ctx->attr + le16_to_cpu(ctx->attr->value_offset));
+            size_t len = sizeof(*fn) + fn->file_name_length * sizeof(ntfschar);
+            if (!(keys[nkeys] = malloc(len)))
+                rc = 1;
+            else
+                memcpy(keys[nkeys++], fn, len);
+        }
+        if (ctx)
+            ntfs_attr_put_search_ctx(ctx);
+        for (int i = 0; i < nkeys; i++) {
+            if (!rc && (dir = ntfs_inode_open(vol, MREF_LE(keys[i]->parent_directory)))) {
+                size_t len = sizeof(*keys[i]) + keys[i]->file_name_length * sizeof(ntfschar);
+                rc = ntfs_index_remove(dir, ni, keys[i], (int)len) != 0;
+                rc |= ntfs_inode_close(dir) != 0;
+            } else
+                rc = 1;
+            free(keys[i]);
+        }
+        if (ntfs_inode_close(ni))
+            rc = 1;
+        return rc ? die("orphan", path) : 0;
+    }
     fprintf(stderr, "mkfixture: bad damage command %s\n", cmd);
     return 1;
+}
+
+// stale-mirror and tear-mft, kept for after the unmount (which writes records 0-3 to both).
+static struct {
+    bool tear;
+    unsigned rec;
+} raw_damage[8];
+static int nraw;
+
+static int apply_raw(const char *img)
+{
+    FILE *f = nraw ? fopen(img, "r+b") : NULL;
+    unsigned char bs[512], *rec;
+    int rc = 0;
+
+    if (!nraw)
+        return 0;
+    if (!f || fread(bs, 1, sizeof(bs), f) != sizeof(bs))
+        return die("open raw", img);
+    uint64_t cluster = (uint64_t)(bs[11] | bs[12] << 8) * bs[13];
+    int8_t cpr = (int8_t)bs[0x40];
+    uint64_t rs = cpr > 0 ? (uint64_t)cpr * cluster : 1ull << -cpr, mft = 0, mirr = 0;
+    for (int k = 7; k >= 0; k--) {
+        mft = mft << 8 | bs[0x30 + k];
+        mirr = mirr << 8 | bs[0x38 + k];
+    }
+    if (!(rec = malloc(rs)))
+        return fclose(f), die("alloc", img);
+    for (int i = 0; i < nraw && !rc; i++) {
+        uint64_t off = (raw_damage[i].tear ? mft : mirr) * cluster + raw_damage[i].rec * rs;
+        if (fseeko(f, (off_t)off, SEEK_SET) || fread(rec, 1, rs, f) != rs) {
+            rc = die("read raw", img);
+            break;
+        }
+        if (raw_damage[i].tear)
+            rec[NTFS_BLOCK_SIZE - 2] ^= 0xFF;   // the first sector's copy of the update sequence number
+        else
+            rec[8] ^= 0x5A;           // the LSN: still a whole record, not the same one
+        if (fseeko(f, (off_t)off, SEEK_SET) || fwrite(rec, 1, rs, f) != rs)
+            rc = die("write raw", img);
+    }
+    free(rec);
+    if (fclose(f) && !rc)
+        rc = die("close raw", img);
+    return rc;
 }
 
 static int run(ntfs_volume *vol, char *line)
@@ -543,10 +655,21 @@ static int run(ntfs_volume *vol, char *line)
     if ((!strcmp(cmd, "share-clusters") || !strcmp(cmd, "dos-name") || !strcmp(cmd, "link-entry")) &&
         sscanf(line, "%*s %*s %4095s", target) == 1)
         return cmd_damage(vol, cmd, path, target);
+    if ((!strcmp(cmd, "stale-mirror") || !strcmp(cmd, "tear-mft")) && nraw < 8 && sscanf(path, "%llu", &a) == 1 &&
+        a < 4) {
+        raw_damage[nraw].tear = !strcmp(cmd, "tear-mft");
+        raw_damage[nraw++].rec = (unsigned)a;
+        return 0;
+    }
     if (!strcmp(cmd, "clear-record-bit") || !strcmp(cmd, "clear-cluster-bits") || !strcmp(cmd, "run-past") ||
         !strcmp(cmd, "bump-seq") || !strcmp(cmd, "tear-record") || !strcmp(cmd, "zero-index") ||
-        !strcmp(cmd, "free-record"))
+        !strcmp(cmd, "free-record") || !strcmp(cmd, "orphan") || !strcmp(cmd, "break-sd") ||
+        !strcmp(cmd, "mark-record"))
         return cmd_damage(vol, cmd, path, NULL);
+    if (!strcmp(cmd, "mark-clusters") && sscanf(line, "%*s %*s %llu", &b) == 1) {
+        a = strtoull(path, NULL, 10);
+        return ntfs_bitmap_set_run(vol->lcnbmp_na, (s64)a, (s64)b) ? die("set bits", path) : 0;
+    }
     if (!strcmp(cmd, "reparse") && sscanf(line, "%*s %*s %31s %4095s", word, target) == 2)
         return cmd_reparse(vol, path, word, target);
     fprintf(stderr, "mkfixture: bad line: %s", line);
@@ -582,5 +705,5 @@ int main(int argc, char **argv)
         rc = run(vol, line);
     if (ntfs_umount(vol, FALSE) && !rc)
         rc = die("umount", argv[1]);
-    return rc;
+    return rc ? rc : apply_raw(argv[1]);
 }
