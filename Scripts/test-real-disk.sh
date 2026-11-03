@@ -199,8 +199,10 @@ PY
     fi
     rm -r "$m/unlatch-test/small"; after=$(df -k "$m" | awk 'NR==2 {print $4}')
     unmount_vol
-    # Space back within 2 MiB (directory indexes may keep a few clusters).
-    if [ $((before - after)) -le 2048 ]; then result small-files PASS "$n files checked after a remount, deleted, space back"
+    # Space back within 2 MiB (directory indexes may keep a few clusters), plus 1 KiB per file and
+    # folder created: NTFS grows $MFT by one record each and never shrinks it. On a freshly
+    # formatted stick that is ~10 MiB the first time (2026-11-03: 1,496 -> 11,166 records).
+    if [ $((before - after)) -le $((2048 + n + 100)) ]; then result small-files PASS "$n files checked after a remount, deleted, space back"
     else result small-files FAIL "$(( (before - after) / 1024 )) MiB not freed after rm -r"; fi
 }
 

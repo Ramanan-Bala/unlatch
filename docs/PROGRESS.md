@@ -952,6 +952,14 @@ Tests/Fuse/interrupt.sh kill        # dirty after the kill, read-only remount, c
 
 No regression image yet for the `$MFT` extent case: it needs a volume filled until `$MFT` fragments (~1 GB here); a smaller fixture that forces it is a carry-over.
 
+### Real-disk run on beta.12 (SanDisk Cruzer Blade 16 GB) — 2026-11-03
+
+`Scripts/test-real-disk.sh SANDISK` (no `--cut`, `--fill`, `--bench`): doctor, rw-suite on kext and FSKit, big-file (4.5 GiB at 4 MiB/s, same after a remount), snapshot (ntfsfix -n ok, 894 files compared), replug (auto-mounted by the app), final: PASS. 1 h 43 min, of which about an hour was rw-suite waiting on `rm`'s hidden question (fixed, 697defa).
+
+- small-files FAILED "8 MiB not freed after rm -r": not lost space. The stick had been emptied, and 10,100 new records grew `$MFT` from 1,496 to 11,166 records (~9.4 MiB), which NTFS never shrinks; Check Disk afterwards: 20 records in use, 0 lost clusters, 0 problems. The step now allows 1 KiB per file and folder created.
+- sleep: PASS, but pmset showed no sleep during the step; the Mac probably did not sleep. Not counted.
+- kill, pull: skipped (need `--cut`).
+
 ## Carry-overs
 
 - **Automatic check runs three passes (D-95, 2026-11-03):** the app checks read-only, then, when nothing was found, `check --repair`, which checks read-only again and once more read-write before clearing the mark. On a large disk that triples the wait. A check flag that clears the mark when the first pass finds nothing would make it one pass plus the read-write one.
