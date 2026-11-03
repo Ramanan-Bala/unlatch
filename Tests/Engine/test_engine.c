@@ -1906,6 +1906,44 @@ static void test_check_combined(void)
     unlink(path);
 }
 
+// D-102: space marked used that nothing uses (a free record, one past $MFT's end, four
+// clusters) is freed by a repair, which runs for that alone; a damaged security descriptor
+// is replaced. Windows' chkdsk reports both.
+static void test_check_lost_security(void)
+{
+    char path[2048];
+    ue_check_result_t r;
+    check_seen_t seen;
+    ue_probe_t p;
+
+    CHECK(fixture_copy("chk-lost", path, sizeof(path)) == 0, "copy");
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0 && r.lost_records == 2 && r.lost_clusters == 4,
+          "lost: %llu problems, lost %llu/%llu", (unsigned long long)r.problems, (unsigned long long)r.lost_records,
+          (unsigned long long)r.lost_clusters);
+    int err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.repair_ran && r.records_freed == 2 && r.clusters_freed == 4 && r.remaining == 0,
+          "lost repair: %s, freed %llu/%llu, remaining %llu", strerror(err), (unsigned long long)r.records_freed,
+          (unsigned long long)r.clusters_freed, (unsigned long long)r.remaining);
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0 && r.lost_records == 0 && r.lost_clusters == 0,
+          "after: lost %llu/%llu", (unsigned long long)r.lost_records, (unsigned long long)r.lost_clusters);
+    CHECK(image_has_gen(path, "/d/a.bin", 20000, 1) == 0 && image_has_gen(path, "/d/c.bin", 20000, 3) == 0,
+          "files after freeing");
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CLEAN, "after repair: %s", ue_vol_state_name(p.state));
+    unlink(path);
+
+    CHECK(fixture_copy("chk-sd", path, sizeof(path)) == 0, "copy");
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 1 && r.repairable == 1 &&
+          r.by_kind[UE_CHK_BAD_SECURITY] == 1 && !strcmp(seen.first[UE_CHK_BAD_SECURITY].path, "/d/b.bin"),
+          "sd: %llu problems, path %s", (unsigned long long)r.problems, seen.first[UE_CHK_BAD_SECURITY].path);
+    err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.security_replaced == 1 && r.remaining == 0, "sd repair: %s, replaced %llu, remaining %llu",
+          strerror(err), (unsigned long long)r.security_replaced, (unsigned long long)r.remaining);
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    CHECK(image_has_gen(path, "/d/b.bin", 20000, 2) == 0, "/d/b.bin after repair");
+    unlink(path);
+}
+
 // A copy cut off mid-way, as a kill or a pull leaves it (Tests/Fuse/interrupt.sh): the
 // engine writes through its page cache to a device that stops taking writes after `limit`
 // of them, at many cut points. The check must run on every result, must find damage on some,
@@ -2115,7 +2153,7 @@ static void test_cut_order(void)
                                            UE_CHK_BAD_RECORD, UE_CHK_BAD_RUNLIST, UE_CHK_CLUSTERS_SHARED };
     uint64_t kinds[UE_CHK_KINDS] = { 0 };
     int cuts = 0, mirror = 0, broken = 0, repaired = 0;
-    uint64_t relinked = 0, to_found = 0;
+    uint64_t relinked = 0, to_found = 0, freed_rec = 0, freed_cl = 0;
     uint8_t *pre = malloc(d.size);    // the cut image, before its repair
     CHECK(pre, "alloc");
     long step = total / 400 + 1;
@@ -2139,9 +2177,13 @@ static void test_cut_order(void)
         err = ue_check(&io, UE_CHECK_REPAIR, NULL, NULL, &r);
         CHECK(err == 0 && r.remaining == 0, "cut at %ld: repair: %s, %llu left", n, strerror(err),
               (unsigned long long)r.remaining);
-        CHECK(ue_check(&io, 0, NULL, NULL, &r2) == 0 && r2.problems == 0 && r2.state == UE_VOL_CLEAN,
-              "cut at %ld: %llu problems after repair, %s", n, (unsigned long long)r2.problems,
-              ue_vol_state_name(r2.state));
+        // Nothing left that chkdsk would fix either: no space marked used by nothing (D-102).
+        CHECK(ue_check(&io, 0, NULL, NULL, &r2) == 0 && r2.problems == 0 && r2.state == UE_VOL_CLEAN &&
+                  r2.lost_records == 0 && r2.lost_clusters == 0,
+              "cut at %ld: %llu problems after repair, %s, lost %llu/%llu", n, (unsigned long long)r2.problems,
+              ue_vol_state_name(r2.state), (unsigned long long)r2.lost_records, (unsigned long long)r2.lost_clusters);
+        freed_rec += r.records_freed;
+        freed_cl += r.clusters_freed;
         relinked += r.orphans_relinked;
         to_found += r.orphans_found;
         repaired += r.repair_ran;
@@ -2161,7 +2203,9 @@ static void test_cut_order(void)
         }
     }
     printf("     %d cuts repaired by Check Disk (%d ran a repair): %llu orphans put back, %llu of them in "
-           "found.000\n", cuts, repaired, (unsigned long long)relinked, (unsigned long long)to_found);
+           "found.000; %llu records and %llu clusters marked used by nothing freed; %llu bad security\n", cuts,
+           repaired, (unsigned long long)relinked, (unsigned long long)to_found, (unsigned long long)freed_rec,
+           (unsigned long long)freed_cl, (unsigned long long)kinds[UE_CHK_BAD_SECURITY]);
     printf("     %d cuts of %ld writes: %d with entries or indexes broken, %d $MFTMirr; found: "
            "%llu free-record entries, %llu wrong-seq entries, %llu unreadable indexes, %llu bad records, "
            "%llu orphans, %llu unmarked records, %llu unmarked clusters\n",
@@ -2305,6 +2349,7 @@ int main(int argc, char **argv)
     RUN(test_check_orphans);
     RUN(test_check_mirror);
     RUN(test_check_combined);
+    RUN(test_check_lost_security);
     RUN(test_check_cut_copy);
     RUN(test_cut_order);
     RUN(test_cache_model);

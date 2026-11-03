@@ -272,6 +272,16 @@ func deadDaemonMountIsReaped() async throws {
     #expect(mended.verdict == .repaired && mended.mirrorRepaired == true && mended.orphansFound == 1)
     #expect(mended.advice.contains("brought up to date") && mended.advice.contains("found.000"))
     #expect(try report(found: 0, repairable: 0, remaining: 0, ran: false).orphansRelinked == nil)
+
+    // Space marked used by nothing, freed by the repair (D-102): still clean, and says so.
+    let freedJSON = """
+        {"schema": 1, "problems": [], "state": "dirty", "records": 1, "recordsInUse": 1, "directories": 1, \
+        "entries": 1, "clusters": 1, "clustersInUse": 1, "lostRecords": 7, "lostClusters": 5, "found": 0, \
+        "repairable": 0, "repaired": 0, "remaining": 0, "recordsFreed": 7, "clustersFreed": 5, "securityReplaced": 0, \
+        "repairRan": true, "dirtyCleared": true, "exitCode": 1}
+        """
+    let freed = try JSONDecoder().decode(CheckReport.self, from: Data(freedJSON.utf8))
+    #expect(freed.verdict == .clean && freed.advice.contains("freed") && freed.recordsFreed == 7)
 }
 
 @Test(.enabled(if: integration), .timeLimit(.minutes(2)))

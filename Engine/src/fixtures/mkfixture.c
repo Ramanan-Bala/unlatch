@@ -45,6 +45,11 @@
 //     tear-mft N                     break one update sequence number of record N in $MFT
 //                                    itself (raw, at mft_lcn)
 //                                    The last two are written to the image after it is unmounted.
+//   Damage for D-102:
+//     mark-record N|end              set record N's bit in $MFT's bitmap (end: two past $MFT's last
+//                                    record), marking a free record used
+//     mark-clusters LCN COUNT        set COUNT free clusters' bits in $Bitmap (lost space)
+//     break-sd PATH                  make PATH's resident $SECURITY_DESCRIPTOR invalid (revision 0)
 //   mkfixture gen SIZE SEED [OFF] write SIZE bytes of the stream, from offset OFF, to stdout
 #include "config.h"
 
@@ -516,6 +521,26 @@ static int cmd_damage(ntfs_volume *vol, const char *cmd, const char *path, const
             rc = die("close", path);
         return rc;
     }
+    if (!strcmp(cmd, "break-sd")) {
+        if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
+            return die("open", path);
+        na = ntfs_attr_open(ni, AT_SECURITY_DESCRIPTOR, AT_UNNAMED, 0);
+        u8 rev = 0;
+        rc = !na || ntfs_attr_pwrite(na, 0, 1, &rev) != 1;
+        if (na)
+            ntfs_attr_close(na);
+        ntfs_inode_mark_dirty(ni);
+        if (ntfs_inode_close(ni))
+            rc = 1;
+        return rc ? die("break sd", path) : 0;
+    }
+    if (!strcmp(cmd, "mark-record")) {
+        s64 n = !strcmp(path, "end") ? (vol->mft_na->initialized_size >> vol->mft_record_size_bits) + 2
+                                     : (s64)strtoll(path, NULL, 10);
+        if (n < 0 || n >= vol->mftbmp_na->data_size * 8)
+            return errno = EINVAL, die("mark-record", path);
+        return ntfs_bitmap_set_run(vol->mftbmp_na, n, 1) ? die("set bit", path) : 0;
+    }
     if (!strcmp(cmd, "orphan")) {
         if (!(ni = ntfs_pathname_to_inode(vol, NULL, path)))
             return die("open", path);
@@ -638,8 +663,13 @@ static int run(ntfs_volume *vol, char *line)
     }
     if (!strcmp(cmd, "clear-record-bit") || !strcmp(cmd, "clear-cluster-bits") || !strcmp(cmd, "run-past") ||
         !strcmp(cmd, "bump-seq") || !strcmp(cmd, "tear-record") || !strcmp(cmd, "zero-index") ||
-        !strcmp(cmd, "free-record") || !strcmp(cmd, "orphan"))
+        !strcmp(cmd, "free-record") || !strcmp(cmd, "orphan") || !strcmp(cmd, "break-sd") ||
+        !strcmp(cmd, "mark-record"))
         return cmd_damage(vol, cmd, path, NULL);
+    if (!strcmp(cmd, "mark-clusters") && sscanf(line, "%*s %*s %llu", &b) == 1) {
+        a = strtoull(path, NULL, 10);
+        return ntfs_bitmap_set_run(vol->lcnbmp_na, (s64)a, (s64)b) ? die("set bits", path) : 0;
+    }
     if (!strcmp(cmd, "reparse") && sscanf(line, "%*s %*s %31s %4095s", word, target) == 2)
         return cmd_reparse(vol, path, word, target);
     fprintf(stderr, "mkfixture: bad line: %s", line);

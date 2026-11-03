@@ -1032,6 +1032,26 @@ xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
 
 Not verified: the app's alerts (not clicked through), `UNLATCH_INTEGRATION=1` Swift tests, a real disk, and Windows chkdsk on a repaired image (another session runs that). A hibernated volume whose mirror differs would get the mirror copied before the hibernation check refuses the rest (D-98).
 
+### Follow-up: Check Disk frees lost space and replaces bad security descriptors (D-102) — done 2026-11-03
+
+Windows chkdsk on D-101's repaired images (branch `claude/heuristic-blackwell-44ea97`) still corrected two things Check Disk left: free space marked as allocated in either bitmap (60 cuts Check Disk called clean), and "Replacing missing or invalid security descriptor for file N" (7 cuts).
+
+- `Engine/src/check.c`: `$MFT`'s bitmap is read whole; bits past its last record count as lost. `clear_lost` frees the lost bits of both bitmaps with `UE_CHECK_REPAIR`, after every other repair and only once a check in the same read-write open finds nothing; then a last check (lost left counts as remaining, so the mark stays). `check_opened` now runs the read-write pass for lost bits alone.
+- New kind `bad_security`: `note_security` (pass 1) validates resident `$SECURITY_DESCRIPTOR`s with `ntfs_valid_descr`, marks non-resident ones for `check_security` (after the directories, read through libntfs-3g), and collects security_ids, which are looked up in `$SII`. `fix_security` removes an invalid attribute (`ntfs_attr_rm`) and adds `ntfs_sd_add_everyone`'s descriptor when there is no security_id. A missing security_id is reported only.
+- Cause of the 7: chkdsk's numbers are hex; order-9's file 0x41 is `/top-0/sub-0`, whose `$SECURITY_DESCRIPTOR` had moved to a cluster that the cut never wrote (zeros) while the record landed. Write order: handed to the sweep session (notes folder `d102-lost-and-security.md`).
+- Result counters `records_freed`, `clusters_freed`, `security_replaced` (JSON `recordsFreed`, `clustersFreed`, `securityReplaced`); `unlatch-engine check --repair` exits 1 when it freed bits. `CheckReport`, advice, `unlatch check` and docs updated. `mkfixture`: `mark-record N|end`, `mark-clusters LCN COUNT`, `break-sd PATH`; images `chk-lost`, `chk-sd`; test `test_check_lost_security`. `test_cut_order` now also asserts 0 lost after the repair.
+- On D-101's 140 cut images (`build/chkdsk/cut/`, one `check --repair` each): 139 end with 0 problems and 0 lost; 86 freed lost bits; the 7 security cuts were replaced. The one left is `copy-245` (index growth, `index_unreadable`). Per image: `d102-sweep.tsv` in the notes folder.
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh     # PASSED; test_cut_order 255/255 with 0 lost after repair (952 records, 562 clusters freed; 12 bad security replaced)
+Scripts/test-golden.sh                        # 609 checks, 0 failed; 0 lost on all 8 golden images (test_check_clean)
+Scripts/fsx-soak.sh --seeds 300               # 300 of 300
+swift test --package-path Shared && swift test --package-path CLI
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+```
+
+Not verified: Windows chkdsk on images repaired by this build (the chkdsk session re-runs it).
+
 ## Carry-overs
 
 - **interrupt.sh reports "passed" when its mount fails (2026-11-03):** `scenario` returns 1 after "FAIL: mount" and the summary still says passed. It happens when the installed app auto-mounts the attached image first.

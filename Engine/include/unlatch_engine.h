@@ -211,6 +211,9 @@ typedef enum {
                                       // reported (repairable when $MFT's records are whole, D-98)
     UE_CHK_ENTRY_WRONG_PARENT,        // a directory entry points at a record with no name in that
                                       // directory (repairable)
+    UE_CHK_BAD_SECURITY,              // a file's $SECURITY_DESCRIPTOR is not valid (repairable: it gets
+                                      // the descriptor Unlatch gives new files), or a security_id
+                                      // $Secure does not hold (D-102)
     UE_CHK_KINDS
 } ue_check_kind_t;
 typedef struct {
@@ -234,6 +237,8 @@ typedef struct {
     uint64_t entries_removed;         // folder entries the repair removed (a DOS+Win32 pair counts once)
     uint64_t orphans_relinked;        // orphans the repair put back in a folder (D-99)
     uint64_t orphans_found;           // of those, the ones put in /found.NNN under a new name
+    uint64_t records_freed, clusters_freed;   // lost bits the repair cleared (D-102)
+    uint64_t security_replaced;       // files given a new security descriptor (D-102)
     uint64_t remaining;               // problems the last check found (after any repair)
     bool repair_ran;
     bool dirty_cleared;               // the volume was marked dirty and is not any more

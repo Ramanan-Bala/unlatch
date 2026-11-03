@@ -20,6 +20,10 @@
 // back where its $FILE_NAMEs say, when every one of those folders is in use, reachable from the
 // root and has none of its names; otherwise its names are replaced by one in /found.NNN, as
 // chkdsk does. Its data is never touched.
+//
+// Space marked used that nothing uses (records past $MFT's end included) is freed by a repair
+// once the volume checks clean (D-102), and a file whose own $SECURITY_DESCRIPTOR is not a
+// valid descriptor gets the one Unlatch gives every new file.
 #include "internal.h"
 
 #include <errno.h>
@@ -28,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ntfs-3g/acls.h>
 #include <ntfs-3g/attrib.h>
 #include <ntfs-3g/bitmap.h>
 #include <ntfs-3g/bootsect.h>
@@ -39,6 +44,7 @@
 #include <ntfs-3g/mft.h>
 #include <ntfs-3g/mst.h>
 #include <ntfs-3g/runlist.h>
+#include <ntfs-3g/security.h>
 #include <ntfs-3g/unistr.h>
 
 #define CHUNK_RECORDS 256
@@ -78,6 +84,11 @@ typedef struct {
     size_t ndangling, cap_dangling;
     uint64_t *orphans;                // repairable orphans, for the repair
     size_t norphans;
+    u8 *sd_late;                      // a non-resident $SECURITY_DESCRIPTOR, read after pass 1
+    uint64_t *bad_sd;                 // records whose $SECURITY_DESCRIPTOR is not valid
+    size_t nbad_sd;
+    struct sid_use { u32 id; uint64_t rec; } *sids;   // security_ids in use, and a record that has each
+    size_t nsids;
     bool nomem;                       // keep_dangling ran out of memory (ntfs_readdir stops quietly)
     shared_t *shared;
     size_t nshared;
@@ -100,6 +111,7 @@ const char *ue_check_kind_name(ue_check_kind_t kind)
     case UE_CHK_ORPHAN: return "orphan";
     case UE_CHK_MFT_MIRROR: return "mft_mirror";
     case UE_CHK_ENTRY_WRONG_PARENT: return "entry_wrong_parent";
+    case UE_CHK_BAD_SECURITY: return "bad_security";
     case UE_CHK_KINDS: break;
     }
     return "unknown";
@@ -274,6 +286,9 @@ static void chk_free(chk_t *c)
     free(c->flawed);
     free(c->dangling);
     free(c->orphans);
+    free(c->sd_late);
+    free(c->bad_sd);
+    free(c->sids);
     free(c->shared);
     memset(c, 0, sizeof(*c));
 }
@@ -310,16 +325,19 @@ static int chk_init(chk_t *c, ue_engine_t *e, ue_check_fn fn, void *ctx, ue_chec
     c->used = calloc((size_t)((c->ncl + 7) / 8) + 1, 1);
     c->multi = calloc(rbytes, 1);
     c->flawed = calloc(rbytes, 1);
+    c->sd_late = calloc(rbytes, 1);
     c->seq = calloc((size_t)c->nrec + 1, sizeof(*c->seq));
     c->parent = malloc(((size_t)c->nrec + 1) * sizeof(*c->parent));
     c->shared = calloc(MAX_SHARED, sizeof(*c->shared));
     if (!c->rbuf || !c->pbuf || !c->inuse || !c->base || !c->isdir || !c->named || !c->refd || !c->bad || !c->used ||
-        !c->multi || !c->flawed || !c->seq || !c->parent || !c->shared) {
+        !c->multi || !c->flawed || !c->sd_late || !c->seq || !c->parent || !c->shared) {
         chk_free(c);
         return ENOMEM;
     }
     memset(c->parent, 0xff, ((size_t)c->nrec + 1) * sizeof(*c->parent));
-    if ((err = read_bitmap(vol->mftbmp_na, c->nrec, &c->mftbmp, &c->mftbmp_bits)) ||
+    // All of $MFT's bitmap: bits past its last record count as lost (D-102).
+    uint64_t mbits = (uint64_t)vol->mftbmp_na->data_size * 8;
+    if ((err = read_bitmap(vol->mftbmp_na, mbits > c->nrec ? mbits : c->nrec, &c->mftbmp, &c->mftbmp_bits)) ||
         (err = read_bitmap(vol->lcnbmp_na, c->ncl, &c->lcnbmp, &c->lcnbmp_bits))) {
         chk_free(c);
         return err;
@@ -335,6 +353,111 @@ static int chk_init(chk_t *c, ue_engine_t *e, ue_check_fn fn, void *ctx, ue_chec
 static bool is_extent(const MFT_RECORD *m)
 {
     return m->base_mft_record != const_cpu_to_le64(0);
+}
+
+// Appends to a list that grows at 0, 1, 3, 7, ... entries.
+static int grow(void **list, size_t n, size_t size)
+{
+    if (n & (n + 1) && *list)
+        return 0;
+    void *g = realloc(*list, 2 * (n + 1) * size);
+    if (!g)
+        return ENOMEM;
+    *list = g;
+    return 0;
+}
+
+static void bad_security(chk_t *c, uint64_t rec)
+{
+    if (!grow((void **)&c->bad_sd, c->nbad_sd, sizeof(*c->bad_sd)))
+        c->bad_sd[c->nbad_sd++] = rec;
+    else
+        c->nomem = true;
+    report(c, UE_CHK_BAD_SECURITY, true, rec, 0, 0, 0, NULL,
+           "the file's security descriptor is not valid (written after its record, or damaged)");
+}
+
+// Security, from pass 1: a resident $SECURITY_DESCRIPTOR is checked now, a non-resident one
+// after pass 1, and each security_id in $STANDARD_INFORMATION against $Secure's $SII.
+static void note_security(chk_t *c, uint64_t owner, ATTR_RECORD *a)
+{
+    u32 len = le32_to_cpu(a->length);
+
+    if (a->type == AT_SECURITY_DESCRIPTOR && a->non_resident) {
+        mark(c->sd_late, owner);
+    } else if (a->type == AT_SECURITY_DESCRIPTOR) {
+        u32 voff = le16_to_cpu(a->value_offset), vlen = le32_to_cpu(a->value_length);
+        if ((uint64_t)voff + vlen > len || !ntfs_valid_descr((const char *)a + voff, vlen))
+            bad_security(c, owner);
+    } else if (a->type == AT_STANDARD_INFORMATION && !a->non_resident) {
+        u32 voff = le16_to_cpu(a->value_offset), vlen = le32_to_cpu(a->value_length);
+        if (vlen < offsetof(STANDARD_INFORMATION, v3_end) || (uint64_t)voff + vlen > len)
+            return;                   // NTFS 1.2 layout: no security_id
+        u32 id = le32_to_cpu(((STANDARD_INFORMATION *)((u8 *)a + voff))->security_id);
+        if (!id)
+            return;
+        for (size_t i = 0; i < c->nsids; i++)
+            if (c->sids[i].id == id)
+                return;
+        if (!grow((void **)&c->sids, c->nsids, sizeof(*c->sids)))
+            c->sids[c->nsids++] = (struct sid_use){ .id = id, .rec = owner };
+        else
+            c->nomem = true;
+    }
+}
+
+// A $SECURITY_DESCRIPTOR value read through libntfs-3g; true when it is a valid descriptor
+// (or cannot be read: that is reported as a bad runlist or record instead).
+static bool sd_valid(ntfs_inode *ni)
+{
+    ntfs_attr *na = ntfs_attr_open(ni, AT_SECURITY_DESCRIPTOR, AT_UNNAMED, 0);
+    bool ok = true;
+
+    if (!na)
+        return true;
+    if (na->data_size <= 0)
+        ok = false;
+    else if (na->data_size <= 65536) {
+        char *b = malloc((size_t)na->data_size);
+        if (b && ntfs_attr_pread(na, 0, na->data_size, b) == na->data_size)
+            ok = ntfs_valid_descr(b, (unsigned)na->data_size);
+        free(b);
+    }
+    ntfs_attr_close(na);
+    return ok;
+}
+
+// After the directories: the non-resident descriptors, and the security_ids $SII must hold.
+static int check_security(chk_t *c)
+{
+    for (uint64_t rec = 0; rec < c->nrec; rec++) {
+        if (!has(c->sd_late, rec) || !has(c->inuse, rec) || !has(c->base, rec) || has(c->flawed, rec))
+            continue;
+        ntfs_inode *ni = ue_iopen_rec(c->e, rec);
+        if (!ni)
+            continue;                 // reported by the directory walk or pass 1
+        bool ok = sd_valid(ni);
+        ue_iput(ni);
+        if (!ok)
+            bad_security(c, rec);
+    }
+    if (!c->nsids)
+        return c->nomem ? ENOMEM : 0;
+    ntfs_inode *sec = ue_iopen_rec(c->e, FILE_Secure);
+    ntfs_index_context *icx = sec ? ntfs_index_ctx_get(sec, NTFS_INDEX_SII, 4) : NULL;
+    for (size_t i = 0; icx && i < c->nsids; i++) {
+        le32 key = cpu_to_le32(c->sids[i].id);
+        if (ntfs_index_lookup(&key, sizeof(key), icx))
+            report(c, UE_CHK_BAD_SECURITY, false, c->sids[i].rec, 0, 0, 0, NULL,
+                   "security_id %u is not in $Secure (files with it have no valid security descriptor)",
+                   (unsigned)c->sids[i].id);
+        ntfs_index_ctx_reinit(icx);
+    }
+    if (icx)
+        ntfs_index_ctx_put(icx);
+    if (sec)
+        ue_iput(sec);
+    return c->nomem ? ENOMEM : 0;
 }
 
 // Pass 1 for one in-use record that passed ntfs_mft_record_check: its names and clusters.
@@ -354,6 +477,8 @@ static void scan_runs(chk_t *c, uint64_t rec, MFT_RECORD *m)
             else if (c->parent[owner] != dir)
                 mark(c->multi, owner);
         }
+        if (owner < c->nrec)
+            note_security(c, owner, a);
         if (!a->non_resident)
             continue;
         runlist_element *rl = ntfs_mapping_pairs_decompress(c->vol, a, NULL);
@@ -572,12 +697,8 @@ static int keep_dangling(chk_t *c, uint64_t dir, const ntfschar *name, int name_
 
 static int keep_orphan(chk_t *c, uint64_t rec)
 {
-    if (!(c->norphans & (c->norphans + 1)) || !c->orphans) {   // grows at 0, 1, 3, 7, ...
-        uint64_t *n = realloc(c->orphans, 2 * (c->norphans + 1) * sizeof(*n));
-        if (!n)
-            return ENOMEM;
-        c->orphans = n;
-    }
+    if (grow((void **)&c->orphans, c->norphans, sizeof(*c->orphans)))
+        return ENOMEM;
     c->orphans[c->norphans++] = rec;
     return 0;
 }
@@ -781,7 +902,10 @@ static int chk_run(chk_t *c)
     for (uint64_t l = 0; l < c->ncl && l < c->lcnbmp_bits; l++)
         if (has(c->lcnbmp, l) && !has(c->used, l))
             c->res->lost_clusters++;
-    if ((err = check_dirs(c)))
+    for (uint64_t rec = c->nrec; rec < c->mftbmp_bits; rec++)
+        if (has(c->mftbmp, rec))
+            c->res->lost_records++;   // past $MFT's end: an extension that never landed
+    if ((err = check_dirs(c)) || (err = check_security(c)))
         return err;
     for (uint64_t rec = 0; rec < c->nrec; rec++)
         if (has(c->bad, rec))
@@ -1080,8 +1204,73 @@ static int relink(chk_t *c, uint64_t rec, bool found, uint64_t *found_rec, bool 
     return err ? err : cerr;
 }
 
-static int chk_repair(chk_t *c, uint64_t *done, uint64_t *removed, uint64_t *relinked, uint64_t *found)
+// Gives record rec the descriptor ntfs_create gives a new file (everyone, full control, as
+// every file Unlatch makes has), in place of a $SECURITY_DESCRIPTOR that is not valid, while
+// it is still not valid (D-102). A file with a security_id keeps that and only loses the attribute.
+static int fix_security(chk_t *c, uint64_t rec)
 {
+    ntfs_inode *ni = ue_iopen_rec(c->e, rec);
+    ntfs_attr *na;
+    int err = 0;
+
+    if (!ni)
+        return ENOENT;
+    if (!(ni->mrec->flags & MFT_RECORD_IN_USE) || le16_to_cpu(ni->mrec->sequence_number) != c->seq[rec] ||
+        sd_valid(ni))
+        err = ESTALE;
+    else if (!(na = ntfs_attr_open(ni, AT_SECURITY_DESCRIPTOR, AT_UNNAMED, 0)))
+        err = errno ? errno : EIO;
+    else {
+        if (ntfs_attr_rm(na))         // frees its clusters too
+            err = errno ? errno : EIO;
+        ntfs_attr_close(na);
+        if (!err && !ni->security_id && ntfs_sd_add_everyone(ni))
+            err = errno ? errno : EIO;
+        ntfs_inode_mark_dirty(ni);
+    }
+    int cerr = ue_iput(ni);
+    return err ? err : cerr;
+}
+
+// Clears the bits of records and clusters marked used that nothing uses (D-102). Only on a
+// volume the check just found nothing wrong with, so every record in use was read whole and
+// every runlist decoded: nothing in use can be freed.
+static int clear_lost(chk_t *c, uint64_t *records, uint64_t *clusters)
+{
+    int err;
+
+    if ((err = ue_mark_busy(c->e)))
+        return err;
+    for (int pass = 0; pass < 2; pass++) {
+        ntfs_attr *na = pass ? c->vol->lcnbmp_na : c->vol->mftbmp_na;
+        const u8 *have = pass ? c->lcnbmp : c->mftbmp, *want = pass ? c->used : c->inuse;
+        uint64_t bits = pass ? (c->lcnbmp_bits < c->ncl ? c->lcnbmp_bits : c->ncl) : c->mftbmp_bits;
+        uint64_t limit = pass ? c->ncl : c->nrec;   // beyond it nothing is in use
+        for (uint64_t i = 0; i < bits;) {
+            if (!has(have, i) || (i < limit && has(want, i))) {
+                i++;
+                continue;
+            }
+            uint64_t j = i;
+            while (j < bits && has(have, j) && !(j < limit && has(want, j)))
+                j++;
+            if (ntfs_bitmap_clear_run(na, (s64)i, (s64)(j - i)))
+                return errno ? errno : EIO;
+            *(pass ? clusters : records) += j - i;
+            if (pass)
+                c->vol->free_clusters += (s64)(j - i);
+            else if (c->vol->free_mft_records >= 0)
+                c->vol->free_mft_records += (s64)(j - i);
+            i = j;
+        }
+    }
+    return c->e->dev_ctx->failed ? EIO : 0;
+}
+
+static int chk_repair(chk_t *c, ue_check_result_t *out)
+{
+    uint64_t *done = &out->repaired, *removed = &out->entries_removed, *relinked = &out->orphans_relinked;
+    uint64_t *found = &out->orphans_found;
     uint64_t found_rec = 0;
     uint64_t clusters = 0;
     int err;
@@ -1135,6 +1324,14 @@ static int chk_repair(chk_t *c, uint64_t *done, uint64_t *removed, uint64_t *rel
         if (last == 1)
             break;
     }
+    for (size_t i = 0; i < c->nbad_sd && !c->e->dev_ctx->failed; i++) {
+        if ((err = fix_security(c, c->bad_sd[i]))) {
+            if (err == ENOENT || err == ESTALE)
+                continue;
+            return err;
+        }
+        out->security_replaced++;
+    }
     return c->e->dev_ctx->failed ? EIO : 0;
 }
 
@@ -1150,13 +1347,26 @@ static int check_volume(ue_engine_t *e, ue_check_fn fn, void *ctx, ue_check_resu
         return err;
     err = chk_run(&c);
     res->remaining = res->problems;
+    bool lost = res->lost_records || res->lost_clusters;
     if (!err && repair && res->problems && res->problems == res->repairable) {
         res->repair_ran = true;
-        err = chk_repair(&c, &res->repaired, &res->entries_removed, &res->orphans_relinked, &res->orphans_found);
+        err = chk_repair(&c, res);
         chk_free(&c);
         if (!err && !(err = chk_init(&c, e, NULL, NULL, &again))) {
             err = chk_run(&c);
             res->remaining = again.problems;
+            lost = again.lost_records || again.lost_clusters;
+        }
+    }
+    // Last, with nothing else left, the space nothing uses (D-102); checked once more.
+    if (!err && repair && res->remaining == 0 && lost) {
+        res->repair_ran = true;
+        err = clear_lost(&c, &res->records_freed, &res->clusters_freed);
+        chk_free(&c);
+        if (!err && !(err = chk_init(&c, e, NULL, NULL, &again))) {
+            err = chk_run(&c);
+            // Still lost: counted as left, so the dirty mark stays.
+            res->remaining = again.problems + (again.lost_records || again.lost_clusters);
         }
     }
     chk_free(&c);
@@ -1316,7 +1526,8 @@ static int check_opened(const ue_io_t *io, ue_vol_state_t state, bool repair, ue
     out->state = state;
     if (err || cerr)
         return err ? err : cerr;
-    if (!repair || (out->problems ? out->problems != out->repairable : !dirty))
+    if (!repair || (out->problems ? out->problems != out->repairable
+                                  : !dirty && !out->lost_records && !out->lost_clusters))
         return 0;
 
     // Only now, with nothing found that a repair could make worse, is the volume opened for
@@ -1334,6 +1545,9 @@ static int check_opened(const ue_io_t *io, ue_vol_state_t state, bool repair, ue
     out->entries_removed = rw.entries_removed;
     out->orphans_relinked = rw.orphans_relinked;
     out->orphans_found = rw.orphans_found;
+    out->records_freed = rw.records_freed;
+    out->clusters_freed = rw.clusters_freed;
+    out->security_replaced = rw.security_replaced;
     out->remaining = err ? out->problems : rw.remaining;
     out->dirty_cleared = dirty && !err && !cerr && rw.remaining == 0;
     return err ? err : cerr;

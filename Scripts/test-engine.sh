@@ -121,6 +121,8 @@ chk-orphan-gone mkdir /p\nfile /p/x.bin 5000 7\norphan /p/x.bin\nfree-record /p
 chk-orphan-taken orphan /d/b.bin\nfile /d/b.bin 100 8
 chk-mirror stale-mirror 3
 chk-mirror-torn stale-mirror 0\ntear-mft 1
+chk-lost mark-record end\nmark-record 20\nmark-clusters 8000 4
+chk-sd break-sd /d/b.bin
 chk-combined orphan /d/c.bin\nfree-record /big/f00050\nclear-record-bit /d/a.bin\nstale-mirror 0
 DAMAGE
 "$out/set_dirty" chk-repairable.img

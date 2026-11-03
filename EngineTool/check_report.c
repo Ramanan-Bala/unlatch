@@ -63,7 +63,7 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
     else if (res.remaining)
         code = CHECK_PROBLEMS;
     else
-        code = res.problems ? CHECK_REPAIRED : CHECK_CLEAN;
+        code = res.problems || res.records_freed || res.clusters_freed ? CHECK_REPAIRED : CHECK_CLEAN;
 
     const char *why = err == EPERM ? "Windows did not shut down fully: it must finish its own changes first"
                     : err == EROFS ? "the volume cannot be opened for writing"
@@ -82,6 +82,8 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
         fprintf(out, "  \"entriesRemoved\": %" PRIu64 ", \"orphansRelinked\": %" PRIu64 ", \"orphansFound\": %" PRIu64
                 ", \"mirrorRepaired\": %s,\n", res.entries_removed, res.orphans_relinked, res.orphans_found,
                 res.mirror_repaired ? "true" : "false");
+        fprintf(out, "  \"recordsFreed\": %" PRIu64 ", \"clustersFreed\": %" PRIu64 ", \"securityReplaced\": %" PRIu64
+                ",\n", res.records_freed, res.clusters_freed, res.security_replaced);
         fprintf(out, "  \"repairRan\": %s, \"dirtyCleared\": %s,\n", res.repair_ran ? "true" : "false",
                 res.dirty_cleared ? "true" : "false");
         fprintf(out, "  \"exitCode\": %d", code);
@@ -108,6 +110,9 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
                 " orphans put back (%" PRIu64 " in found.000)%s%s\n", res.repaired, res.entries_removed,
                 res.orphans_relinked, res.orphans_found, res.mirror_repaired ? ", $MFTMirr rewritten" : "",
                 res.repair_ran || !res.problems ? "" : " (not run: some problems cannot be repaired here)");
+        if (res.records_freed || res.clusters_freed || res.security_replaced)
+            fprintf(out, "freed:        %" PRIu64 " records, %" PRIu64 " clusters marked used by nothing; %" PRIu64
+                    " security descriptors replaced\n", res.records_freed, res.clusters_freed, res.security_replaced);
     }
     fprintf(out, "remaining:    %" PRIu64 "\n", res.remaining);
     if (res.dirty_cleared)

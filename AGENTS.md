@@ -60,7 +60,7 @@ Each step updates this list.
 | Inspect an image | `build/ntfs3g/bin/ntfsinfo -m t1.img`, `build/ntfs3g/bin/ntfsls -s t1.img` |
 | Attach an image as a block device, unmounted (prints `diskN`) | `Scripts/attach-image.sh t1.img`; detach with `hdiutil detach diskN` |
 
-Fixture reparse points: `mkfixture` `reparse PATH symlink-rel|symlink-abs|junction TARGET`. Planted damage for Check Disk: `clear-record-bit`, `clear-cluster-bits`, `share-clusters PATH OTHER`, `run-past`, `bump-seq`, `tear-record`, `zero-index DIR`, `zero-record`, `free-record`, `dos-name PATH NAME`, `link-entry PATH OTHER`, `orphan PATH` (its folder gone: then `free-record` the folder; its name taken: then `file PATH ...`), `stale-mirror N`, `tear-mft N` (both written after the unmount) (header of `mkfixture.c`).
+Fixture reparse points: `mkfixture` `reparse PATH symlink-rel|symlink-abs|junction TARGET`. Planted damage for Check Disk: `clear-record-bit`, `clear-cluster-bits`, `share-clusters PATH OTHER`, `run-past`, `bump-seq`, `tear-record`, `zero-index DIR`, `zero-record`, `free-record`, `dos-name PATH NAME`, `link-entry PATH OTHER`, `orphan PATH` (its folder gone: then `free-record` the folder; its name taken: then `file PATH ...`), `stale-mirror N`, `tear-mft N` (both written after the unmount), `mark-record N|end`, `mark-clusters LCN COUNT`, `break-sd PATH` (header of `mkfixture.c`).
 
 ntfsprogs tools in `build/ntfs3g/bin/`: `mkntfs ntfscat ntfsclone ntfscluster ntfscmp ntfscp ntfsfix ntfsinfo ntfslabel ntfsls ntfsresize ntfsundelete`. Put images under `build/` (ignored) or anywhere else outside the repo; `*.img` is ignored everywhere.
 
