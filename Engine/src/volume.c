@@ -154,6 +154,7 @@ int ue_settle(ue_engine_t *e, uint32_t idle_ms)
 
 static int unmount_volume(ntfs_volume *vol, ue_dev_t *ctx)
 {
+    ue_device_set_volume(ctx, NULL);  // the runlists go away during the release
     int err = ntfs_umount(vol, FALSE) ? (errno ? errno : EIO) : 0;  // frees vol and the device
 
     ue_device_free_ctx(ctx);
@@ -334,6 +335,8 @@ int ue_open(const ue_io_t *io, uint32_t flags, ue_engine_t **out, ue_probe_t *pr
     }
     e->vol = vol;
     e->dev_ctx = ctx;
+    if (!readonly)
+        ue_device_set_volume(ctx, vol);
     e->readonly = readonly;
     e->marked_dirty = !readonly && (!was_dirty || (flags & UE_OPEN_CLEAR_DIRTY));
     e->mark_on = was_dirty;

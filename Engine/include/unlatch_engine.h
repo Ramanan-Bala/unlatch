@@ -145,7 +145,7 @@ int  ue_symlink(ue_engine_t *e, ue_ino_t dir, const char *name, const char *targ
 int  ue_link(ue_engine_t *e, ue_ino_t ino, ue_ino_t newdir, const char *newname, ue_attr_t *out);
 // Page cache (Step 15, D-62), with UE_OPEN_CACHE. libntfs-3g's small metadata transfers
 // (MFT records, index blocks, bitmaps) are kept in 4 KiB pages and written back sorted and
-// coalesced; transfers of 64 KiB and more go straight to the device. Dirty pages reach the
+// coalesced, in phases so that what is pointed to lands first (D-97); transfers of 64 KiB and more go straight to the device. Dirty pages reach the
 // device on ue_writeback, ue_sync (which then flushes the device), ue_close, or when the
 // cache is full. A failed write-back is a device failure (ue_has_failed).
 // ue_writeback writes dirty pages back if the oldest has been dirty for at least min_age_ms
@@ -157,6 +157,7 @@ typedef struct {
     uint64_t read_bytes, write_bytes; // device traffic through the cache layer
     uint64_t dirty_pages;
     uint64_t writeback_us;            // time spent writing back
+    uint64_t order_flushes;           // device flushes between write-back phases (D-97)
     uint32_t page_size;               // 0: no cache
 } ue_cache_stats_t;
 int  ue_writeback(ue_engine_t *e, uint32_t min_age_ms);

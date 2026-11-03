@@ -11,6 +11,19 @@
 //
 // Write-back happens when the cache fills, on bc_writeback (ue_sync, ue_writeback, close).
 // A failed write-back is reported to the caller, which marks the device failed (D-46).
+//
+// NTFS through libntfs-3g has no journal, so a write-back cut off by a pull leaves whatever
+// part of it reached the disk. Write-back is ordered so that what is pointed to lands, and
+// is flushed, before what points at it (D-97):
+//   1. file data and the bitmaps, then $MFT's first page with $MFTMirr right after it
+//   2. new index blocks (pages that were not index blocks on the disk)
+//   3. records created since the last write-back, highest first (a new folder's record after
+//      those of the files created in it)
+//   flush; until here everything new is unreachable: only 4 and 5 point at it
+//   4. the other index blocks and everything else
+//   flush
+//   5. the other MFT records (parents' index roots, $I30 bitmaps, runlists)
+// A cut then leaves at worst lost space or orphans, not entries pointing at unwritten records.
 #include "internal.h"
 
 #include <errno.h>
@@ -29,7 +42,15 @@ typedef struct {
     int32_t hnext;                    // hash chain
     int32_t prev, next;               // LRU list (head = most recent), or the free list
     bool dirty;
+    bool data;                        // dirtied as file data (cold), see bc_set_cold
+    bool fresh;                       // holds a record created since it was last written back
+    bool was_index;                   // an index block on the disk (when it was last clean)
 } bc_ent_t;
+
+typedef struct {
+    uint64_t lo, hi;                  // pages [lo, hi)
+    int kind;
+} bc_range_t;
 
 struct ue_bcache {
     ue_io_t io;
@@ -47,6 +68,13 @@ struct ue_bcache {
     uint8_t *ahead;                   // BC_READAHEAD pages; separate, since filling can evict and write back
     bool cold;                        // file data: new pages go to the LRU tail, hits stay put
     int32_t *sorted;                  // n entries, for write-back
+    uint64_t *key;                    // n entries: write-back order of each entry (D-97)
+    size_t *runs;                     // n + 1 entries: starts of one phase's transfers in sorted
+    bc_order_fn order;                // fills the ranges at each write-back; NULL: device order
+    void *order_ctx;
+    bc_range_t *ranges;
+    size_t nranges, cap_ranges;
+    uint64_t mirror_after;            // $MFTMirr pages are written right after this page
     ue_cache_stats_t stats;
 };
 
@@ -146,6 +174,8 @@ static void mark_dirty(ue_bcache_t *bc, int32_t i)
             bc->dirty_since = now_ns();
         bc->ent[i].dirty = true;
     }
+    if (bc->cold)
+        bc->ent[i].data = true;
 }
 
 static void mark_clean(ue_bcache_t *bc, int32_t i)
@@ -154,17 +184,152 @@ static void mark_clean(ue_bcache_t *bc, int32_t i)
         bc->ent[i].dirty = false;
         bc->ndirty--;
     }
+    bc->ent[i].data = bc->ent[i].fresh = false;
 }
 
-static int cmp_idx(void *ctx, const void *a, const void *b)   // Darwin qsort_r order
+void bc_set_order(ue_bcache_t *bc, bc_order_fn fn, void *ctx)
 {
-    const bc_ent_t *ent = ctx;
-    uint64_t x = ent[*(const int32_t *)a].idx, y = ent[*(const int32_t *)b].idx;
+    if (bc) {
+        bc->order = fn;
+        bc->order_ctx = ctx;
+    }
+}
+
+// A range that cannot be stored is left out: its pages are then written with the rest.
+void bc_add_range(ue_bcache_t *bc, uint64_t off, uint64_t len, int kind)
+{
+    if (len == 0 || off >= bc->io.size_bytes)
+        return;
+    if (bc->nranges == bc->cap_ranges) {
+        size_t cap = bc->cap_ranges ? 2 * bc->cap_ranges : 16;
+        bc_range_t *r = realloc(bc->ranges, cap * sizeof(*r));
+        if (!r)
+            return;
+        bc->ranges = r;
+        bc->cap_ranges = cap;
+    }
+    bc->ranges[bc->nranges++] = (bc_range_t){ off / bc->page, (off + len + bc->page - 1) / bc->page, kind };
+}
+
+void bc_set_mirror_after(ue_bcache_t *bc, uint64_t off)
+{
+    bc->mirror_after = off / bc->page;
+}
+
+void bc_hint_new(ue_bcache_t *bc, uint64_t off)
+{
+    int32_t i = bc ? find(bc, off / bc->page) : NIL;
+
+    if (i != NIL)
+        bc->ent[i].fresh = true;
+}
+
+static int cmp_range(const void *a, const void *b)
+{
+    uint64_t x = ((const bc_range_t *)a)->lo, y = ((const bc_range_t *)b)->lo;
 
     return x < y ? -1 : x > y;
 }
 
-// Writes every dirty page, in device order, adjacent pages joined into one transfer.
+static int range_kind(const ue_bcache_t *bc, uint64_t idx)
+{
+    size_t lo = 0, hi = bc->nranges;
+
+    while (lo < hi) {                 // the last range starting at or before idx
+        size_t mid = (lo + hi) / 2;
+        if (bc->ranges[mid].lo <= idx)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo > 0 && idx < bc->ranges[lo - 1].hi ? bc->ranges[lo - 1].kind : BC_RANGE_NONE;
+}
+
+static bool is_index(const uint8_t *page)
+{
+    return memcmp(page, "INDX", 4) == 0;
+}
+
+// Write-back phases (D-97). A flush comes before BC_PH_REST and before BC_PH_RECORDS.
+enum { BC_PH_FIRST, BC_PH_MFT_HEAD, BC_PH_NEW_INDEX, BC_PH_NEW, BC_PH_REST, BC_PH_RECORDS };
+
+// Sort key: phase in the top byte, then the position within it (pages twice apart, so a
+// $MFTMirr page can sit right after $MFT's first page).
+static uint64_t order_key(const ue_bcache_t *bc, int32_t i)
+{
+    const bc_ent_t *e = &bc->ent[i];
+    uint64_t pos = e->idx << 1;
+    int ph;
+
+    switch (bc->order ? range_kind(bc, e->idx) : BC_RANGE_NONE) {
+    case BC_RANGE_BITMAP:
+        ph = BC_PH_FIRST;
+        break;
+    case BC_RANGE_MFT:
+        // $MFT's own record is an allocation like the bitmaps: when the MFT grows, entries
+        // point at records past its old end.
+        ph = e->idx == bc->mirror_after ? BC_PH_MFT_HEAD : e->fresh ? BC_PH_NEW : BC_PH_RECORDS;
+        break;
+    case BC_RANGE_MIRROR:
+        ph = BC_PH_MFT_HEAD;
+        pos = (bc->mirror_after << 1) | 1;
+        break;
+    default:
+        if (!bc->order)
+            ph = BC_PH_REST;
+        else if (e->data)
+            ph = BC_PH_FIRST;
+        else
+            ph = !e->was_index && is_index(page_of(bc, i)) ? BC_PH_NEW_INDEX : BC_PH_REST;
+        break;
+    }
+    return (uint64_t)ph << 56 | (pos & ((1ull << 56) - 1));
+}
+
+static int cmp_key(void *ctx, const void *a, const void *b)   // Darwin qsort_r order
+{
+    const ue_bcache_t *bc = ctx;
+    int32_t i = *(const int32_t *)a, j = *(const int32_t *)b;
+    uint64_t x = bc->key[i], y = bc->key[j];
+
+    if (x == y) {
+        x = bc->ent[i].idx;
+        y = bc->ent[j].idx;
+    }
+    return x < y ? -1 : x > y;
+}
+
+// One transfer: sorted[a, b), adjacent pages.
+static int write_run(ue_bcache_t *bc, size_t a, size_t b)
+{
+    size_t used = 0;
+    uint64_t first = bc->ent[bc->sorted[a]].idx;
+    const void *src;
+    int err;
+
+    for (size_t k = a; k < b; k++)
+        used += page_len(bc, bc->ent[bc->sorted[k]].idx);
+    if (b - a == 1) {
+        src = page_of(bc, bc->sorted[a]);
+    } else {
+        for (size_t k = a; k < b; k++)
+            memcpy(bc->stage + (k - a) * bc->page, page_of(bc, bc->sorted[k]),
+                   page_len(bc, bc->ent[bc->sorted[k]].idx));
+        src = bc->stage;
+    }
+    err = bc->io.pwrite(bc->io.ctx, src, used, first * bc->page);
+    bc->stats.writebacks++;
+    bc->stats.write_bytes += used;
+    if (err)
+        return err;
+    for (size_t k = a; k < b; k++)
+        mark_clean(bc, bc->sorted[k]);
+    return 0;
+}
+
+// Writes every dirty page, phase by phase (D-97); within a phase in device order, adjacent
+// pages joined into one transfer. New records go highest first: a new folder's record, with
+// the entries of the files created in it, lands after theirs.
 int bc_writeback(ue_bcache_t *bc)
 {
     size_t m = 0;
@@ -173,31 +338,42 @@ int bc_writeback(ue_bcache_t *bc)
         return 0;
     uint64_t t0 = now_ns();
     int err = 0;
+    bc->nranges = 0;
+    if (bc->order) {
+        bc->order(bc->order_ctx, bc);
+        qsort(bc->ranges, bc->nranges, sizeof(*bc->ranges), cmp_range);
+    }
     for (int32_t i = bc->head; i != NIL; i = bc->ent[i].next)
-        if (bc->ent[i].dirty)
+        if (bc->ent[i].dirty) {
             bc->sorted[m++] = i;
-    qsort_r(bc->sorted, m, sizeof(*bc->sorted), bc->ent, cmp_idx);
-    for (size_t a = 0; a < m;) {
-        size_t b = a + 1, used = page_len(bc, bc->ent[bc->sorted[a]].idx);
-        uint64_t first = bc->ent[bc->sorted[a]].idx;
-        while (b < m && bc->ent[bc->sorted[b]].idx == first + (b - a) && used + bc->page <= BC_STAGE)
-            used += page_len(bc, bc->ent[bc->sorted[b++]].idx);
-        const void *src;
-        if (b - a == 1) {
-            src = page_of(bc, bc->sorted[a]);
-        } else {
-            for (size_t k = a; k < b; k++)
-                memcpy(bc->stage + (k - a) * bc->page, page_of(bc, bc->sorted[k]),
-                       page_len(bc, bc->ent[bc->sorted[k]].idx));
-            src = bc->stage;
+            bc->key[i] = order_key(bc, i);
         }
-        err = bc->io.pwrite(bc->io.ctx, src, used, first * bc->page);
-        bc->stats.writebacks++;
-        bc->stats.write_bytes += used;
-        if (err)
-            break;
-        for (size_t k = a; k < b; k++)
-            mark_clean(bc, bc->sorted[k]);
+    qsort_r(bc->sorted, m, sizeof(*bc->sorted), bc, cmp_key);
+    bool unflushed = false;
+    for (size_t a = 0; a < m && !err;) {
+        int ph = (int)(bc->key[bc->sorted[a]] >> 56);
+        size_t nr = 0, b = a;
+        while (b < m && (int)(bc->key[bc->sorted[b]] >> 56) == ph) {
+            size_t c = b + 1, used = page_len(bc, bc->ent[bc->sorted[b]].idx);
+            uint64_t first = bc->ent[bc->sorted[b]].idx;
+            while (c < m && (int)(bc->key[bc->sorted[c]] >> 56) == ph &&
+                   bc->ent[bc->sorted[c]].idx == first + (c - b) && used + bc->page <= BC_STAGE)
+                used += page_len(bc, bc->ent[bc->sorted[c++]].idx);
+            bc->runs[nr++] = b;
+            b = c;
+        }
+        bc->runs[nr] = b;
+        if (unflushed && (ph == BC_PH_REST || ph == BC_PH_RECORDS) && bc->io.flush) {
+            if ((err = bc->io.flush(bc->io.ctx)))
+                break;
+            bc->stats.order_flushes++;
+            unflushed = false;
+        }
+        for (size_t r = 0; r < nr && !err; r++) {
+            size_t k = ph == BC_PH_NEW ? nr - 1 - r : r;
+            err = write_run(bc, bc->runs[k], bc->runs[k + 1]);
+        }
+        unflushed = true;
         a = b;
     }
     bc->stats.writeback_us += (now_ns() - t0) / 1000;
@@ -242,7 +418,7 @@ static int insert(ue_bcache_t *bc, uint64_t idx, const void *data, int32_t *out)
     if ((err = take_entry(bc, &i)))
         return err;
     bc->ent[i].idx = idx;
-    bc->ent[i].dirty = false;
+    bc->ent[i].dirty = bc->ent[i].data = bc->ent[i].fresh = bc->ent[i].was_index = false;
     memcpy(page_of(bc, i), data, page_len(bc, idx));
     size_t h = hslot(bc, idx);
     bc->ent[i].hnext = bc->hash[h];
@@ -320,18 +496,22 @@ static int write_cached(ue_bcache_t *bc, const uint8_t *buf, size_t len, uint64_
         uint64_t idx = off / bc->page;
         size_t in = (size_t)(off % bc->page), n = bc->page - in;
         int32_t i = find(bc, idx);
+        bool whole = false;
         int err;
 
         if (n > len)
             n = len;
         if (i == NIL) {
-            if (in == 0 && n == page_len(bc, idx))
+            whole = in == 0 && n == page_len(bc, idx);
+            if (whole)
                 err = insert(bc, idx, buf, &i);     // the whole page: nothing to read
             else
                 err = fill(bc, idx, false, &i);
             if (err)
                 return err;
         }
+        if (!bc->ent[i].dirty)        // a clean page is what the disk holds (unknown if whole)
+            bc->ent[i].was_index = !whole && is_index(page_of(bc, i));
         touch(bc, i);
         memcpy(page_of(bc, i) + in, buf, n);
         mark_dirty(bc, i);
@@ -460,9 +640,11 @@ int bc_new(const ue_io_t *io, size_t bytes, ue_bcache_t **out)
     bc->ent = calloc(bc->n, sizeof(*bc->ent));
     bc->hash = malloc(hsize * sizeof(*bc->hash));
     bc->sorted = malloc(bc->n * sizeof(*bc->sorted));
+    bc->key = malloc(bc->n * sizeof(*bc->key));
+    bc->runs = malloc((bc->n + 1) * sizeof(*bc->runs));
     bc->stage = malloc(BC_STAGE > 2 * bc->page ? BC_STAGE : 2 * bc->page);
     bc->ahead = malloc(BC_READAHEAD * bc->page);
-    if (!bc->mem || !bc->ent || !bc->hash || !bc->sorted || !bc->stage || !bc->ahead) {
+    if (!bc->mem || !bc->ent || !bc->hash || !bc->sorted || !bc->key || !bc->runs || !bc->stage || !bc->ahead) {
         bc_free(bc);
         return ENOMEM;
     }
@@ -484,6 +666,9 @@ void bc_free(ue_bcache_t *bc)
     free(bc->ent);
     free(bc->hash);
     free(bc->sorted);
+    free(bc->key);
+    free(bc->runs);
+    free(bc->ranges);
     free(bc->stage);
     free(bc->ahead);
     free(bc);

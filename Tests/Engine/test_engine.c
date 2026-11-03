@@ -1726,6 +1726,7 @@ typedef struct {
     uint8_t *mem;
     uint64_t size;
     long writes, limit;               // limit < 0: no limit; after it every write fails (gone)
+    bool deletes;                     // cut_tree: also remove a folder's files
 } cutdev_t;
 
 static int cut_pread(void *ctx, void *buf, size_t len, uint64_t off)
@@ -1835,6 +1836,142 @@ static void test_check_cut_copy(void)
     printf("     %d cuts of %ld writes: %d damaged (%d $MFTMirr), %d repaired by setting bitmap bits\n", cuts, total,
            damaged, mirror, repaired);
     CHECK(damaged > 0, "no cut left damage the check found");
+    free(orig);
+    free(d.mem);
+}
+
+// Ordered write-back (D-97): a create-heavy workload (nested folders, small and large files,
+// a write-back every few creates as the 1 s timer does, then a folder emptied) cut off after
+// every other device write. Whatever the cut, no folder entry may point at a record that is
+// free or reused, no index may be unreadable and no record torn: what is pointed to lands
+// before what points at it. New records may be orphans, space may be lost, and a delete may
+// leave bits cleared in a bitmap before its record is freed (repairable).
+static long cut_tree(cutdev_t *d)
+{
+    ue_io_t io = { .ctx = d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d->size, .block_size = 512,
+                   .writable = true };
+    ue_engine_t *e;
+    ue_attr_t root, top, sub, a;
+    int made = 0;
+
+    d->writes = 0;
+    if (ue_open(&io, UE_OPEN_CACHE | UE_OPEN_GHOST_OPEN_ONLY, &e, NULL))
+        return -1;
+    if (ue_getattr(e, UE_ROOT_INO, &root))
+        goto out;
+    for (int t = 0; t < 3; t++) {
+        char name[48];
+        snprintf(name, sizeof(name), "top-%d", t);
+        if (ue_create(e, root.ino, name, UE_T_DIR, 0755, &top))
+            goto out;
+        for (int s = 0; s < 4; s++) {
+            snprintf(name, sizeof(name), "sub-%d", s);
+            if (ue_create(e, top.ino, name, UE_T_DIR, 0755, &sub))
+                goto out;
+            for (int f = 0; f < 30; f++) {
+                snprintf(name, sizeof(name), "a-file-with-a-longer-name-%02d.txt", f);
+                if (ue_create(e, sub.ino, name, UE_T_REG, 0644, &a) ||
+                    write_gen(e, a.ino, 0, f % 10 == 9 ? 20000 : 200, (uint64_t)(t * 1000 + s * 100 + f)))
+                    goto out;
+                if (++made % 7 == 0)
+                    ue_writeback(e, 0);
+            }
+        }
+    }
+    // Then deletes: a written folder emptied, a few files at a time (rm -r).
+    ue_writeback(e, 0);
+    if (d->deletes && ue_lookup(e, root.ino, "top-0", &top) == 0 && ue_lookup(e, top.ino, "sub-1", &sub) == 0) {
+        for (int f = 0; f < 30; f++) {
+            char name[48];
+            snprintf(name, sizeof(name), "a-file-with-a-longer-name-%02d.txt", f);
+            if (ue_remove(e, sub.ino, name, false))
+                goto out;
+            if (f % 7 == 6)
+                ue_writeback(e, 0);
+        }
+        ue_remove(e, top.ino, "sub-1", true);
+    }
+out:
+    ue_close(e);
+    return d->writes;
+}
+
+// Copies $MFT's first records over $MFTMirr in an image in memory, as chkdsk would, so a
+// cut that left the two apart can be checked for everything else.
+static void sync_mirror(cutdev_t *d)
+{
+    const uint8_t *bs = d->mem;
+    uint64_t cluster = (uint64_t)(bs[11] | bs[12] << 8) * bs[13];
+    int8_t cpr = (int8_t)bs[0x40];
+    uint64_t rec = cpr > 0 ? (uint64_t)cpr * cluster : 1ull << -cpr;
+    uint64_t mft = 0, mirr = 0;
+    for (int k = 7; k >= 0; k--) {
+        mft = mft << 8 | bs[0x30 + k];
+        mirr = mirr << 8 | bs[0x38 + k];
+    }
+    memcpy(d->mem + mirr * cluster, d->mem + mft * cluster, 4 * rec);
+}
+
+static void test_cut_order(void)
+{
+    cutdev_t d = { .deletes = true };
+    int fd = open(img("small"), O_RDONLY);
+    CHECK(fd >= 0, "open small");
+    d.size = (uint64_t)lseek(fd, 0, SEEK_END);
+    uint8_t *orig = malloc(d.size);
+    d.mem = malloc(d.size);
+    CHECK(orig && d.mem && pread(fd, orig, d.size, 0) == (ssize_t)d.size, "read small");
+    close(fd);
+
+    memcpy(d.mem, orig, d.size);
+    d.limit = -1;
+    long total = cut_tree(&d);
+    CHECK(total > 20, "the workload made %ld writes", total);
+    static const ue_check_kind_t bad[] = { UE_CHK_ENTRY_FREE_RECORD, UE_CHK_ENTRY_WRONG_SEQ, UE_CHK_INDEX_UNREADABLE,
+                                           UE_CHK_BAD_RECORD, UE_CHK_BAD_RUNLIST, UE_CHK_CLUSTERS_SHARED };
+    uint64_t kinds[UE_CHK_KINDS] = { 0 };
+    int cuts = 0, mirror = 0, broken = 0;
+    long step = total / 400 + 1;
+    for (long n = 1; n < total; n += step, cuts++) {
+        memcpy(d.mem, orig, d.size);
+        d.limit = n;
+        cut_tree(&d);
+        d.limit = -1;
+        ue_io_t io = { .ctx = &d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d.size, .block_size = 512,
+                       .writable = true };
+        ue_check_result_t r;
+        int err = ue_check(&io, 0, NULL, NULL, &r);
+        CHECK(err == 0, "cut at %ld of %ld: check failed: %s", n, total, strerror(err));
+        if (r.state == UE_VOL_CORRUPT) {   // the rest is checked as chkdsk would leave it
+            CHECK(r.by_kind[UE_CHK_MFT_MIRROR] == 1 && r.problems == 1, "cut at %ld: corrupt, not the mirror", n);
+            mirror++;
+            sync_mirror(&d);
+            CHECK(ue_check(&io, 0, NULL, NULL, &r) == 0 && r.state != UE_VOL_CORRUPT,
+                  "cut at %ld: still corrupt with $MFTMirr copied", n);
+        }
+        bool worse = false;
+        for (int k = 1; k < UE_CHK_KINDS; k++)
+            kinds[k] += r.by_kind[k];
+        for (size_t k = 0; k < sizeof(bad) / sizeof(bad[0]); k++)
+            worse |= r.by_kind[bad[k]] != 0;
+        if (worse && broken++ == 0) {   // kept for a look: unlatch-engine check
+            char path[2048];
+            snprintf(path, sizeof(path), "%s/x-order-%ld.img", dir, n);
+            int out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (out >= 0 && write(out, d.mem, d.size) != (ssize_t)d.size)
+                fprintf(stderr, "  cannot save %s\n", path);
+            if (out >= 0)
+                close(out);
+        }
+    }
+    printf("     %d cuts of %ld writes: %d with entries or indexes broken, %d $MFTMirr; found: "
+           "%llu free-record entries, %llu wrong-seq entries, %llu unreadable indexes, %llu bad records, "
+           "%llu orphans, %llu unmarked records, %llu unmarked clusters\n",
+           cuts, total, broken, mirror, (unsigned long long)kinds[UE_CHK_ENTRY_FREE_RECORD],
+           (unsigned long long)kinds[UE_CHK_ENTRY_WRONG_SEQ], (unsigned long long)kinds[UE_CHK_INDEX_UNREADABLE],
+           (unsigned long long)kinds[UE_CHK_BAD_RECORD], (unsigned long long)kinds[UE_CHK_ORPHAN],
+           (unsigned long long)kinds[UE_CHK_RECORD_UNMARKED], (unsigned long long)kinds[UE_CHK_CLUSTERS_UNMARKED]);
+    CHECK(broken == 0, "%d of %d cuts left an entry or index broken", broken, cuts);
     free(orig);
     free(d.mem);
 }
@@ -1967,6 +2104,7 @@ int main(int argc, char **argv)
     RUN(test_check_kinds);
     RUN(test_check_repair);
     RUN(test_check_cut_copy);
+    RUN(test_cut_order);
     RUN(test_cache_model);
     RUN(test_cache_engine);
     RUN(test_dirty_mark);

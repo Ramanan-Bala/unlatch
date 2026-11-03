@@ -2,6 +2,9 @@
 // ntfs_device_operations backed by a host ue_io_t. libntfs-3g never touches a file descriptor.
 #include "internal.h"
 
+#include <ntfs-3g/attrib.h>
+#include <ntfs-3g/runlist.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -31,6 +34,50 @@ static int dev_open(struct ntfs_device *dev, int flags)
     c->pos = 0;
     NDevSetOpen(dev);
     return 0;
+}
+
+// The write-back order (D-97): the device ranges of the bitmaps, $MFT and $MFTMirr, from the
+// runlists in memory. Only mapped runs count; a run never mapped was never written. No I/O:
+// this runs inside write-backs, which may come in the middle of a libntfs-3g call.
+static void add_runs(ue_bcache_t *bc, const ntfs_volume *vol, const ntfs_attr *na, int kind)
+{
+    if (!na || !NAttrNonResident(na) || !na->rl)
+        return;
+    for (const runlist_element *rl = na->rl; rl->length; rl++)
+        if (rl->lcn >= 0)
+            bc_add_range(bc, (uint64_t)rl->lcn << vol->cluster_size_bits,
+                         (uint64_t)rl->length << vol->cluster_size_bits, kind);
+}
+
+static void order_ranges(void *ctx, ue_bcache_t *bc)
+{
+    const ntfs_volume *vol = ((ue_dev_t *)ctx)->vol;
+
+    if (!vol)
+        return;
+    add_runs(bc, vol, vol->lcnbmp_na, BC_RANGE_BITMAP);
+    add_runs(bc, vol, vol->mftbmp_na, BC_RANGE_BITMAP);
+    add_runs(bc, vol, vol->mft_na, BC_RANGE_MFT);
+    add_runs(bc, vol, vol->mftmirr_na, BC_RANGE_MIRROR);
+    bc_set_mirror_after(bc, (uint64_t)vol->mft_lcn << vol->cluster_size_bits);
+}
+
+void ue_device_set_volume(ue_dev_t *c, ntfs_volume *vol)
+{
+    c->vol = vol;
+    bc_set_order(c->cache, vol ? order_ranges : NULL, c);
+}
+
+void ue_device_hint_new_record(ue_dev_t *c, uint64_t rec)
+{
+    ntfs_volume *vol = c->vol;
+
+    if (!c->cache || !vol || !vol->mft_na)
+        return;
+    uint64_t pos = rec << vol->mft_record_size_bits;
+    LCN lcn = ntfs_attr_vcn_to_lcn(vol->mft_na, (VCN)(pos >> vol->cluster_size_bits));
+    if (lcn >= 0)
+        bc_hint_new(c->cache, ((uint64_t)lcn << vol->cluster_size_bits) + (pos & (vol->cluster_size - 1)));
 }
 
 int ue_device_writeback(ue_dev_t *c)
