@@ -51,6 +51,23 @@ Scripts/chkdsk-vm.sh build/test-engine/w-rename.img
 
 Without `WINDOWS_SSH`, the script builds the VHD and prints the PowerShell steps to run by hand.
 
+### Check Disk against chkdsk (D-101)
+
+`--scan` checks many images in one go: VHDs go to the VM 16 at a time, each is attached read-only, checked with `chkdsk X:` (no `/f`; `/scan` needs a shadow copy a read-only VHD cannot give) and deleted. Each report is saved as `build/chkdsk/<name>.chkdsk.txt` (`CHKDSK_OUT` sets the folder) with chkdsk's exit code, and `summary.tsv` gets one line per image: name, `clean` (exit 0 and "found no problems"), `problems` or `error`. It appends, so remove it before a fresh run.
+
+Read-only chkdsk stops at the first error without saying what it would correct. `--detail` attaches a throwaway copy read-write and runs `chkdsk /f`, saving `<name>.chkdsk-f.txt` and `detail.tsv` (`corrected` for exit 1). The images under test are never changed.
+
+```sh
+# cut images from the two cut-off tests (every 2nd cut), next to the usual test images
+UNLATCH_SKIP_BIG=1 UNLATCH_CUT_SAVE=$PWD/build/chkdsk/cut UNLATCH_CUT_SAVE_EVERY=2 Scripts/test-engine.sh
+# repair a copy of each, then let Windows judge it
+for f in build/test-engine/chk-*.img build/chkdsk/cut/*.img; do
+    cp -c "$f" build/chkdsk/repaired/r-$(basename "$f"); unlatch-engine check --repair build/chkdsk/repaired/r-$(basename "$f")
+done
+WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 Scripts/chkdsk-vm.sh --scan build/chkdsk/repaired/*.img
+WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 Scripts/chkdsk-vm.sh --detail build/chkdsk/repaired/*.img
+```
+
 Windows-side readability (Steps 10 and 16): copy `Tests/oracle/windows-check.ps1` and a suite image's VHD into the VM and run it. It mounts the VHD read-write (a throwaway copy): Windows refuses to mount a volume read-only while its `$LogFile` is in the blank state libntfs-3g leaves, though `chkdsk` reads it fine.
 
 ## FSKit (Steps 08+)

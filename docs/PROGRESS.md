@@ -1125,6 +1125,45 @@ Not verified: `Tests/Fuse/interrupt.sh kill`, which needs the installed app quit
 
 - **Index damage Check Disk does not find yet (D-100, 2026-11-03):** after a cut, the sweeps' walk finds three things `ue_check` passes, which write ordering cannot prevent: (1) an index block in use that no node reaches (readdir lists its names, lookup does not); (2) a block's tail of entries above the key range its parent gives it (listed twice); (3) an entry whose name is not among its record's `$FILE_NAME`s in that folder (a rename's old name). Check Disk would need, per folder: walk the B+tree from the root and compare with the in-use blocks of the `$I30` bitmap; drop entries outside a block's key range when the reachable copy exists; re-insert entries of unreached blocks through `ntfs_index_add_filename` (or rebuild the folder's index from the `$FILE_NAME`s of records naming it) and clear the unreached blocks' bits; and extend D-96's wrong-parent test to compare the full name. `test_engine cutsweep` with `UNLATCH_CUT_SAVE=n` gives images for each (cut numbers with `UNLATCH_CUT_VERBOSE=1`). (4) With D-98/D-99's child-pointer check (a7c4118): a node pointing at a block that is inside `$INDEX_ALLOCATION` and holds a valid index block for that VCN, but whose `$I30` bitmap bit is clear (freed in the write-back the cut stopped), is reported as `index_unreadable`; it should be a repairable unmarked bit (set it), like `record_unmarked`. Renames cuts 59 and 60, attr-lists cut 184.
 
+### Follow-up: Windows chkdsk on images repaired by Check Disk (D-101) — done 2026-11-03
+
+**Result: not every repaired image is clean for Windows' chkdsk, so the README and site cannot yet say Windows is no longer needed.** Of the 100 images that `unlatch-engine check --repair` leaves with no problems, chkdsk finds nothing wrong in 39 and corrects something in 61. No data is lost in any of the 61: 60 have bits set for free space (lost space) and one has a missing security descriptor. On the 50 images Check Disk leaves with problems, chkdsk agrees there is damage every time.
+
+Tested what D-96 repairs (beta.13, main at a81a1f7). The `$MFTMirr` and orphan repair (D-98, D-99) had not landed, and neither had the wider sweep (D-100).
+
+- `Scripts/chkdsk-vm.sh --scan <img>...` runs read-only `chkdsk X:` on many images (VHDs 16 at a time, deleted after each check) and writes `build/chkdsk/<name>.chkdsk.txt` plus `summary.tsv`. `--detail` runs `chkdsk /f` on a throwaway read-write copy, because read-only mode stops at the first error without saying what it would correct. `/scan` cannot be used: it needs a shadow copy, which a read-only VHD cannot give (exit 11). D-101.
+- `UNLATCH_CUT_SAVE=<dir>` in `Tests/Engine/test_engine.c` saves every `UNLATCH_CUT_SAVE_EVERY`-th cut image (default 4) of `test_check_cut_copy` (`copy-<n>.img`) and `test_cut_order` (`order-<n>.img`), as cut. Nothing changes when it is unset.
+- The images: 12 copy cuts (every 22nd of 248 writes) and 128 order cuts (every 4th of 511 writes, so they fall inside every write-back phase), plus the 10 `chk-*` fixtures. For each image, the Unlatch report before the repair, the repair and the report after it are in `build/chkdsk/pre/`. `findings.tsv` (also in the shared notes folder) has one line per image.
+
+| Group | Images | chkdsk clean | chkdsk corrected |
+|---|---|---|---|
+| Cuts where Check Disk found nothing (dirty mark cleared) | 92 | 32 | 60: lost space in `$MFT`'s bitmap and/or `$Bitmap` (59), security descriptor (1) |
+| Cuts Check Disk repaired (missing bitmap bits) | 4 | 4 | – |
+| Cuts left with orphans | 31 | 0 | 31: orphans relinked into their folders; also security descriptors (6), lost space (some) |
+| Cuts left with `$MFTMirr` apart | 13 | 0 (read-only: "Detected errors in the MFT mirror"; `/f` fixes it without a message) | 12 with lost space too |
+| `chk-*` fixtures repaired | 4 | 3 | `chk-dangling`: lost clusters of its freed records |
+| `chk-*` fixtures left (index, mix, run-past, seq, shared, torn) | 6 | 0 | all 6, as Check Disk said |
+
+Clean results fall at write-back boundaries (e.g. `order-61`, `93`, `101`, …, `509`). Cuts inside a write-back leave bits set for space and records that nothing uses yet: D-97 writes the bitmaps first by design.
+
+```sh
+UNLATCH_SKIP_BIG=1 UNLATCH_CUT_SAVE=$PWD/build/chkdsk/cut UNLATCH_CUT_SAVE_EVERY=2 Scripts/test-engine.sh   # PASSED; 140 cut images
+for f in build/test-engine/chk-*.img build/chkdsk/cut/*.img; do n=r-$(basename $f); cp -c $f build/chkdsk/repaired/$n
+    build/DerivedData/Build/Products/Debug/unlatch-engine check --repair build/chkdsk/repaired/$n; done
+WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 Scripts/chkdsk-vm.sh --scan build/chkdsk/repaired/*.img     # 111 of 150 not clean
+WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 Scripts/chkdsk-vm.sh --detail build/chkdsk/repaired/*.img   # what chkdsk /f corrects
+```
+
+Surprises:
+- My first `--scan` passed `-Names a,b,c` to `powershell -File` as one string, so no VHD was found or deleted, and the VM's disk filled up. Fixed: the names are split in PowerShell, and a failed upload stops the run. The VM has about 4.7 GB free.
+- `ntfsinfo -i 41` prints nothing on these images, so the security-descriptor cause is not found. Both `order-9` and the clean `order-509` hold `$SDS` ids 256 and 257.
+
+**README wording, once a re-run of the commands above is clean (all 100 after the fixes below, and the orphan and mirror cuts after D-98/D-99):** in "No journal", replace "can be left with damage that only Windows' `chkdsk` (or a reformat) repairs" with "can be left with damage; Unlatch's Check Disk repairs it on the Mac, checked against Windows' own `chkdsk` on hundreds of cut-off copies. Only the files being copied at that moment may be lost." Then replace "When you still need Windows" with: "**You no longer need Windows for this.** The only damage Check Disk does not repair is a file whose own record never reached the disk; that file is lost and must be copied again. Run `chkdsk` only if you want a second opinion." Make the same change in `site/index.html` (lines 201 and 243). Not edited.
+
+## Carry-overs
+
+- **Check Disk vs chkdsk: re-run after D-98/D-99/D-100 (D-101):** the orphan cuts (31) and `$MFTMirr` cuts (13) were left unrepaired here, as D-96 intends; chkdsk relinks those orphans into their original folders ("Recovering orphaned file … into directory file N"). Re-run the commands in the D-101 entry once the repair lands. The README wording waits for an all-clean run.
+
 - **interrupt.sh reports "passed" when its mount fails (2026-11-03):** `scenario` returns 1 after "FAIL: mount" and the summary still says passed. It happens when the installed app auto-mounts the attached image first.
 
 - **Automatic check runs three passes (D-95, 2026-11-03):** the app checks read-only, then, when nothing was found, `check --repair`, which checks read-only again and once more read-write before clearing the mark. On a large disk that triples the wait. A check flag that clears the mark when the first pass finds nothing would make it one pass plus the read-write one.

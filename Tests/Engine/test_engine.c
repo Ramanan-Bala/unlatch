@@ -1976,6 +1976,23 @@ static int cut_pwrite(void *ctx, const void *buf, size_t len, uint64_t off)
     return 0;
 }
 
+// UNLATCH_CUT_SAVE=<dir> saves every UNLATCH_CUT_SAVE_EVERY-th cut image (default 4) as
+// <dir>/<tag>-<n>.img, as cut, for Scripts/chkdsk-vm.sh --scan (D-101).
+static void save_cut(const cutdev_t *d, const char *tag, int cut, long n)
+{
+    const char *to = getenv("UNLATCH_CUT_SAVE"), *every = getenv("UNLATCH_CUT_SAVE_EVERY");
+    int k = every ? atoi(every) : 4;
+    if (!to || !*to || cut % (k > 0 ? k : 1))
+        return;
+    char path[2048];
+    snprintf(path, sizeof(path), "%s/%s-%ld.img", to, tag, n);
+    int out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0 || write(out, d->mem, d->size) != (ssize_t)d->size)
+        fprintf(stderr, "  cannot save %s\n", path);
+    if (out >= 0)
+        close(out);
+}
+
 // cp -R of a tree with a write-back every few files, as the daemon's 1 s timer does.
 // Returns the writes that reached the device.
 static long cut_copy(cutdev_t *d)
@@ -2030,6 +2047,7 @@ static void test_check_cut_copy(void)
         d.limit = n;
         cut_copy(&d);
         d.limit = -1;
+        save_cut(&d, "copy", cuts, n);
         ue_io_t io = { .ctx = &d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d.size, .block_size = 512,
                        .writable = true };
         ue_check_result_t r, r2;
@@ -2162,6 +2180,7 @@ static void test_cut_order(void)
         d.limit = n;
         cut_tree(&d);
         d.limit = -1;
+        save_cut(&d, "order", cuts, n);
         ue_io_t io = { .ctx = &d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d.size, .block_size = 512,
                        .writable = true };
         ue_check_result_t r, r2;
