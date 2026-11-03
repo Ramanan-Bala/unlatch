@@ -114,8 +114,14 @@ chk-seq bump-seq /d/a.bin
 chk-torn tear-record /d/a.bin
 chk-index zero-index /big
 chk-repairable clear-record-bit /d/a.bin\nclear-cluster-bits /d/c.bin\nclear-record-bit /big/f00010
-chk-mix clear-record-bit /d/a.bin\nbump-seq /d/b.bin
+chk-mix clear-record-bit /d/a.bin\nshare-clusters /d/b.bin /d/c.bin
 chk-dangling free-record /d/a.bin\nfree-record /big/f00100\nfree-record /big/f00299\nfile /d/Long-File-Name.txt 10 5\ndos-name /d/Long-File-Name.txt LONG-F~1.TXT\nfree-record /d/Long-File-Name.txt\nmkdir /e\nlink-entry /e/ghost.bin /d/b.bin
+chk-orphan orphan /d/a.bin\norphan /big/f00042\nfile /d/Orphan-Long-Name.txt 10 6\ndos-name /d/Orphan-Long-Name.txt ORPHAN~1.TXT\norphan /d/Orphan-Long-Name.txt
+chk-orphan-gone mkdir /p\nfile /p/x.bin 5000 7\norphan /p/x.bin\nfree-record /p
+chk-orphan-taken orphan /d/b.bin\nfile /d/b.bin 100 8
+chk-mirror stale-mirror 3
+chk-mirror-torn stale-mirror 0\ntear-mft 1
+chk-combined orphan /d/c.bin\nfree-record /big/f00050\nclear-record-bit /d/a.bin\nstale-mirror 0
 DAMAGE
 "$out/set_dirty" chk-repairable.img
 "$out/set_dirty" chk-dangling.img

@@ -79,7 +79,9 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
                 res.lost_clusters);
         fprintf(out, "  \"found\": %" PRIu64 ", \"repairable\": %" PRIu64 ", \"repaired\": %" PRIu64
                 ", \"remaining\": %" PRIu64 ",\n", res.problems, res.repairable, res.repaired, res.remaining);
-        fprintf(out, "  \"entriesRemoved\": %" PRIu64 ",\n", res.entries_removed);
+        fprintf(out, "  \"entriesRemoved\": %" PRIu64 ", \"orphansRelinked\": %" PRIu64 ", \"orphansFound\": %" PRIu64
+                ", \"mirrorRepaired\": %s,\n", res.entries_removed, res.orphans_relinked, res.orphans_found,
+                res.mirror_repaired ? "true" : "false");
         fprintf(out, "  \"repairRan\": %s, \"dirtyCleared\": %s,\n", res.repair_ran ? "true" : "false",
                 res.dirty_cleared ? "true" : "false");
         fprintf(out, "  \"exitCode\": %d", code);
@@ -101,10 +103,12 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
     fprintf(out, "lost:         %" PRIu64 " records, %" PRIu64 " clusters (marked, unused: space only)\n",
             res.lost_records, res.lost_clusters);
     fprintf(out, "found:        %" PRIu64 " (%" PRIu64 " repairable)\n", res.problems, res.repairable);
-    if (repair)
-        fprintf(out, "repaired:     %" PRIu64 " bitmap bits, %" PRIu64 " folder entries removed%s\n", res.repaired,
-                res.entries_removed,
+    if (repair) {
+        fprintf(out, "repaired:     %" PRIu64 " bitmap bits, %" PRIu64 " folder entries removed, %" PRIu64
+                " orphans put back (%" PRIu64 " in found.000)%s%s\n", res.repaired, res.entries_removed,
+                res.orphans_relinked, res.orphans_found, res.mirror_repaired ? ", $MFTMirr rewritten" : "",
                 res.repair_ran || !res.problems ? "" : " (not run: some problems cannot be repaired here)");
+    }
     fprintf(out, "remaining:    %" PRIu64 "\n", res.remaining);
     if (res.dirty_cleared)
         fprintf(out, "dirty mark:   cleared\n");

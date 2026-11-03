@@ -1620,7 +1620,9 @@ static void test_check_kinds(void)
               ue_check_kind_name(cases[i].also));
         const ue_check_problem_t *p = &seen.first[cases[i].kind];
         CHECK(!strcmp(p->path, cases[i].path), "%s: path %s", cases[i].name, p->path);
-        CHECK(p->repairable == cases[i].repairable && r.repairable == (cases[i].repairable ? 1u : 0u),
+        // Orphans of whole records are repairable (D-99).
+        uint64_t orphans = cases[i].also == UE_CHK_ORPHAN ? r.by_kind[UE_CHK_ORPHAN] : 0;
+        CHECK(p->repairable == cases[i].repairable && r.repairable == (cases[i].repairable ? 1u : 0u) + orphans,
               "%s: repairable %d", cases[i].name, p->repairable);
         CHECK(r.state == UE_VOL_CLEAN && r.remaining == r.problems && !r.repair_ran, "%s: state", cases[i].name);
     }
@@ -1664,7 +1666,7 @@ static void test_check_repair(void)
           (unsigned long long)r.problems);
     unlink(path);
 
-    // One problem that is not a bitmap bit: nothing is written, the mark stays.
+    // One problem that cannot be repaired (shared clusters): nothing is written, the mark stays.
     snprintf(path, sizeof(path), "%s/x-chk-mix.img", dir);
     CHECK(copyfile(img("chk-mix"), path, NULL, COPYFILE_CLONE | COPYFILE_DATA) == 0, "copy");
     uint64_t before = file_sum(path);
@@ -1715,6 +1717,192 @@ static void test_check_repair(void)
     CHECK(check_path(path, UE_CHECK_REPAIR, &r, &seen) == 0 && r.problems == 0 && !r.repair_ran && r.dirty_cleared,
           "dirty, nothing found: cleared %d", r.dirty_cleared);
     CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CLEAN, "still %s", ue_vol_state_name(p.state));
+    unlink(path);
+}
+
+// A copy of fixture name in the image directory, for a repair.
+static int fixture_copy(const char *name, char *path, size_t cap)
+{
+    snprintf(path, cap, "%s/x-%s.img", dir, name);
+    return copyfile(img(name), path, NULL, COPYFILE_CLONE | COPYFILE_DATA);
+}
+
+// Opens image path read-only and checks that file `file` holds len bytes of stream seed.
+static int image_has_gen(const char *path, const char *file, uint64_t len, uint64_t seed)
+{
+    file_io_t f;
+    ue_engine_t *e;
+    ue_attr_t a;
+    int err = file_io_open(&f, path, false);
+
+    if (err)
+        return err;
+    if (!(err = ue_open(&f.io, UE_OPEN_RDONLY, &e, NULL))) {
+        if (!(err = ue_walk(e, file, &a)))
+            err = a.size != len ? EIO : check_gen(e, a.ino, 0, len, seed);
+        int cerr = ue_close(e);
+        err = err ? err : cerr;
+    }
+    file_io_close(&f);
+    return err;
+}
+
+// The names in folder `folder` of image path.
+static int image_names(const char *path, const char *folder, names_t *out)
+{
+    file_io_t f;
+    ue_engine_t *e;
+    ue_attr_t a;
+    int err = file_io_open(&f, path, false);
+
+    memset(out, 0, sizeof(*out));
+    if (err)
+        return err;
+    if (!(err = ue_open(&f.io, UE_OPEN_RDONLY, &e, NULL))) {
+        if (!(err = ue_walk(e, folder, &a)))
+            err = ue_readdir(e, a.ino, 0, collect_names, out, NULL);
+        int cerr = ue_close(e);
+        err = err ? err : cerr;
+    }
+    file_io_close(&f);
+    return err;
+}
+
+// Orphans (D-99): records whose folder entries are gone go back where their names say; the
+// ones whose folder is gone, or whose name another file took, go to /found.000.
+static void test_check_orphans(void)
+{
+    char path[2048];
+    ue_check_result_t r;
+    check_seen_t seen;
+    names_t names;
+
+    // Back in place: two files and a DOS+Win32 pair (one orphan, two entries).
+    CHECK(fixture_copy("chk-orphan", path, sizeof(path)) == 0, "copy");
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 3 && r.repairable == 3 &&
+          r.by_kind[UE_CHK_ORPHAN] == 3, "orphan: %llu problems, %llu repairable", (unsigned long long)r.problems,
+          (unsigned long long)r.repairable);
+    CHECK(seen.first[UE_CHK_ORPHAN].repairable && strstr(seen.first[UE_CHK_ORPHAN].path, "/"), "orphan path %s",
+          seen.first[UE_CHK_ORPHAN].path);
+    int err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.repair_ran && r.orphans_relinked == 3 && r.orphans_found == 0 && r.remaining == 0,
+          "orphan repair: %s, relinked %llu, found %llu, remaining %llu", strerror(err),
+          (unsigned long long)r.orphans_relinked, (unsigned long long)r.orphans_found, (unsigned long long)r.remaining);
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    CHECK(image_has_gen(path, "/d/a.bin", 20000, 1) == 0, "/d/a.bin after relink");
+    CHECK(image_has_gen(path, "/d/Orphan-Long-Name.txt", 10, 6) == 0, "the long name after relink");
+    CHECK(image_names(path, "/d", &names) == 0 && has_name(&names, "a.bin") && has_name(&names, "Orphan-Long-Name.txt") &&
+          !has_name(&names, "ORPHAN~1.TXT"), "/d lists %d names", names.n);
+    CHECK(image_names(path, "/", &names) == 0 && !has_name(&names, "found.000"), "found.000 made for nothing");
+    unlink(path);
+
+    // The folder is gone: its entry is removed (D-96) and the file goes to /found.000.
+    CHECK(fixture_copy("chk-orphan-gone", path, sizeof(path)) == 0, "copy");
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 2 && r.repairable == 2 &&
+          r.by_kind[UE_CHK_ORPHAN] == 1 && r.by_kind[UE_CHK_ENTRY_FREE_RECORD] == 1,
+          "gone: %llu problems, %llu repairable", (unsigned long long)r.problems, (unsigned long long)r.repairable);
+    uint64_t rec = seen.first[UE_CHK_ORPHAN].rec;
+    err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.entries_removed == 1 && r.orphans_relinked == 1 && r.orphans_found == 1 && r.remaining == 0,
+          "gone repair: %s, removed %llu, relinked %llu, found %llu, remaining %llu", strerror(err),
+          (unsigned long long)r.entries_removed, (unsigned long long)r.orphans_relinked,
+          (unsigned long long)r.orphans_found, (unsigned long long)r.remaining);
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    char moved[64];
+    snprintf(moved, sizeof(moved), "/found.000/file%llu", (unsigned long long)rec);
+    CHECK(image_has_gen(path, moved, 5000, 7) == 0, "%s after relink", moved);
+    CHECK(image_names(path, "/", &names) == 0 && !has_name(&names, "p"), "/p still listed");
+    unlink(path);
+
+    // The name is taken by a newer file: the orphan goes to /found.000, the newer file stays.
+    CHECK(fixture_copy("chk-orphan-taken", path, sizeof(path)) == 0, "copy");
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 1 && r.repairable == 1, "taken: %llu problems",
+          (unsigned long long)r.problems);
+    rec = seen.first[UE_CHK_ORPHAN].rec;
+    err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.orphans_relinked == 1 && r.orphans_found == 1 && r.remaining == 0,
+          "taken repair: %s, found %llu, remaining %llu", strerror(err), (unsigned long long)r.orphans_found,
+          (unsigned long long)r.remaining);
+    snprintf(moved, sizeof(moved), "/found.000/file%llu", (unsigned long long)rec);
+    CHECK(image_has_gen(path, moved, 20000, 2) == 0, "%s after relink", moved);
+    CHECK(image_has_gen(path, "/d/b.bin", 100, 8) == 0, "the newer /d/b.bin");
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    unlink(path);
+
+    // A damaged orphan is left alone, and blocks the repair: chk-seq's orphan has a reused
+    // sequence number but is whole, so it is repairable; chk-index's are behind an unreadable index.
+    CHECK(check_path(img("chk-index"), 0, &r, &seen) == 0 && r.problems > r.repairable, "chk-index repairable");
+}
+
+// $MFTMirr apart from $MFT (D-98): copied from $MFT when $MFT's records are whole, and the
+// rest of the volume is then checked and repaired in the same call.
+static void test_check_mirror(void)
+{
+    char path[2048];
+    ue_check_result_t r;
+    check_seen_t seen;
+    ue_probe_t p;
+
+    CHECK(fixture_copy("chk-mirror", path, sizeof(path)) == 0, "copy");
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CORRUPT, "mirror fixture: %s", ue_vol_state_name(p.state));
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 1 && r.repairable == 1 &&
+          r.by_kind[UE_CHK_MFT_MIRROR] == 1 && seen.first[UE_CHK_MFT_MIRROR].rec == 3,
+          "mirror: %llu problems, %llu repairable, record %llu", (unsigned long long)r.problems,
+          (unsigned long long)r.repairable, (unsigned long long)seen.first[UE_CHK_MFT_MIRROR].rec);
+    file_io_t f;
+    CHECK(file_io_open(&f, path, false) == 0, "open");
+    int err = ue_check(&f.io, UE_CHECK_REPAIR, NULL, NULL, &r);
+    file_io_close(&f);
+    CHECK(err == EROFS, "mirror repair on a read-only device: %s", strerror(err));
+    err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.mirror_repaired && r.repair_ran && r.state == UE_VOL_CORRUPT && r.problems == 1 &&
+          r.remaining == 0, "mirror repair: %s, repaired %d, %llu problems, remaining %llu", strerror(err),
+          r.mirror_repaired, (unsigned long long)r.problems, (unsigned long long)r.remaining);
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CLEAN, "after repair: %s", ue_vol_state_name(p.state));
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    unlink(path);
+
+    // A torn $MFT record: reported, not repairable, nothing written.
+    CHECK(fixture_copy("chk-mirror-torn", path, sizeof(path)) == 0, "copy");
+    uint64_t before = file_sum(path);
+    CHECK(check_path(path, UE_CHECK_REPAIR, &r, &seen) == 0 && r.problems == 1 && r.repairable == 0 &&
+          r.by_kind[UE_CHK_MFT_MIRROR] == 1 && !r.mirror_repaired && !r.repair_ran && r.remaining == 1,
+          "torn: %llu problems, %llu repairable, repaired %d", (unsigned long long)r.problems,
+          (unsigned long long)r.repairable, r.mirror_repaired);
+    CHECK(strstr(seen.first[UE_CHK_MFT_MIRROR].detail, "torn"), "detail: %s", seen.first[UE_CHK_MFT_MIRROR].detail);
+    CHECK(file_sum(path) == before, "the torn image was written to");
+    unlink(path);
+}
+
+// All three at once: $MFTMirr apart, an orphan, a folder entry for a free record and an
+// unmarked record. One check --repair handles everything.
+static void test_check_combined(void)
+{
+    char path[2048];
+    ue_check_result_t r;
+    check_seen_t seen;
+    ue_probe_t p;
+
+    CHECK(fixture_copy("chk-combined", path, sizeof(path)) == 0, "copy");
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 1 && r.by_kind[UE_CHK_MFT_MIRROR] == 1,
+          "combined, before: %llu problems", (unsigned long long)r.problems);
+    int err = check_path(path, UE_CHECK_REPAIR, &r, &seen);
+    CHECK(err == 0 && r.mirror_repaired && r.by_kind[UE_CHK_MFT_MIRROR] == 1 && r.by_kind[UE_CHK_ORPHAN] == 1 &&
+          r.by_kind[UE_CHK_ENTRY_FREE_RECORD] == 1 && r.by_kind[UE_CHK_RECORD_UNMARKED] == 1 && r.problems == 4 &&
+          r.repairable == 4 && r.entries_removed == 1 && r.orphans_relinked == 1 && r.orphans_found == 0 &&
+          r.repaired >= 1 && r.remaining == 0,
+          "combined repair: %s, %llu problems, %llu repairable, removed %llu, relinked %llu, remaining %llu",
+          strerror(err), (unsigned long long)r.problems, (unsigned long long)r.repairable,
+          (unsigned long long)r.entries_removed, (unsigned long long)r.orphans_relinked,
+          (unsigned long long)r.remaining);
+    CHECK(probe_file(path, &p) == 0 && p.state == UE_VOL_CLEAN, "after repair: %s", ue_vol_state_name(p.state));
+    CHECK(check_path(path, 0, &r, &seen) == 0 && r.problems == 0, "%llu problems after repair",
+          (unsigned long long)r.problems);
+    CHECK(image_has_gen(path, "/d/c.bin", 20000, 3) == 0, "/d/c.bin after relink");
     unlink(path);
 }
 
@@ -1789,9 +1977,9 @@ static void test_check_cut_copy(void)
     int fd = open(img("small"), O_RDONLY);
     CHECK(fd >= 0, "open small");
     d.size = (uint64_t)lseek(fd, 0, SEEK_END);
-    uint8_t *orig = malloc(d.size);
+    uint8_t *orig = malloc(d.size), *orig_cut = malloc(d.size);
     d.mem = malloc(d.size);
-    CHECK(orig && d.mem && pread(fd, orig, d.size, 0) == (ssize_t)d.size, "read small");
+    CHECK(orig && orig_cut && d.mem && pread(fd, orig, d.size, 0) == (ssize_t)d.size, "read small");
     close(fd);
 
     memcpy(d.mem, orig, d.size);
@@ -1826,6 +2014,17 @@ static void test_check_cut_copy(void)
         if (r.problems)
             damaged++;
         if (r.problems && r.problems == r.repairable) {
+            memcpy(orig_cut, d.mem, d.size);
+            if (ue_check(&io, UE_CHECK_REPAIR, NULL, NULL, &r2) || r2.remaining) {   // kept for a look
+                char path[2048];
+                snprintf(path, sizeof(path), "%s/x-cut-repair-%ld.img", dir, n);
+                int out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (out >= 0 && write(out, orig_cut, d.size) != (ssize_t)d.size)
+                    fprintf(stderr, "  cannot save %s\n", path);
+                if (out >= 0)
+                    close(out);
+            }
+            memcpy(d.mem, orig_cut, d.size);
             CHECK(ue_check(&io, UE_CHECK_REPAIR, NULL, NULL, &r) == 0 && r.remaining == 0 && r.dirty_cleared,
                   "cut at %ld: repair left %llu", n, (unsigned long long)r.remaining);
             CHECK(ue_check(&io, 0, NULL, NULL, &r2) == 0 && r2.problems == 0 && r2.state == UE_VOL_CLEAN,
@@ -1833,9 +2032,10 @@ static void test_check_cut_copy(void)
             repaired++;
         }
     }
-    printf("     %d cuts of %ld writes: %d damaged (%d $MFTMirr), %d repaired by setting bitmap bits\n", cuts, total,
+    printf("     %d cuts of %ld writes: %d damaged (%d $MFTMirr), %d repaired by Check Disk\n", cuts, total,
            damaged, mirror, repaired);
     CHECK(damaged > 0, "no cut left damage the check found");
+    free(orig_cut);
     free(orig);
     free(d.mem);
 }
@@ -1896,22 +2096,6 @@ out:
     return d->writes;
 }
 
-// Copies $MFT's first records over $MFTMirr in an image in memory, as chkdsk would, so a
-// cut that left the two apart can be checked for everything else.
-static void sync_mirror(cutdev_t *d)
-{
-    const uint8_t *bs = d->mem;
-    uint64_t cluster = (uint64_t)(bs[11] | bs[12] << 8) * bs[13];
-    int8_t cpr = (int8_t)bs[0x40];
-    uint64_t rec = cpr > 0 ? (uint64_t)cpr * cluster : 1ull << -cpr;
-    uint64_t mft = 0, mirr = 0;
-    for (int k = 7; k >= 0; k--) {
-        mft = mft << 8 | bs[0x30 + k];
-        mirr = mirr << 8 | bs[0x38 + k];
-    }
-    memcpy(d->mem + mirr * cluster, d->mem + mft * cluster, 4 * rec);
-}
-
 static void test_cut_order(void)
 {
     cutdev_t d = { .deletes = true };
@@ -1930,7 +2114,10 @@ static void test_cut_order(void)
     static const ue_check_kind_t bad[] = { UE_CHK_ENTRY_FREE_RECORD, UE_CHK_ENTRY_WRONG_SEQ, UE_CHK_INDEX_UNREADABLE,
                                            UE_CHK_BAD_RECORD, UE_CHK_BAD_RUNLIST, UE_CHK_CLUSTERS_SHARED };
     uint64_t kinds[UE_CHK_KINDS] = { 0 };
-    int cuts = 0, mirror = 0, broken = 0;
+    int cuts = 0, mirror = 0, broken = 0, repaired = 0;
+    uint64_t relinked = 0, to_found = 0;
+    uint8_t *pre = malloc(d.size);    // the cut image, before its repair
+    CHECK(pre, "alloc");
     long step = total / 400 + 1;
     for (long n = 1; n < total; n += step, cuts++) {
         memcpy(d.mem, orig, d.size);
@@ -1939,16 +2126,25 @@ static void test_cut_order(void)
         d.limit = -1;
         ue_io_t io = { .ctx = &d, .pread = cut_pread, .pwrite = cut_pwrite, .size_bytes = d.size, .block_size = 512,
                        .writable = true };
-        ue_check_result_t r;
+        ue_check_result_t r, r2;
         int err = ue_check(&io, 0, NULL, NULL, &r);
         CHECK(err == 0, "cut at %ld of %ld: check failed: %s", n, total, strerror(err));
-        if (r.state == UE_VOL_CORRUPT) {   // the rest is checked as chkdsk would leave it
+        if (r.state == UE_VOL_CORRUPT) {
             CHECK(r.by_kind[UE_CHK_MFT_MIRROR] == 1 && r.problems == 1, "cut at %ld: corrupt, not the mirror", n);
             mirror++;
-            sync_mirror(&d);
-            CHECK(ue_check(&io, 0, NULL, NULL, &r) == 0 && r.state != UE_VOL_CORRUPT,
-                  "cut at %ld: still corrupt with $MFTMirr copied", n);
         }
+        // Every cut is repaired by Check Disk itself ($MFTMirr D-98, orphans D-99); the repair's
+        // result counts everything, the rest of a corrupt volume included.
+        memcpy(pre, d.mem, d.size);
+        err = ue_check(&io, UE_CHECK_REPAIR, NULL, NULL, &r);
+        CHECK(err == 0 && r.remaining == 0, "cut at %ld: repair: %s, %llu left", n, strerror(err),
+              (unsigned long long)r.remaining);
+        CHECK(ue_check(&io, 0, NULL, NULL, &r2) == 0 && r2.problems == 0 && r2.state == UE_VOL_CLEAN,
+              "cut at %ld: %llu problems after repair, %s", n, (unsigned long long)r2.problems,
+              ue_vol_state_name(r2.state));
+        relinked += r.orphans_relinked;
+        to_found += r.orphans_found;
+        repaired += r.repair_ran;
         bool worse = false;
         for (int k = 1; k < UE_CHK_KINDS; k++)
             kinds[k] += r.by_kind[k];
@@ -1958,12 +2154,14 @@ static void test_cut_order(void)
             char path[2048];
             snprintf(path, sizeof(path), "%s/x-order-%ld.img", dir, n);
             int out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (out >= 0 && write(out, d.mem, d.size) != (ssize_t)d.size)
+            if (out >= 0 && write(out, pre, d.size) != (ssize_t)d.size)
                 fprintf(stderr, "  cannot save %s\n", path);
             if (out >= 0)
                 close(out);
         }
     }
+    printf("     %d cuts repaired by Check Disk (%d ran a repair): %llu orphans put back, %llu of them in "
+           "found.000\n", cuts, repaired, (unsigned long long)relinked, (unsigned long long)to_found);
     printf("     %d cuts of %ld writes: %d with entries or indexes broken, %d $MFTMirr; found: "
            "%llu free-record entries, %llu wrong-seq entries, %llu unreadable indexes, %llu bad records, "
            "%llu orphans, %llu unmarked records, %llu unmarked clusters\n",
@@ -1972,6 +2170,7 @@ static void test_cut_order(void)
            (unsigned long long)kinds[UE_CHK_BAD_RECORD], (unsigned long long)kinds[UE_CHK_ORPHAN],
            (unsigned long long)kinds[UE_CHK_RECORD_UNMARKED], (unsigned long long)kinds[UE_CHK_CLUSTERS_UNMARKED]);
     CHECK(broken == 0, "%d of %d cuts left an entry or index broken", broken, cuts);
+    free(pre);
     free(orig);
     free(d.mem);
 }
@@ -2103,6 +2302,9 @@ int main(int argc, char **argv)
     RUN(test_check_clean);
     RUN(test_check_kinds);
     RUN(test_check_repair);
+    RUN(test_check_orphans);
+    RUN(test_check_mirror);
+    RUN(test_check_combined);
     RUN(test_check_cut_copy);
     RUN(test_cut_order);
     RUN(test_cache_model);

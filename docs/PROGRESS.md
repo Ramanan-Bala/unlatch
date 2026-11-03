@@ -1008,15 +1008,39 @@ xcodebuild -scheme Unlatch build
 
 `Scripts/test-real-disk.sh SANDISK --cut --only pull` on the freshly formatted SanDisk, app running: PASSED. Pulled mid-copy; the daemon exited at once; on replug the volume was marked, the app checked it ("0 found, 0 left"), cleared the mark and mounted it read-write; the file written before the pull was intact. A check afterwards: no problems, 2,493 clusters marked used but unowned (space only, the cut copy's allocations; `check --repair` frees them). On beta.12 the same pull left a folder entry pointing at an unwritten record.
 
+### Follow-up: Check Disk repairs $MFTMirr and relinks orphans (D-98, D-99) — done 2026-11-03
+
+After D-97 the two things a cut still left, and that still sent a disk to Windows, were a `$MFTMirr` behind `$MFT` (libntfs-3g refuses the volume) and orphans (whole new records no folder lists yet). Check Disk now repairs both, in one `check --repair`.
+
+- `Engine/src/check.c`: `mirror_examine` (replaces `mirror_differs`) finds the first differing system record and decides whether `$MFT`'s first records may be copied raw over `$MFTMirr` (every one whole: FILE magic, fixups, records 0–3 in use, `ntfs_mft_record_check` for those in use, and records 0/1 put `$MFT`/`$MFTMirr` where the boot sector does). `ue_check` writes them with `io->pwrite`, flushes, probes again and runs `check_opened` (the former body: check, then repair) on the volume that now opens. A torn `$MFT` record refuses the repair with the reason and writes nothing.
+- Orphans: pass 1 marks `flawed` records (damaged, bad runlist, shared clusters, and the first owner of shared clusters); orphans of other non-system records are repairable and kept. `chk_repair` relinks them after the bitmaps and entry removals: `relink` reopens the record, checks it is still an orphan, and either adds its own `$FILE_NAME`s back to their folders (`name_free`: folder in use, sequence matches, reachable from the root, name free case-insensitively; `add_entry` with `ntfs_index_add_filename`) or replaces its names with `file<rec>`/`dir<rec>` in `/found.000` (`found_dir`, `move_to_found` with `ntfs_link`). In-place relinks run in passes so a folder put back makes its orphaned children reachable.
+- New check: `index_bad_child` follows each folder index's child pointers (root and blocks in use). The first run of the new repair on `test_check_cut_copy`'s cut at 245 of 248 failed EIO: `/copy/dir3`'s node block (written in D-97's phase 4) pointed at child VCN 8 while the record (phase 5) still had 8 blocks. `ntfs_readdir` did not notice; every lookup past the node's last name failed. It is now `index_unreadable` (not repairable). See carry-overs.
+- `ue_check_result_t`: `orphans_relinked`, `orphans_found`, `mirror_repaired`. `unlatch-engine check` prints them; JSON `orphansRelinked`, `orphansFound`, `mirrorRepaired`. `CheckReport` has them (optional), `describe`/advice explain the repairs and no longer mention chkdsk for them. `unlatch check` prints them; `unlatch mount` of a corrupt volume suggests `unlatch check --repair`. The app's alerts use the verdict, so a mirror- or orphan-only disk gets **Repair** instead of "needs Windows". Docs: cli.md, read-only.md.
+- `mkfixture`: `orphan PATH`, `stale-mirror N`, `tear-mft N` (the last two patch the image after the unmount, which would rewrite records 0–3). New images: `chk-orphan` (two files and a DOS+Win32 pair), `chk-orphan-gone` (folder freed), `chk-orphan-taken` (name reused), `chk-mirror`, `chk-mirror-torn`, `chk-combined` (mirror + orphan + dangling entry + unmarked record). `chk-mix` now uses shared clusters, since its old orphan is repairable.
+- Tests: `test_check_orphans`, `test_check_mirror` (EROFS on a read-only device, torn refusal leaves the image byte-identical), `test_check_combined`. `test_cut_order` no longer copies the mirror by hand: every cut gets `ue_check(UE_CHECK_REPAIR)` and must end with 0 left and a clean probe. `sync_mirror` is gone. `test_check_cut_copy` saves a cut whose repair leaves problems as `x-cut-repair-N.img`.
+
+`test_cut_order`: **255 of 255 cuts fully repaired** (0 problems left, state clean), 24 of them `$MFTMirr`; 426 orphans relinked, **0** to found.000 (1 before the multi-pass relink); 72 unmarked records, 8 unmarked clusters; 0 entries or indexes broken. `test_check_cut_copy`: 23 cuts, 7 damaged, 6 repaired; the 7th is the index-growth cut above (not repairable, left for chkdsk).
+
+```sh
+UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh     # PASSED: test_check_orphans/mirror/combined, test_cut_order 255/255, leaks
+Scripts/test-golden.sh                        # 609 checks, 0 failed; unlatch-engine check finds 0 on all 8 golden images
+Scripts/fsx-soak.sh --seeds 300               # 300 of 300
+swift test --package-path Shared              # 19 tests
+swift test --package-path CLI                 # 5 tests
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+```
+
+Not verified: the app's alerts (not clicked through), `UNLATCH_INTEGRATION=1` Swift tests, a real disk, and Windows chkdsk on a repaired image (another session runs that). A hibernated volume whose mirror differs would get the mirror copied before the hibernation check refuses the rest (D-98).
+
 ## Carry-overs
 
 - **interrupt.sh reports "passed" when its mount fails (2026-11-03):** `scenario` returns 1 after "FAIL: mount" and the summary still says passed. It happens when the installed app auto-mounts the attached image first.
 
 - **Automatic check runs three passes (D-95, 2026-11-03):** the app checks read-only, then, when nothing was found, `check --repair`, which checks read-only again and once more read-write before clearing the mark. On a large disk that triples the wait. A check flag that clears the mark when the first pass finds nothing would make it one pass plus the read-write one.
 
-- **$MFTMirr after a cut-off write-back (D-93, 2026-11-02; narrowed by D-97):** since D-97, `$MFTMirr` is written right after `$MFT`'s first page, so only a cut at that one transfer boundary leaves them apart (24 of 255 cuts in `test_cut_order`, down from 126 of 230). Records 0–3 change at most write-backs while `$MFT` grows (its initialized size). libntfs-3g still refuses such a volume, even read-only. The remaining option is to let read-only opens skip the comparison (a patch in `Engine/vendor/patches/`); that needs a decision.
+- **Index growth is not ordered (D-97, found by D-99's repair, 2026-11-03):** when a folder's index gains a block, the new block (phase 2) and the node pointing at it (phase 4) can land while the record that grows `$INDEX_ALLOCATION` and its `$I30` bitmap (phase 5) does not. Check Disk now reports it (`index_unreadable`, not repairable); lookups past the node fail EIO and the leaf's files are orphans. Fix in `bcache.c`: write such a folder record before the index blocks that point at the new VCN (for example as a "new record" in phase 3). 1 of 23 cuts in `test_check_cut_copy`; 0 of 255 in `test_cut_order`. Notes for the sweep session in the shared notes folder.
 
-- **Orphans after a cut-off write-back (D-97):** since the ordered write-back, a cut leaves new records that no folder lists yet (orphans), not entries pointing at unwritten records. Check Disk reports orphans as problems it cannot repair, so such a disk still goes to chkdsk. Check Disk could offer to remove orphans it can tell are new (or relink them into a "found" folder). Deleting from a folder whose entries are in its index root can still free the record in the same phase as the entry removal (both MFT pages, in disk order).
+- **Deletes in an index root (D-97):** deleting from a folder whose entries are in its index root can still free the record in the same phase as the entry removal (both MFT pages, in disk order).
 
 - **Audit item 10, lock files (2026-11-02):** the D-81 locks are in a world-writable folder, so another local user can hold a volume's lock, and two disks with one serial (a clone) cannot both be mounted read-write. Not changed: keying by device name would let an image and its attached device both be mounted read-write (what D-81 prevents), and a root-owned folder needs the helper to create the lock files (a new helper command). Decide whether shared Macs matter enough for that.
 
