@@ -940,6 +940,18 @@ Negative check: with `ue_mark_busy` taken out of `ue_create`, the tests fail wit
 
 Owner's test on a real disk with the dev app (2026-11-03): plugged in, nothing done, pulled out, plugged in again: mounted read-write at once. Pulled out mid-copy, plugged in again: checked automatically, then read-write. Not run: `Scripts/test-real-disk.sh`.
 
+### Follow-up: interrupt.sh never cut off a copy; Check Disk false orphan — done 2026-11-03
+
+- `Tests/Fuse/interrupt.sh`: `pid=$(start_copy)` waited for the backgrounded copy, which still held the pipe, so the kill always came after the copy had ended (since Step 17). Under D-86 the volume stayed dirty anyway; under D-95 it settles clean, so the test failed. The loop's output now goes to /dev/null and it copies up to 100 times: the kill lands about 3,000 files in, the volume probes dirty, remounts read-only, Check Disk finds nothing and clears the mark.
+- `Engine/src/check.c`: extent records were told from base records by `MREF_LE(base_mft_record)`, the record number alone, so `$MFT`'s own extents (records 16-23, base reference `MREF(0, 1)`), which ntfs-3g writes when `$MFT` fragments on a nearly full volume, counted as nameless files: "orphan /$MFT: record 16". `is_extent` tests the whole reference. Found by filling a 1 GB image (169 copies of the ntfs-3g tree), waiting, then killing the daemon; the image now checks clean.
+
+```sh
+Tests/Fuse/interrupt.sh kill        # dirty after the kill, read-only remount, check clean, read-write after
+# 1 GB image filled until ENOSPC, 3 s idle, SIGKILL: unlatch-engine check -> found 0 (was: orphan record 16)
+```
+
+No regression image yet for the `$MFT` extent case: it needs a volume filled until `$MFT` fragments (~1 GB here); a smaller fixture that forces it is a carry-over.
+
 ## Carry-overs
 
 - **Automatic check runs three passes (D-95, 2026-11-03):** the app checks read-only, then, when nothing was found, `check --repair`, which checks read-only again and once more read-write before clearing the mark. On a large disk that triples the wait. A check flag that clears the mark when the first pass finds nothing would make it one pass plus the read-write one.

@@ -289,10 +289,18 @@ static int chk_init(chk_t *c, ue_engine_t *e, ue_check_fn fn, void *ctx, ue_chec
     return 0;
 }
 
+// An extent record belongs to its base record. Test the whole reference: $MFT's own extents
+// (records 16-23, written when $MFT fragments on a nearly full volume) point at record 0, and
+// the record number alone, 0, read as "no base" made them nameless orphans.
+static bool is_extent(const MFT_RECORD *m)
+{
+    return m->base_mft_record != const_cpu_to_le64(0);
+}
+
 // Pass 1 for one in-use record that passed ntfs_mft_record_check: its names and clusters.
 static void scan_runs(chk_t *c, uint64_t rec, MFT_RECORD *m)
 {
-    uint64_t owner = MREF_LE(m->base_mft_record) ? MREF_LE(m->base_mft_record) : rec;
+    uint64_t owner = is_extent(m) ? MREF_LE(m->base_mft_record) : rec;
     uint64_t um_first = 0, um_count = 0, sh_first = 0, sh_count = 0;
     bool um_fixable = true;
 
@@ -367,7 +375,7 @@ static void pass1(chk_t *c, uint64_t rec, MFT_RECORD *m, int rerr)
     mark(c->inuse, rec);
     c->seq[rec] = le16_to_cpu(m->sequence_number);
     c->res->records_in_use++;
-    if (!MREF_LE(m->base_mft_record))
+    if (!is_extent(m))
         mark(c->base, rec);
     if (!marked)
         report(c, UE_CHK_RECORD_UNMARKED, rec < c->mftbmp_bits, rec, 0, 0, 0, NULL,
@@ -389,7 +397,7 @@ static void pass2(chk_t *c, uint64_t rec, MFT_RECORD *m, int rerr)
 
     if (rerr || !(m->flags & MFT_RECORD_IN_USE) || ntfs_mft_record_check(c->vol, rec, m))
         return;
-    owner = MREF_LE(m->base_mft_record) ? MREF_LE(m->base_mft_record) : rec;
+    owner = is_extent(m) ? MREF_LE(m->base_mft_record) : rec;
     for (ATTR_RECORD *a = next_attr(c, m, NULL); a; a = next_attr(c, m, a)) {
         runlist_element *rl = a->non_resident ? ntfs_mapping_pairs_decompress(c->vol, a, NULL) : NULL;
         for (runlist_element *r = rl; r && r->length; r++) {

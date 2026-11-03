@@ -78,8 +78,11 @@ check_after() {         # scenario, disk; the image is attached as disk, nothing
     return $rc
 }
 
-start_copy() {          # copies the source tree repeatedly in the background; prints its pid
-    ( for i in 1 2 3 4 5 6; do cp -R "$src" "$mnt/copy/$i" 2>/dev/null || exit 0; done ) &
+start_copy() {          # copies the source tree until it is cut off; prints its pid
+    # The loop's output goes to /dev/null: run as $(start_copy), a loop still holding the pipe
+    # made the caller wait for the whole copy, so the kill always landed on an idle volume.
+    # 100 copies (~600 MB, less than the 1 GB image) keep it writing well past the kill.
+    ( for i in $(seq 1 100); do cp -R "$src" "$mnt/copy/$i" 2>/dev/null || exit 0; done ) > /dev/null 2>&1 &
     echo $!
 }
 
