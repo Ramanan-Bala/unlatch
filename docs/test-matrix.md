@@ -83,6 +83,7 @@ SanDisk Cruzer Blade 16 GB, USB 2.0 (raw: 33 MB/s read, 6.7 MB/s write), GPT, NT
 | `chkdsk` of a full rw-suite volume written through the page cache | no problems | "found no problems" (`Tests/oracle/rw-suite-step17.chkdsk.txt`) | 2026-11-01 | step 17 |
 | Symlinks made on the Mac, opened on Windows (`Tests/oracle/windows-check.ps1`) | on-volume targets followed; absolute ones not | `sym`, `cp/up` (through `..`) and `dirlink` (a directory) are SymbolicLink (tag 0xA000000C) and Windows reads through them; `abslink` stays a WSL reparse point | 2026-11-01 | step 17 |
 | Streams, hard links, hidden flag, git clone | as in Step 16 | all as before (409 clone files, 4 streams, 2 links, Hidden) | 2026-11-01 | step 17 |
+| Check Disk vs chkdsk (D-101): 140 cut-off images (`test_check_cut_copy` every 22nd write, 12; `test_cut_order` every 4th write, 128) and the 10 `chk-*` fixtures, each after `unlatch-engine check --repair`, then read-only `chkdsk` and `chkdsk /f` on a throwaway copy (`Scripts/chkdsk-vm.sh --scan` / `--detail`) | every image Check Disk leaves with no problems is clean for chkdsk | **fails: 39 of 100 are clean.** The other 61 have bits set for free space in `$MFT`'s bitmap and/or `$Bitmap` (60; Check Disk counts this as lost space, not as a problem, and does not see `$MFT` bitmap bits past `$MFT`'s end) or a missing security descriptor (1, `order-9`). Where Check Disk left problems (50), chkdsk found damage on every one: orphans relinked to their folders (31 cuts), `$MFTMirr` (13, chkdsk read-only: "Detected errors in the MFT mirror"), and the 6 unrepairable fixtures. Every cut Check Disk repaired (4) and 3 of 4 repaired fixtures are clean; `chk-dangling` keeps the lost clusters of its freed records. Carry-overs in PROGRESS | 2026-11-03 | 1.0.0-beta.13 |
 
 ## System integration
 
@@ -110,4 +111,4 @@ SanDisk Cruzer Blade 16 GB, USB 2.0 (raw: 33 MB/s read, 6.7 MB/s write), GPT, NT
 
 ## Open items
 
-No open data-loss or corruption issue. Open, waiting on hardware or the owner: USB pull mid-copy (S2), sleep and wake (S2), 50 GB file and 1M-file tree on a real disk (S3), 24-hour soak (S3), Windows-made Unicode names (S3, with the golden images).
+No open data-loss or corruption issue. Open, waiting on hardware or the owner: USB pull mid-copy (S2), sleep and wake (S2), 50 GB file and 1M-file tree on a real disk (S3), 24-hour soak (S3), Windows-made Unicode names (S3, with the golden images). Check Disk does not yet leave a cut-off disk clean for Windows chkdsk (D-101: lost space, security descriptors).
