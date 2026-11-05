@@ -4,9 +4,11 @@ Notable changes per release. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.0.0-beta.14] - 2026-11-05
+
 ### Changed
 - **A disk pulled out mid-write no longer leaves folders that cannot be opened.** In large folders, after renames, and on files with many tags, streams or hard links, a cut-off could leave a folder Unlatch could not read, or a new folder without its permissions. Unlatch now writes the parts of each change in an order that rules these out, with one more wait for the disk per write-back. What a cut-off can still leave is what Check Disk repairs (below).
-- **Check Disk now repairs the last things a disk pulled out mid-copy leaves, without Windows:**
+- **Check Disk now repairs most of what a disk pulled out mid-copy leaves, without Windows:**
   - **Files no folder lists** (a new file whose folder was not written yet): Unlatch puts them back in their folder. If that folder is gone or another file now has the name, it puts them in a `found.000` folder at the top of the disk, as Windows' chkdsk does. Their contents are not touched.
   - **A disk that cannot be opened because the backup copy of its file table no longer matches the table** ("NTFS metadata is damaged"): Unlatch brings the backup copy up to date from the table, then checks and repairs the rest in the same run. It does this only when the table itself is whole.
   - **Space marked as used that no file uses:** Unlatch frees it once nothing else is wrong, as chkdsk does. Before, it stayed marked until Windows checked the disk.
