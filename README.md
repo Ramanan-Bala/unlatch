@@ -121,13 +121,13 @@ Always eject first. But cables get pulled and Macs crash, so here is what happen
 1. **It marks the disk "in use" only while writing**, and clears the mark about 2 seconds after the last change. A disk pulled out while idle is fine and mounts normally next time.
 2. **It writes the card before the folder line that points at it.** Pulled at the wrong moment, a disk used to end up with a folder listing a file whose card was never written (a door that opens onto nothing). Now the worst case is the opposite: a card no folder lists yet. In tests that cut the writing off at every possible point, broken folder entries went from 60 to 0. The cost is about 16% slower when writing many small files.
 3. **When the disk comes back, Unlatch checks it.** If it finds nothing wrong it clears the mark and mounts read-write. Otherwise the disk mounts read-only and Unlatch asks you:
-   - **Check Disk and Enable Read-Write** repairs what it safely can (space maps, folder entries that lead to no file) and enables writing if nothing is left.
+   - **Check Disk and Enable Read-Write** repairs what it safely can (space maps, folder entries that lead to no file, files no folder lists, NTFS's backup copy of its first records, permissions that were not written, part of a folder's index marked free while in use) and enables writing if nothing is left.
    - **Enable Read-Write Without Checking** clears the mark without repairing anything.
    - **Keep Read-Only** lets you copy your files off first.
 
 **What you can lose:** the file or files being copied at that moment. Everything that was already on the disk stays readable.
 
-**When you still need Windows (or a reformat):** Check Disk does not yet remove file records that no folder lists, and in about one cut-off in ten NTFS's backup copy of its first records is left out of step, which stops the disk from opening at all until `chkdsk` runs. In both cases Unlatch says so; copy what you need, then run `chkdsk X: /f` on any Windows PC (or in a Windows virtual machine), or reformat the disk. Details: [docs/read-only.md](docs/read-only.md).
+**When you still need Windows (or a reformat):** rarely. Check Disk now repairs what most cut-offs leave, and Windows' `chkdsk` agrees with it on every repaired test image. It cannot yet repair a damaged or unreadable file record, two files claiming the same space, or a folder index it cannot read; it reports those, and the disk stays read-only. It also does not yet notice when a cut-off in the middle of a large folder's change leaves a name listed that cannot be opened. In those cases copy what you need, then run `chkdsk X: /f` on any Windows PC (or in a Windows virtual machine), or reformat the disk. Details: [docs/read-only.md](docs/read-only.md).
 
 When something goes wrong: [docs/troubleshooting.md](docs/troubleshooting.md). Security issues: [SECURITY.md](SECURITY.md).
 
@@ -240,7 +240,7 @@ The design and every decision behind it are in [docs/Unlatch-Implementation-Plan
 ## After 1.0
 
 - A native FSKit module, once the project can sign one (needs a paid Apple Developer membership), replacing macFUSE.
-- Check Disk repairs for the remaining cut-off damage (unlisted records, `$MFTMirr`), and a format command (mkntfs).
+- Check Disk: rebuild a folder's index after a cut-off, as `chkdsk` does, and a format command (mkntfs).
 - Engine replacement behind `unlatch_engine.h` if a better NTFS implementation becomes available.
 - Localization.
 

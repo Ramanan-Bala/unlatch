@@ -2555,20 +2555,21 @@ static bool cut_kind_ok(int k)
 {
     return k == UE_CHK_RECORD_UNMARKED || k == UE_CHK_CLUSTERS_UNMARKED || k == UE_CHK_ENTRY_FREE_RECORD ||
            k == UE_CHK_ENTRY_WRONG_SEQ || k == UE_CHK_ENTRY_WRONG_PARENT || k == UE_CHK_ORPHAN ||
-           k == UE_CHK_MFT_MIRROR;
+           k == UE_CHK_MFT_MIRROR || k == UE_CHK_INDEX_BLOCK_UNMARKED;
 }
 
 // Cuts the workload off at sampled device writes (every write with UNLATCH_CUT_FULL=1) and
-// checks each result. Prints, per kind, how many cuts found it; fails on any finding.
+// checks each result, then repairs it with Check Disk, which must leave nothing. Prints, per
+// kind, how many cuts found it; fails on any finding.
 static void cut_sweep_run(const char *tag, cut_run_fn run, cut_work_fn work)
 {
     cutdev_t d = { 0 };
     int fd = open(img("small"), O_RDONLY);
     CHECK(fd >= 0, "open small");
     d.size = (uint64_t)lseek(fd, 0, SEEK_END);
-    uint8_t *orig = malloc(d.size);
+    uint8_t *orig = malloc(d.size), *as_cut = malloc(d.size);
     d.mem = malloc(d.size);
-    CHECK(orig && d.mem && pread(fd, orig, d.size, 0) == (ssize_t)d.size, "read small");
+    CHECK(orig && as_cut && d.mem && pread(fd, orig, d.size, 0) == (ssize_t)d.size, "read small");
     close(fd);
 
     memcpy(d.mem, orig, d.size);
@@ -2587,7 +2588,8 @@ static void cut_sweep_run(const char *tag, cut_run_fn run, cut_work_fn work)
     const char *full = getenv("UNLATCH_CUT_FULL");
     long step = full && *full == '1' ? 1 : total / 150 + 1;
     int cuts = 0, findings = 0, mirror = 0, walked = 0, open_bad = 0;
-    int w_unreach = 0, w_dup = 0, w_extra = 0;
+    int w_unreach = 0, w_dup = 0, w_extra = 0, repaired = 0;
+    uint64_t ib_marked = 0;
     int with[UE_CHK_KINDS] = { 0 };
     long first_bad = -1;
     for (long k = 0;; k++, cuts++) {
@@ -2634,6 +2636,22 @@ static void cut_sweep_run(const char *tag, cut_run_fn run, cut_work_fn work)
                     printf("     %s: cut %ld: walk: %s (%ld duplicates)\n", tag, n, w.what, w.duplicate);
             }
         }
+        if (!bad) {                   // Check Disk repairs the cut, and leaves nothing (D-98..D-103)
+            ue_check_result_t rr, r2;
+            memcpy(as_cut, d.mem, d.size);
+            int rerr = ue_check(&io, UE_CHECK_REPAIR, NULL, NULL, &rr);
+            if (!rerr)
+                rerr = ue_check(&io, 0, NULL, NULL, &r2);
+            if (rerr || rr.remaining || r2.problems || r2.lost_records || r2.lost_clusters || r2.state != UE_VOL_CLEAN) {
+                bad = true;
+                snprintf(what, sizeof(what), "repair: %s, %llu left, then %llu problems (%s)",
+                         rerr ? strerror(rerr) : "ok", (unsigned long long)rr.remaining,
+                         (unsigned long long)r2.problems, ue_vol_state_name(r2.state));
+            }
+            repaired += rr.repair_ran;
+            ib_marked += rr.index_blocks_marked;
+            memcpy(d.mem, as_cut, d.size);   // what is kept below is the cut as it was
+        }
         if (bad && getenv("UNLATCH_CUT_VERBOSE"))
             printf("     %s: cut %ld: %s\n", tag, n, what);
         const char *exec = getenv("UNLATCH_CUT_EXEC");   // a command run on every cut's image
@@ -2668,9 +2686,10 @@ static void cut_sweep_run(const char *tag, cut_run_fn run, cut_work_fn work)
     for (int q = 1; q < UE_CHK_KINDS; q++)
         if (with[q])
             printf(" %s %d,", ue_check_kind_name((ue_check_kind_t)q), with[q]);
-    printf(" walked %d: unreachable %d, duplicates %d, extra entries %d; not opened %d\n", walked, w_unreach, w_dup,
-           w_extra, open_bad);
+    printf(" walked %d: unreachable %d, duplicates %d, extra entries %d; not opened %d; repaired %d (%llu index "
+           "blocks marked)\n", walked, w_unreach, w_dup, w_extra, open_bad, repaired, (unsigned long long)ib_marked);
     CHECK(findings == 0, "%s: %d of %d cuts left a finding (first at %ld)", tag, findings, cuts, first_bad);
+    free(as_cut);
     free(orig);
     free(d.mem);
 }

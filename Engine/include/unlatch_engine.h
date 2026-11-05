@@ -214,6 +214,9 @@ typedef enum {
     UE_CHK_BAD_SECURITY,              // a file's $SECURITY_DESCRIPTOR is not valid (repairable: it gets
                                       // the descriptor Unlatch gives new files), or a security_id
                                       // $Secure does not hold (D-102)
+    UE_CHK_INDEX_BLOCK_UNMARKED,      // a folder's index points at a whole index block its $I30
+                                      // bitmap marks free, as a cut-off write-back that freed it
+                                      // leaves (repairable: the bit is set again, D-103)
     UE_CHK_KINDS
 } ue_check_kind_t;
 typedef struct {
@@ -243,6 +246,7 @@ typedef struct {
     bool repair_ran;
     bool dirty_cleared;               // the volume was marked dirty and is not any more
     bool mirror_repaired;             // $MFTMirr was rewritten from $MFT (D-98)
+    uint64_t index_blocks_marked;     // index blocks marked in use again (D-103)
 } ue_check_result_t;
 int  ue_check(const ue_io_t *io, uint32_t flags, ue_check_fn fn, void *ctx, ue_check_result_t *out);
 /// Short lowercase name of a kind: "record_unmarked", "clusters_shared", ...

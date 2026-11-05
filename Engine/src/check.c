@@ -24,6 +24,11 @@
 // Space marked used that nothing uses (records past $MFT's end included) is freed by a repair
 // once the volume checks clean (D-102), and a file whose own $SECURITY_DESCRIPTOR is not a
 // valid descriptor gets the one Unlatch gives every new file.
+//
+// A folder's index that still points at an index block its $I30 bitmap marks free, while the
+// block is whole and is the block of that VCN, gets the bit back (D-103): a write-back that
+// freed the block was cut off before the node that dropped the pointer. Names the block brings
+// back are checked, and repaired, in another round.
 #include "internal.h"
 
 #include <errno.h>
@@ -89,6 +94,8 @@ typedef struct {
     size_t nbad_sd;
     struct sid_use { u32 id; uint64_t rec; } *sids;   // security_ids in use, and a record that has each
     size_t nsids;
+    struct ib_fix { uint64_t dir, blk; u16 seq; } *ib_fix;   // index blocks to mark in use (D-103)
+    size_t nib_fix;
     bool nomem;                       // keep_dangling ran out of memory (ntfs_readdir stops quietly)
     shared_t *shared;
     size_t nshared;
@@ -112,6 +119,7 @@ const char *ue_check_kind_name(ue_check_kind_t kind)
     case UE_CHK_MFT_MIRROR: return "mft_mirror";
     case UE_CHK_ENTRY_WRONG_PARENT: return "entry_wrong_parent";
     case UE_CHK_BAD_SECURITY: return "bad_security";
+    case UE_CHK_INDEX_BLOCK_UNMARKED: return "index_block_unmarked";
     case UE_CHK_KINDS: break;
     }
     return "unknown";
@@ -289,6 +297,7 @@ static void chk_free(chk_t *c)
     free(c->sd_late);
     free(c->bad_sd);
     free(c->sids);
+    free(c->ib_fix);
     free(c->shared);
     memset(c, 0, sizeof(*c));
 }
@@ -759,10 +768,15 @@ static int check_entry(void *ctx, const ntfschar *name, const int name_len, cons
 // the blocks the $I30 bitmap marks): each must name a block inside $INDEX_ALLOCATION that the
 // bitmap marks in use. A cut can leave a node pointing at a block whose record never grew to
 // hold it; looking up any name past that pointer then fails. 0, or the bad VCN plus one.
-static int64_t index_bad_child(chk_t *c, ntfs_inode *ni)
+// *fix is the block's number plus one when the block is inside $INDEX_ALLOCATION and its
+// bitmap, and reads back whole as the index block of that VCN, but its bit is clear: a
+// write-back that emptied and freed it was cut off after the folder's record (the bitmap)
+// and before the node that drops the pointer. The node and the block are then both as they
+// were before that write-back, so setting the bit again gives back that index (D-103).
+static int64_t index_bad_child(chk_t *c, ntfs_inode *ni, uint64_t *fix)
 {
     ntfs_attr *ra = ntfs_attr_open(ni, AT_INDEX_ROOT, NTFS_INDEX_I30, 4), *ia = NULL;
-    u8 *root = NULL, *blk = NULL, *bmp = NULL;
+    u8 *root = NULL, *blk = NULL, *bmp = NULL, *other = NULL;
     int64_t bad = 0;
     s64 bmp_len = 0;
     u32 bs = 0, vbits = 0;
@@ -788,7 +802,8 @@ static int64_t index_bad_child(chk_t *c, ntfs_inode *ni)
             ntfs_attr_close(ba);
         }
     }
-    if (!(blk = malloc(bs)))
+    *fix = 0;
+    if (!(blk = malloc(bs)) || !(other = malloc(bs)))
         goto out;
     // The root's entries, then every block in use: each entry with a child names a block.
     for (int64_t b = -1; !bad && b < (int64_t)nblocks; b++) {
@@ -820,6 +835,11 @@ static int64_t index_bad_child(chk_t *c, ntfs_inode *ni)
                 uint64_t blkno = vcn < 0 ? UINT64_MAX : ((uint64_t)vcn << vbits) / bs;
                 if (blkno >= nblocks || blkno >= (uint64_t)bmp_len * 8 || !has(bmp, blkno)) {
                     bad = vcn + 1;
+                    if (blkno < nblocks && blkno < (uint64_t)bmp_len * 8 &&
+                        ntfs_attr_mst_pread(ia, (s64)blkno * bs, 1, bs, other) == 1 &&
+                        ntfs_is_indx_record(((INDEX_BLOCK *)other)->magic) &&
+                        sle64_to_cpu(((INDEX_BLOCK *)other)->index_block_vcn) == vcn)
+                        *fix = blkno + 1;
                     break;
                 }
             }
@@ -830,6 +850,7 @@ static int64_t index_bad_child(chk_t *c, ntfs_inode *ni)
     }
 out:
     free(blk);
+    free(other);
     free(bmp);
     free(root);
     if (ia)
@@ -865,12 +886,18 @@ static int check_dirs(chk_t *c)
                 ue_iput(ni);
                 return ENOMEM;
             }
-            int64_t bad = rerr ? 0 : index_bad_child(c, ni);
+            uint64_t fix = 0;
+            int64_t bad = rerr ? 0 : index_bad_child(c, ni, &fix);
             if (rerr)
                 report(c, UE_CHK_INDEX_UNREADABLE, false, rec, 0, 0, 0, NULL,
                        "the directory's index cannot be read (%s); files listed in it may be missing",
                        strerror(rerr));
-            else if (bad)
+            else if (bad && fix && !grow((void **)&c->ib_fix, c->nib_fix, sizeof(*c->ib_fix))) {
+                c->ib_fix[c->nib_fix++] = (struct ib_fix){ .dir = rec, .blk = fix - 1, .seq = c->seq[rec] };
+                report(c, UE_CHK_INDEX_BLOCK_UNMARKED, true, rec, 0, 0, 0, NULL,
+                       "the directory's index uses index block %lld, which its bitmap marks free (a write cut off "
+                       "while the block was being freed)", (long long)(bad - 1));
+            } else if (bad)
                 report(c, UE_CHK_INDEX_UNREADABLE, false, rec, 0, 0, 0, NULL,
                        "the directory's index points at index block %lld, which it does not hold; names "
                        "after it cannot be looked up", (long long)(bad - 1));
@@ -1232,6 +1259,33 @@ static int fix_security(chk_t *c, uint64_t rec)
     return err ? err : cerr;
 }
 
+// Sets the $I30 bitmap bit of an index block the folder's index still uses (D-103), only
+// while the folder is the same record and the bit is still clear.
+static int mark_index_block(chk_t *c, const struct ib_fix *x)
+{
+    ntfs_inode *ni = ue_iopen_rec(c->e, x->dir);
+    ntfs_attr *ba;
+    u8 byte;
+    int err = 0;
+
+    if (!ni)
+        return ENOENT;
+    if (!(ni->mrec->flags & MFT_RECORD_IN_USE) || le16_to_cpu(ni->mrec->sequence_number) != x->seq)
+        err = ESTALE;
+    else if (!(ba = ntfs_attr_open(ni, AT_BITMAP, NTFS_INDEX_I30, 4)))
+        err = errno ? errno : EIO;
+    else {
+        if ((s64)(x->blk >> 3) >= ba->data_size || ntfs_attr_pread(ba, (s64)(x->blk >> 3), 1, &byte) != 1 ||
+            has(&byte, x->blk & 7))
+            err = ESTALE;
+        else if (ntfs_bitmap_set_bit(ba, (s64)x->blk))
+            err = errno ? errno : EIO;
+        ntfs_attr_close(ba);
+    }
+    int cerr = ue_iput(ni);
+    return err ? err : cerr;
+}
+
 // Clears the bits of records and clusters marked used that nothing uses (D-102). Only on a
 // volume the check just found nothing wrong with, so every record in use was read whole and
 // every runlist decoded: nothing in use can be freed.
@@ -1284,6 +1338,16 @@ static int chk_repair(chk_t *c, ue_check_result_t *out)
     *done += clusters;
     if (c->vol->free_clusters >= (s64)clusters)
         c->vol->free_clusters -= (s64)clusters;
+    // Index blocks still in use (D-103), before the entries: their names are checked again in
+    // the next round.
+    for (size_t i = 0; i < c->nib_fix && !c->e->dev_ctx->failed; i++) {
+        if ((err = mark_index_block(c, &c->ib_fix[i]))) {
+            if (err == ENOENT || err == ESTALE)
+                continue;
+            return err;
+        }
+        out->index_blocks_marked++;
+    }
     for (size_t i = 0; i < c->ndangling && !c->e->dev_ctx->failed; i++) {
         const dangling_t *x = &c->dangling[i];
         if ((err = remove_entry(c, x))) {
@@ -1351,11 +1415,17 @@ static int check_volume(ue_engine_t *e, ue_check_fn fn, void *ctx, ue_check_resu
     if (!err && repair && res->problems && res->problems == res->repairable) {
         res->repair_ran = true;
         err = chk_repair(&c, res);
-        chk_free(&c);
-        if (!err && !(err = chk_init(&c, e, NULL, NULL, &again))) {
-            err = chk_run(&c);
+        // A repair can bring more to light: an index block marked in use again lists names
+        // the check has not seen (D-103). Those are repaired in another round, a few at most.
+        for (int round = 1; !err; round++) {
+            chk_free(&c);
+            if ((err = chk_init(&c, e, NULL, NULL, &again)) || (err = chk_run(&c)))
+                break;
             res->remaining = again.problems;
             lost = again.lost_records || again.lost_clusters;
+            if (!again.problems || again.problems != again.repairable || round == 4)
+                break;
+            err = chk_repair(&c, res);
         }
     }
     // Last, with nothing else left, the space nothing uses (D-102); checked once more.
@@ -1548,6 +1618,7 @@ static int check_opened(const ue_io_t *io, ue_vol_state_t state, bool repair, ue
     out->records_freed = rw.records_freed;
     out->clusters_freed = rw.clusters_freed;
     out->security_replaced = rw.security_replaced;
+    out->index_blocks_marked = rw.index_blocks_marked;
     out->remaining = err ? out->problems : rw.remaining;
     out->dirty_cleared = dirty && !err && !cerr && rw.remaining == 0;
     return err ? err : cerr;

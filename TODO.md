@@ -2,6 +2,17 @@
 
 Open work, newest first. Details and history are in `docs/PROGRESS.md` and `docs/DECISIONS.md`.
 
+## Check Disk: repair the index damage a cut-off still leaves (after D-100, D-103)
+
+Goal: every cut-off in the sweeps (`test_engine cutsweep`, `UNLATCH_CUT_FULL=1`) leaves a disk that Check Disk repairs to what Windows' chkdsk calls clean, with no write-order trade-off. Beta.14 ships D-103's `BC_PH_EXT_RECORDS` order (a folder's extension records after its base record), which fixed the one unrepairable cut (attr-lists 184) but raised the big-folder sweep's names that are listed and cannot be opened from 80 to 128 of about 1,700 cuts. Check Disk does not detect those.
+
+- [ ] Detect, per folder, what the sweeps' walk finds: entries outside the key range their parent node gives their block (a split's old block not cut down yet: names listed twice, or listed and not found by lookup), and an entry whose name is not among its record's `$FILE_NAME`s in that folder (a rename's old name; extend D-96's wrong-parent test to compare the full name).
+- [ ] Repair them, preferably by rebuilding the folder's index from the `$FILE_NAME`s of the records that name it, as chkdsk does (empty the index, re-add every name with `ntfs_index_add_filename`), when everything else about the folder is whole.
+- [ ] Repair a node pointing past `$INDEX_ALLOCATION` (attr-lists 184 without the extension-record order): the new block is still on the disk in clusters marked used that nothing owns; find it (an `INDX` block with that VCN whose entries name records in this folder), grow `$INDEX_ALLOCATION` and its `$I30` bitmap to hold it and copy it in. Or rely on the rebuild above.
+- [ ] Then decide whether to keep or drop `BC_PH_EXT_RECORDS` from the counts of both orders, and make the sweeps fail on the walk's findings (`unreachable`, `duplicates`, `extra entries`) once Check Disk repairs them.
+- [ ] Windows chkdsk on the repaired cut images of every sweep (`UNLATCH_CUT_EXEC`, `Scripts/chkdsk-vm.sh --scan`/`--detail`), all clean.
+- [ ] Then the README and site can say Windows is not needed after a cut-off (wording drafted in the D-101 entry of `docs/PROGRESS.md`).
+
 ## Check Disk: check and repair a disk marked dirty on the Mac (D-90, D-92, D-93)
 
 Today a Mac-only user's choices for a disk marked dirty are read-only, "Mount Read-Write Anyway" or "Mark as Checked", none of which looks at the disk. Goal: Unlatch checks it and clears the mark only when it is consistent. macOS has no NTFS checker (ntfs-3g's ntfsck is 2006 code, quarantined upstream, check-only).

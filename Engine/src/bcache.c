@@ -26,6 +26,9 @@
 //      renames): an index root lands before the blocks it points at, a file's new name
 //      before the entry that carries it
 //   flush
+//   4b. changed extension records, highest first: a folder's index root in one of them lands
+//      after the base record that grows $INDEX_ALLOCATION for the block it points at (D-103)
+//   flush
 //   5. the other index blocks: nodes before leaves (a split's parent before the cut-down block)
 //   flush
 //   6. records freed since the last write-back (after the entries naming them are gone)
@@ -312,8 +315,8 @@ static bool is_index(const uint8_t *page)
 // Write-back phases (D-97, D-100), in order. Pieces in phases of different groups are
 // separated by a device flush; BC_PH_NEW and BC_PH_RECORDS go highest first.
 enum { BC_PH_FIRST, BC_PH_MFT_HEAD, BC_PH_NEW_INDEX, BC_PH_NEW_EXT, BC_PH_NEW_META, BC_PH_NEW,
-       BC_PH_RECORDS, BC_PH_NODES, BC_PH_REST, BC_PH_FREED };
-static const uint8_t phase_group[] = { 0, 0, 0, 0, 0, 0, 1, 2, 2, 3 };
+       BC_PH_RECORDS, BC_PH_EXT_RECORDS, BC_PH_NODES, BC_PH_REST, BC_PH_FREED };
+static const uint8_t phase_group[] = { 0, 0, 0, 0, 0, 0, 1, 2, 3, 3, 4 };
 
 static bool index_node(const uint8_t *page)
 {
@@ -342,7 +345,12 @@ static int slot_phase(const ue_bcache_t *bc, int32_t i, uint32_t k)
 
     if (used && (e->fresh >> k & 1 || (e->slots_known && (!was || e->was_seq[k] != seq))))
         return ext ? BC_PH_NEW_EXT : BC_PH_NEW;
-    return was && !used ? BC_PH_FREED : BC_PH_RECORDS;   // unknown: as D-97, a changed record
+    if (was && !used)
+        return BC_PH_FREED;
+    // A folder whose index root is in an extension record keeps $INDEX_ALLOCATION and its
+    // $I30 bitmap in the base record: the base, which grows them, lands before the root that
+    // points at a new block (D-103).
+    return used && ext ? BC_PH_EXT_RECORDS : BC_PH_RECORDS;   // unknown: as D-97, a changed record
 }
 
 // Sort key of piece `part` of entry i: phase in the top byte, then the position within it
@@ -506,7 +514,7 @@ int bc_writeback(ue_bcache_t *bc)
         }
         group = phase_group[ph];
         for (size_t r = 0; r < nr && !err; r++) {
-            size_t k = ph == BC_PH_NEW || ph == BC_PH_RECORDS ? nr - 1 - r : r;
+            size_t k = ph == BC_PH_NEW || ph == BC_PH_RECORDS || ph == BC_PH_EXT_RECORDS ? nr - 1 - r : r;
             err = write_run(bc, bc->runs[k], bc->runs[k + 1]);
         }
         unflushed = true;

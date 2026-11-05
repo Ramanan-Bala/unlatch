@@ -1121,10 +1121,6 @@ Verified on the final code: `UNLATCH_SKIP_BIG=1 Scripts/test-engine.sh` and `Scr
 
 Not verified: `Tests/Fuse/interrupt.sh kill`, which needs the installed app quit, and it was running with the SanDisk mounted, so it was left alone; a real disk; Windows chkdsk on D-100's cut images (`UNLATCH_CUT_EXEC` can drive it); a volume with 4 KiB MFT records (one record per page: `note_slots` and the pieces handle it, no test image has it).
 
-## Carry-overs
-
-- **Index damage Check Disk does not find yet (D-100, 2026-11-03):** after a cut, the sweeps' walk finds three things `ue_check` passes, which write ordering cannot prevent: (1) an index block in use that no node reaches (readdir lists its names, lookup does not); (2) a block's tail of entries above the key range its parent gives it (listed twice); (3) an entry whose name is not among its record's `$FILE_NAME`s in that folder (a rename's old name). Check Disk would need, per folder: walk the B+tree from the root and compare with the in-use blocks of the `$I30` bitmap; drop entries outside a block's key range when the reachable copy exists; re-insert entries of unreached blocks through `ntfs_index_add_filename` (or rebuild the folder's index from the `$FILE_NAME`s of records naming it) and clear the unreached blocks' bits; and extend D-96's wrong-parent test to compare the full name. `test_engine cutsweep` with `UNLATCH_CUT_SAVE=n` gives images for each (cut numbers with `UNLATCH_CUT_VERBOSE=1`). (4) With D-98/D-99's child-pointer check (a7c4118): a node pointing at a block that is inside `$INDEX_ALLOCATION` and holds a valid index block for that VCN, but whose `$I30` bitmap bit is clear (freed in the write-back the cut stopped), is reported as `index_unreadable`; it should be a repairable unmarked bit (set it), like `record_unmarked`. Renames cuts 59 and 60, attr-lists cut 184.
-
 ### Follow-up: Windows chkdsk on images repaired by Check Disk (D-101) — done 2026-11-03
 
 **Result: not every repaired image is clean for Windows' chkdsk, so the README and site cannot yet say Windows is no longer needed.** Of the 100 images that `unlatch-engine check --repair` leaves with no problems, chkdsk finds nothing wrong in 39 and corrects something in 61. No data is lost in any of the 61: 60 have bits set for free space (lost space) and one has a missing security descriptor. On the 50 images Check Disk leaves with problems, chkdsk agrees there is damage every time.
@@ -1191,9 +1187,38 @@ WINDOWS_SSH=vagrant@127.0.0.1 WINDOWS_SSH_PORT=2222 CHKDSK_OUT=$PWD/build/chkdsk
 
 This is the evidence for the README wording proposed in the D-101 entry above, once D-98/D-99/D-102 are merged. Until D-100 lands, the wording needs one caveat: a cut while a folder's index is growing (`copy-245`) still needs chkdsk, which reconnects the files and loses none of them. Not merged, not pushed, README and site not edited.
 
+### Follow-up: Check Disk marks a freed index block in use again; extension records after base (D-103) — done 2026-11-05
+
+The merged D-98..D-102 Check Disk (child-pointer check) and the D-100 sweeps failed on 3 cuts: renames 59 and 60, attr-lists 184.
+
+- **Renames 59, 60:** a node points at an index block inside `$INDEX_ALLOCATION` whose `$I30` bit is clear (a write-back freed it; the folder's record landed, the node did not). `index_bad_child` now reports it as the repairable kind `index_block_unmarked` when the block reads back whole as the block of that VCN; `mark_index_block` sets the bit again (same record, same sequence number, bit still clear), before the entry removals. `check_volume` repairs in rounds (at most 4) while everything left is repairable, since the restored block's names were not checked. Counter `index_blocks_marked` (`indexBlocksMarked`; `unlatch-engine check`, `unlatch check`, `CheckReport`).
+- **Attr-lists 184:** `/links-1`'s index root is in extension record 112, its `$INDEX_ALLOCATION` and bitmap in base record 65. Changed records went highest first, so the root pointing at new block 1 landed before the base grew to hold it: block 1 outside the allocation, not repairable. `bcache.c` now puts changed extension records in their own phase after changed base records, with a flush (`BC_PH_EXT_RECORDS`). Cost, accepted for beta.14 by the owner: big-folder (whose root is also in an extension record) makes 1,747 writes instead of 1,653, and its walk counts 128 cuts with names listed but not found (80 before) and 345 with duplicates (297); Check Disk does not detect those (TODO.md).
+- The sweeps now also repair every cut and fail unless the repair leaves 0 problems, no lost space and a clean volume.
+- Tried and dropped: reporting in-use index blocks no entry points at. It never fired: the walk's unreachable names come from a split's old block not yet cut down, whose names lie outside the key range its parent gives it.
+- README, site and `docs/read-only.md`: the "When you still need Windows" paragraph no longer says unlisted files and `$MFTMirr` need Windows; it lists what still does.
+
+| sweep (every cut) | cuts | findings | repaired | index blocks marked | walk: unreachable / duplicates / extra |
+|---|---:|---:|---:|---:|---|
+| order (`test_cut_order`) | 296 | 0 | 252 | 0 | |
+| big-folder | 1,746 | 0 | 1,646 | 0 | 128 / 345 / 0 |
+| renames | 104 | 0 | 67 | 5 | 20 / 21 / 23 |
+| attr-lists | 367 | 0 | 192 | 0 | 2 / 8 / 6 |
+| growing | 272 | 0 | 189 | 0 | 0 / 0 / 0 |
+
+```sh
+xcodebuild -scheme Unlatch -derivedDataPath build/DerivedData build
+Scripts/test-engine.sh                                                        # PASSED
+UNLATCH_CUT_FULL=1 build/test-engine/test_engine cutsweep build/test-engine   # all ok
+Scripts/test-golden.sh; Scripts/fsx-soak.sh --seeds 300; Scripts/fsx-soak.sh --regressions
+swift test --package-path Shared; swift test --package-path CLI
+Tests/Fuse/interrupt.sh kill                                                  # passed (app quit)
+```
+
+Not run: Windows chkdsk on the D-100/D-103 cut images, a real disk with this order, the benchmark on a quiet machine.
+
 ## Carry-overs
 
-- **Check Disk vs chkdsk: re-run after D-98/D-99/D-100 (D-101):** the orphan cuts (31) and `$MFTMirr` cuts (13) were left unrepaired here, as D-96 intends; chkdsk relinks those orphans into their original folders ("Recovering orphaned file … into directory file N"). Re-run the commands in the D-101 entry once the repair lands. The README wording waits for an all-clean run.
+- **Index damage Check Disk does not find yet (D-100, 2026-11-03):** after a cut, the sweeps' walk finds three things `ue_check` passes, which write ordering cannot prevent: (1) an index block in use that no node reaches (readdir lists its names, lookup does not); (2) a block's tail of entries above the key range its parent gives it (listed twice); (3) an entry whose name is not among its record's `$FILE_NAME`s in that folder (a rename's old name). Check Disk would need, per folder: walk the B+tree from the root and compare with the in-use blocks of the `$I30` bitmap; drop entries outside a block's key range when the reachable copy exists; re-insert entries of unreached blocks through `ntfs_index_add_filename` (or rebuild the folder's index from the `$FILE_NAME`s of records naming it) and clear the unreached blocks' bits; and extend D-96's wrong-parent test to compare the full name. `test_engine cutsweep` with `UNLATCH_CUT_SAVE=n` gives images for each (cut numbers with `UNLATCH_CUT_VERBOSE=1`). (4), a freed index block still pointed at, is repaired since D-103.
 
 - **interrupt.sh reports "passed" when its mount fails (2026-11-03):** `scenario` returns 1 after "FAIL: mount" and the summary still says passed. It happens when the installed app auto-mounts the attached image first.
 

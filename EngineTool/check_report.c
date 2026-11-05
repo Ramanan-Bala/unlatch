@@ -83,7 +83,8 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
                 ", \"mirrorRepaired\": %s,\n", res.entries_removed, res.orphans_relinked, res.orphans_found,
                 res.mirror_repaired ? "true" : "false");
         fprintf(out, "  \"recordsFreed\": %" PRIu64 ", \"clustersFreed\": %" PRIu64 ", \"securityReplaced\": %" PRIu64
-                ",\n", res.records_freed, res.clusters_freed, res.security_replaced);
+                ", \"indexBlocksMarked\": %" PRIu64 ",\n", res.records_freed, res.clusters_freed, res.security_replaced,
+                res.index_blocks_marked);
         fprintf(out, "  \"repairRan\": %s, \"dirtyCleared\": %s,\n", res.repair_ran ? "true" : "false",
                 res.dirty_cleared ? "true" : "false");
         fprintf(out, "  \"exitCode\": %d", code);
@@ -110,6 +111,8 @@ int check_report(const ue_io_t *io, bool repair, bool json, FILE *out)
                 " orphans put back (%" PRIu64 " in found.000)%s%s\n", res.repaired, res.entries_removed,
                 res.orphans_relinked, res.orphans_found, res.mirror_repaired ? ", $MFTMirr rewritten" : "",
                 res.repair_ran || !res.problems ? "" : " (not run: some problems cannot be repaired here)");
+        if (res.index_blocks_marked)
+            fprintf(out, "index:        %" PRIu64 " index blocks marked in use again\n", res.index_blocks_marked);
         if (res.records_freed || res.clusters_freed || res.security_replaced)
             fprintf(out, "freed:        %" PRIu64 " records, %" PRIu64 " clusters marked used by nothing; %" PRIu64
                     " security descriptors replaced\n", res.records_freed, res.clusters_freed, res.security_replaced);

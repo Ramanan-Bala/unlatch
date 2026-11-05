@@ -35,6 +35,9 @@ public struct CheckReport: Codable, Equatable, Sendable {
     /// Records and clusters marked used by nothing that the repair freed, and files given a new
     /// security descriptor (D-102); absent from older reports.
     public let recordsFreed, clustersFreed, securityReplaced: UInt64?
+    /// Index blocks a folder still used that the repair marked in use again (D-103); absent
+    /// from older reports.
+    public let indexBlocksMarked: UInt64?
     public let repairRan, dirtyCleared: Bool
     public let exitCode: Int32
     public let error: String?
@@ -56,7 +59,7 @@ public struct CheckReport: Codable, Equatable, Sendable {
     /// Counts by kind, in a fixed order, for summaries.
     public var kinds: [(kind: String, count: Int)] {
         let order = ["mft_mirror", "bad_record", "index_unreadable", "entry_free_record", "entry_wrong_seq",
-                     "entry_wrong_parent", "orphan", "bad_security", "clusters_shared", "bad_runlist",
+                     "entry_wrong_parent", "orphan", "bad_security", "index_block_unmarked", "clusters_shared", "bad_runlist",
                      "record_unmarked", "clusters_unmarked"]
         let counts = Dictionary(grouping: problems, by: \.kind).mapValues(\.count)
         return (order + counts.keys.filter { !order.contains($0) }.sorted()).compactMap { k in counts[k].map { (k, $0) } }
@@ -76,6 +79,8 @@ public struct CheckReport: Codable, Equatable, Sendable {
             return "\(n) folder entr\(n == 1 ? "y" : "ies") pointing at a missing file"
         case "orphan": return "\(n) file\(s) no folder lists"
         case "bad_security": return "\(n) file\(s) whose permissions (security descriptor) are damaged or missing"
+        case "index_block_unmarked":
+            return "\(n) folder\(s) whose index uses a part marked free, so some names in \(n == 1 ? "it" : "them") cannot be opened"
         case "mft_mirror": return "the backup copy of the file table does not match it, so the disk cannot be opened"
         default: return "\(n) problem\(s) of kind \(kind)"
         }
@@ -110,6 +115,10 @@ public struct CheckReport: Codable, Equatable, Sendable {
                 done.append("\(n) file\(n == 1 ? "" : "s") with damaged permissions \(n == 1 ? "was" : "were") given the "
                             + "permissions Unlatch gives new files")
             }
+            if let n = indexBlocksMarked, n > 0 {
+                done.append("\(n) part\(n == 1 ? "" : "s") of folder indexes marked free while still in use \(n == 1 ? "was" : "were") "
+                            + "marked in use again")
+            }
             if (recordsFreed ?? 0) + (clustersFreed ?? 0) > 0 { done.append("space marked used by nothing was freed") }
             if dirtyCleared { done.append("the disk is no longer marked as needing a check") }
             return "Repaired" + (done.isEmpty ? "" : ": " + done.joined(separator: "; ")) + ". No file's contents were "
@@ -129,6 +138,10 @@ public struct CheckReport: Codable, Equatable, Sendable {
             }
             if problems.contains(where: { $0.kind == "bad_security" }) {
                 how.append("gives files whose permissions were damaged the permissions Unlatch gives every new file")
+            }
+            if problems.contains(where: { $0.kind == "index_block_unmarked" }) {
+                how.append("marks parts of folder indexes that are still in use as used again (the disk was cut off "
+                           + "while they were being freed), so every name in those folders can be opened")
             }
             if problems.contains(where: { $0.kind == "mft_mirror" }) {
                 how.append("brings the backup copy of the file table up to date from the file table itself, then "

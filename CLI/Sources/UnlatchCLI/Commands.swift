@@ -291,6 +291,7 @@ struct Check: AsyncParsableCommand {
                   + "entr\(removed == 1 ? "y" : "ies"); put back \(relinked) file\(relinked == 1 ? "" : "s") no folder listed"
                   + (moved > 0 ? " (\(moved) in /found.000)" : "") + (r.mirrorRepaired == true ? "; updated $MFTMirr" : "")
                   + ((r.securityReplaced ?? 0) > 0 ? "; replaced \(r.securityReplaced ?? 0) security descriptor(s)" : "")
+                  + ((r.indexBlocksMarked ?? 0) > 0 ? "; marked \(r.indexBlocksMarked ?? 0) index block(s) in use" : "")
                   + ".")
             if (r.recordsFreed ?? 0) + (r.clustersFreed ?? 0) > 0 {
                 print("Freed \(r.recordsFreed ?? 0) records and \(r.clustersFreed ?? 0) clusters marked used by nothing.")
